@@ -36,20 +36,20 @@ Automatic evaluation, alert history, and trigger/resolve tracking.
 
 ## Install
 
-Requires [Node.js 20+](https://nodejs.org/) and [GitHub CLI](https://cli.github.com/) (`gh`).
+Requires [Node.js 20+](https://nodejs.org/).
 
 ```bash
-gh api repos/sholub1989/oko/contents/install.sh --jq '.content' | base64 -d | sh
+npx oko-sh
 ```
 
-Then run `oko` to start. Open `http://localhost:3579`, go to **Settings**
-to add your API keys and choose an LLM — done.
-
-To uninstall:
+Or install globally:
 
 ```bash
-gh api repos/sholub1989/oko/contents/uninstall.sh --jq '.content' | base64 -d | sh
+npm install -g oko-sh
+oko-sh
 ```
+
+Open `http://localhost:3579`, go to **Settings** to add your API keys and choose an LLM — done.
 
 ## Development
 
@@ -90,25 +90,13 @@ packages/
   web/      — React 19 + Vite, Tailwind v4
 ```
 
-## Roadmap
-
-Soon OKO will be published to npm — install and run with a single command:
-
-```bash
-npx oko
-```
-
-No cloning, no build step, with auto-updates on every start.
-
 ## Troubleshooting
 
 | Problem | Fix |
 |---------|-----|
-| `pnpm: command not found` | `npm i -g pnpm` |
 | `better-sqlite3` build fails | macOS: `xcode-select --install` / Linux: `sudo apt install build-essential python3` |
-| `ERR_DLOPEN_FAILED` on start (Node version mismatch) | Run `cd ~/.oko/app && npm rebuild`, then `oko`. Fixed automatically in v0.1.8+. |
 | Wrong Node.js version | Need 20+. Check with `node -v` |
-| Port in use | `OKO_PORT=3580 pnpm dev` |
+| Port in use | `OKO_PORT=3580 oko-sh` |
 | Provider not connecting | Check API keys in Settings |
 | No LLM responses | Add an Anthropic or Google API key in Settings |
 | GCP shows disconnected | Run `gcloud auth application-default login`, then click **Test Connection** in Settings |

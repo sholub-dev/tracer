@@ -53,7 +53,7 @@ jobs:
           echo "$PACK_OUTPUT" | grep "npm notice"
 
       - name: Publish to npm
-        run: npm publish --provenance --access public
+        run: npm publish --access public
 
       - name: Create GitHub Release
         env:

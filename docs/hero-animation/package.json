@@ -1,0 +1,20 @@
+{
+  "name": "oko-hero-animation",
+  "private": true,
+  "scripts": {
+    "studio": "npx remotion studio src/index.ts",
+    "render": "npx remotion render src/index.ts HeroAnimation ../hero.gif --codec=gif --every-nth-frame=2",
+    "render:mp4": "npx remotion render src/index.ts HeroAnimation ../hero.mp4"
+  },
+  "dependencies": {
+    "remotion": "^4.0.0",
+    "@remotion/cli": "^4.0.0",
+    "@remotion/gif": "^4.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "@types/react": "^19.0.0"
+  }
+}

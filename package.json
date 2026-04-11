@@ -1,0 +1,34 @@
+{
+  "name": "oko",
+  "version": "0.4.5",
+  "private": true,
+  "type": "module",
+  "description": "Local-first debugging & analysis platform",
+  "packageManager": "pnpm@10.10.0",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "bin": {
+    "oko": "./bin/oko.mjs"
+  },
+  "scripts": {
+    "predev": "pnpm install --frozen-lockfile 2>/dev/null || pnpm install",
+    "dev": "concurrently -n server,web -c blue,green \"pnpm --filter @oko/server dev\" \"pnpm --filter @oko/web dev\"",
+    "build": "pnpm --filter @oko/shared build && pnpm --filter @oko/server build && pnpm --filter @oko/web build",
+    "start": "node packages/server/dist/index.js",
+    "lint": "tsc --noEmit",
+    "release": "bin/release.sh"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ]
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

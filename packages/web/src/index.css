@@ -1,0 +1,22 @@
+@import "tailwindcss";
+@source "../node_modules/streamdown/dist/*.js";
+
+@theme {
+  --font-serif: Charter, 'Bitstream Charter', Georgia, serif;
+}
+
+@keyframes dot-bounce {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+  40% { transform: translateY(-4px); opacity: 1; }
+}
+
+@keyframes fill-up-down {
+  0%, 10% { clip-path: inset(0 100% 0 0); }
+  45%, 55% { clip-path: inset(0 0 0 0); }
+  90%, 100% { clip-path: inset(0 0 0 100%); }
+}
+
+.react-grid-placeholder {
+  background: #d4d2cd !important;
+  opacity: 0.2 !important;
+}

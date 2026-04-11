@@ -1,0 +1,38 @@
+{
+  "name": "@oko/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-sdk/react": "^3.0.88",
+    "@oko/shared": "workspace:*",
+    "@tanstack/react-query": "^5.90.21",
+    "@trpc/client": "^11.10.0",
+    "@trpc/react-query": "^11.10.0",
+    "ai": "^6.0.140",
+    "modern-screenshot": "^4.6.8",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-grid-layout": "^2.2.2",
+    "react-json-view-lite": "^2.5.0",
+    "recharts": "^3.7.0",
+    "streamdown": "^2.2.0",
+    "superjson": "^2.2.6"
+  },
+  "devDependencies": {
+    "@oko/server": "workspace:*",
+    "@tailwindcss/vite": "^4.1.18",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.4",
+    "tailwindcss": "^4.1.18",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1"
+  }
+}

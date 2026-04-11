@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: pnpm/action-setup@v4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Create release tarball
+        run: |
+          RELEASE_DIR=$(mktemp -d)
+
+          # Copy built server
+          cp -r packages/server/dist "$RELEASE_DIR/dist"
+
+          # Copy built frontend
+          cp -r packages/web/dist "$RELEASE_DIR/web"
+
+          # Create production package.json (server deps only, no workspace refs)
+          node -e "
+            const pkg = require('./packages/server/package.json');
+            const deps = { ...pkg.dependencies };
+            // @oko/shared is bundled inline by tsup, not needed at runtime
+            delete deps['@oko/shared'];
+            const out = {
+              name: 'oko',
+              version: '${GITHUB_REF_NAME}'.replace('v', ''),
+              type: 'module',
+              dependencies: deps
+            };
+            require('fs').writeFileSync('$RELEASE_DIR/package.json', JSON.stringify(out, null, 2));
+          "
+
+          # Create tarball
+          tar -czf oko-release.tar.gz -C "$RELEASE_DIR" .
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            oko-release.tar.gz \
+            --title "${{ github.ref_name }}" \
+            --generate-notes

@@ -1,6 +1,6 @@
 {
   "name": "oko-sh",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "type": "module",
   "description": "Local-first debugging & analysis platform",
   "repository": {

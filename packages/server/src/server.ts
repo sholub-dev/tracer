@@ -152,7 +152,7 @@ export function createApp(context: Context) {
   // Serve static files — try multiple known locations for the web build
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const webCandidates = [
-    resolve(__dirname, "../web"),              // installed: ~/.oko/app/web (dist/ is sibling to web/)
+    resolve(__dirname, "../web/dist"),          // npm install: packages/server/dist/../web/dist
     resolve(process.cwd(), "packages/web/dist"), // dev production build from repo root
   ];
   const webRoot = webCandidates.find((d) => existsSync(resolve(d, "index.html")));

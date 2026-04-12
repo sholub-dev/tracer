@@ -3,7 +3,7 @@
   "version": "0.5.2",
   "type": "module",
   "description": "Local-first debugging & analysis platform",
-  "license": "PolyForm-Noncommercial-1.0.0",
+  "license": "PolyForm-Shield-1.0.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/sholub1989/oko.git"

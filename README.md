@@ -8,12 +8,37 @@ During an incident, most time goes to switching between observability tools
 and gathering context — not fixing the problem. OKO connects your providers
 to a single AI chat interface so you find the root cause in one place.
 
+## Debug
+
+Chat with an AI agent that queries your providers in real-time and finds root causes — all from a single conversation.
+
+- Natural language investigation
+- Live query execution with inline charts
+- Post-mortem reports — download as Markdown to share
+- Agent memory across sessions
+- Session history and cost tracking
+
+![Debug page](docs/screenshots/debug_page.png)
+
+## Settings
+
+Configure providers, LLM credentials, agent behavior, and memory. All data is stored locally — nothing leaves your machine except the API calls you configure.
+
+- Anthropic (Claude) and Google (Gemini) API keys
+- Data provider setup with connectivity tests
+- Thinking budgets and step limits
+- Agent memory management
+
+![Settings page](docs/screenshots/settings_page.png)
+
+## How it works
+
 ```
 ┌─────────┐       your API keys         ┌──────────────────┐
-│         │ ◄──────────────────────────► │  Observability   │
+│         │ ◄──────────────────────────►│  Observability   │
 │   OKO   │                             │  Providers       │
 │  local  │       your API keys         ├──────────────────┤
-│         │ ◄──────────────────────────► │  LLM Providers   │
+│         │ ◄──────────────────────────►│  LLM Providers   │
 └─────────┘                             └──────────────────┘
 ```
 
@@ -37,32 +62,6 @@ oko-sh
 ```
 
 Open `http://localhost:3579`, go to **Settings** to add your API keys and choose an LLM — done.
-
-## Features
-
-### Debug
-
-Chat with an AI agent that queries your observability providers in real-time, correlates data across services, and finds root causes — all from a single conversation.
-
-- **Natural language investigation** — describe the problem, the AI queries your providers automatically
-- **Live query execution** — NRQL, GCP Logs/Metrics, and more run inline with results rendered as charts
-- **Post-mortem reports** — generate structured incident reports and download them as Markdown to share with your team
-- **Agent memory** — the AI learns patterns across investigations and reuses them in future sessions
-- **Session history** — every investigation is saved and can be resumed later
-- **Cost tracking** — token usage and cost breakdown per session
-
-![Debug page](docs/screenshots/debug_page.png)
-
-### Settings
-
-Configure your data providers, LLM credentials, agent behavior, and memory — all from one page. All configuration and data is stored locally on your machine in a SQLite database — nothing leaves your machine except the API calls you configure.
-
-- **LLM API keys** — add Anthropic (Claude) or Google (Gemini) credentials and see per-model pricing
-- **Data providers** — connect New Relic, Google Cloud, or other providers with connectivity tests
-- **Agent tuning** — set thinking budgets, step limits, and timezone for analysis
-- **Agent memory** — view, edit, and optimize learned patterns the AI saves across investigations
-
-![Settings page](docs/screenshots/settings_page.png)
 
 ## Supported Providers
 

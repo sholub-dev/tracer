@@ -34,15 +34,17 @@ export function ProviderToggle({ activeProvider, onToggle }: ProviderToggleProps
   });
 
   const connected = sortProviders(data?.filter((p) => p.ok) ?? []);
+  const connectedTypes = connected.map((p) => p.type).join(",");
   const gcpConfig = configs?.find((c) => c.type === "gcp")?.config ?? null;
   const gcpProjectId = gcpConfig?.projectId ?? "";
 
-  // Auto-default to first connected provider
+  // Auto-default to first connected provider, or correct stale/invalid selection
   useEffect(() => {
-    if (!activeProvider && connected.length > 0) {
+    if (connected.length === 0) return;
+    if (!activeProvider || !connected.some((p) => p.type === activeProvider)) {
       onToggle(connected[0].type);
     }
-  }, [activeProvider, connected.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeProvider, connectedTypes]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (isLoading || connected.length === 0) return null;
 

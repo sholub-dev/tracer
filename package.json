@@ -1,6 +1,6 @@
 {
   "name": "oko-sh",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "type": "module",
   "description": "Local-first debugging & analysis platform",
   "license": "PolyForm-Shield-1.0.0",

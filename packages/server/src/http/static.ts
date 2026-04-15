@@ -36,7 +36,11 @@ export function mountStaticFiles(app: Hono): void {
     const filePath = resolve(webRoot, reqPath);
     if (filePath.startsWith(webRoot) && existsSync(filePath) && !statSync(filePath).isDirectory()) {
       const mime = MIME_TYPES[extname(filePath)] || "application/octet-stream";
-      return c.body(readFileSync(filePath), { headers: { "Content-Type": mime } });
+      const headers: Record<string, string> = { "Content-Type": mime };
+      if (reqPath.startsWith("assets/")) {
+        headers["Cache-Control"] = "public, max-age=31536000, immutable";
+      }
+      return c.body(readFileSync(filePath), { headers });
     }
     await next();
   });

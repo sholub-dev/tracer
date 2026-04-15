@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { trpc } from "../../lib/trpc";
 import { theme } from "../../lib/theme";
 import { WEB_CONFIG } from "../../lib/config";
@@ -26,7 +26,6 @@ interface ProviderToggleProps {
 export function ProviderToggle({ activeProvider, onToggle }: ProviderToggleProps) {
   const { data, isLoading } = trpc.provider.ping.useQuery(undefined, {
     staleTime: WEB_CONFIG.sessionStaleTimeMs,
-    refetchOnMount: "always",
   });
 
   const { data: configs } = trpc.provider.getConfigs.useQuery(undefined, {
@@ -46,7 +45,8 @@ export function ProviderToggle({ activeProvider, onToggle }: ProviderToggleProps
     }
   }, [activeProvider, connectedTypes]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (isLoading || connected.length === 0) return null;
+  if (!data && isLoading) return null;
+  if (connected.length === 0) return null;
 
   const showGcpPicker = connected.some((p) => p.type === "gcp") && gcpConfig !== null;
 

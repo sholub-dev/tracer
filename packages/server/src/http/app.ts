@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { compress } from "hono/compress";
 import { trpcServer } from "@hono/trpc-server";
 import { appRouter } from "../trpc/router.js";
 import type { Context } from "../trpc/context.js";
@@ -9,6 +10,10 @@ import { mountStaticFiles } from "./static.js";
 export function createApp(context: Context) {
   const app = new Hono();
 
+  app.use("*", async (c, next) => {
+    if (c.req.path.startsWith("/api/chat")) return next();
+    return compress()(c, next);
+  });
   applyMiddleware(app);
 
   app.get("/health", (c) => c.json({ status: "ok" }));

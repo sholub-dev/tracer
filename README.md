@@ -89,6 +89,22 @@ rm -rf ~/.oko
 | Port in use | `OKO_PORT=3580 oko-sh` |
 | No LLM responses | Add an API key in Settings |
 
+## Contributing
+
+Contributions are welcome! There are two main ways to help:
+
+**Report bugs or request features** — [open an issue](https://github.com/sholub1989/oko/issues). Include steps to reproduce for bugs, or a clear description for feature requests.
+
+**Submit a code change:**
+
+1. Fork this repo
+2. Create a branch (`git checkout -b fix/my-fix`)
+3. Make your changes and commit
+4. Push to your fork (`git push origin fix/my-fix`)
+5. Open a pull request against `master`
+
+All PRs require approval before merging.
+
 ## License
 
 [PolyForm Shield 1.0.0](https://polyformproject.org/licenses/shield/1.0.0/) — free to use, except to build competing products.

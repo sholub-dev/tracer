@@ -68,6 +68,8 @@ export interface ChatCoreProps {
   header?: ReactNode;
   /** Rendered inside the scroll container (e.g. sticky headers) */
   scrollHeader?: ReactNode;
+  /** Rendered below the placeholder in the empty state */
+  emptyStateExtras?: ReactNode;
   beforeInput?: ReactNode;
   afterMessages?: ReactNode;
   renderMessage?: (
@@ -105,6 +107,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
       variant = "full",
       header,
       scrollHeader,
+      emptyStateExtras,
       beforeInput,
       afterMessages,
       renderMessage,
@@ -277,12 +280,12 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
             onWheel={handleWheel}
             onCopy={normalizeClipboard}
           >
-            <div ref={contentRef}>
+            <div ref={contentRef} className="min-h-full flex flex-col">
               {scrollHeader}
 
               {messages.length === 0 && status !== "submitted" && (
-                <div className="py-16 flex items-center justify-center">
-                  <span className={v.emptyState}>{placeholder}</span>
+                <div className="flex-1 flex flex-col items-center justify-center gap-6 py-16">
+                  {emptyStateExtras ?? <span className={v.emptyState}>{placeholder}</span>}
                 </div>
               )}
 

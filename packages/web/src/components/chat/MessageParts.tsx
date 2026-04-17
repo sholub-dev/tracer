@@ -15,6 +15,7 @@ interface MessagePartsProps {
   progressStore: ProgressStore;
   sourceTitle?: string;
   sourceCreatedAt?: number;
+  resolveSourceTitle?: () => Promise<string | undefined>;
 }
 
 /** Marker the agent writes to signal "analysis starts here". Stripped from display. */
@@ -26,11 +27,13 @@ function AnalysisSection({
   children,
   sourceTitle,
   sourceCreatedAt,
+  resolveSourceTitle,
 }: {
   parts: UIMessage["parts"];
   children: React.ReactNode;
   sourceTitle?: string;
   sourceCreatedAt?: number;
+  resolveSourceTitle?: () => Promise<string | undefined>;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
@@ -42,6 +45,11 @@ function AnalysisSection({
       const dataUrl = await domToPng(el, { scale: 2 });
       const bytes = new Uint8Array(await (await fetch(dataUrl)).arrayBuffer());
 
+      // Resolve the freshest title at click time — session titles are generated
+      // asynchronously after the first response and the prop may still hold
+      // "New chat" for a moment after the stream ends.
+      const resolvedTitle = (await resolveSourceTitle?.()) ?? sourceTitle ?? "";
+
       // Carry all parts from the analysis slice as-is: text, reasoning, and
       // tool invocations (with their inputs and outputs) so charts, tables,
       // and sub-agent results render on re-import. The begin_analysis marker
@@ -49,7 +57,7 @@ function AnalysisSection({
       const payload = JSON.stringify({
         v: 1,
         kind: "analysis",
-        sourceTitle: sourceTitle ?? "",
+        sourceTitle: resolvedTitle,
         sourceCreatedAt: sourceCreatedAt ?? Math.floor(Date.now() / 1000),
         parts,
       });
@@ -73,7 +81,7 @@ function AnalysisSection({
     } catch {
       // Silent fail — domToPng or chunk write not supported
     }
-  }, [parts, sourceTitle, sourceCreatedAt]);
+  }, [parts, sourceTitle, sourceCreatedAt, resolveSourceTitle]);
 
   return (
     <div ref={containerRef} className={`${theme.analysisContainer} relative group/analysis`}>
@@ -111,7 +119,7 @@ function DownloadIcon({ size = 14 }: { size?: number }) {
 }
 
 export const MessageParts = React.memo(
-  function MessageParts({ parts, isAnimating, progressStore, sourceTitle, sourceCreatedAt }: MessagePartsProps) {
+  function MessageParts({ parts, isAnimating, progressStore, sourceTitle, sourceCreatedAt, resolveSourceTitle }: MessagePartsProps) {
     if (parts.length === 0 && !isAnimating) {
       return <span className="text-sm italic text-[#9c9890]">(interrupted)</span>;
     }
@@ -216,7 +224,7 @@ export const MessageParts = React.memo(
     return (
       <>
         {before}
-        <AnalysisSection parts={analysisParts} sourceTitle={sourceTitle} sourceCreatedAt={sourceCreatedAt}>
+        <AnalysisSection parts={analysisParts} sourceTitle={sourceTitle} sourceCreatedAt={sourceCreatedAt} resolveSourceTitle={resolveSourceTitle}>
           {after}
         </AnalysisSection>
       </>

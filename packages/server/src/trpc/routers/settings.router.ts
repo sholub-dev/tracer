@@ -107,8 +107,6 @@ export const settingsRouter = router({
       return { success: true };
     }),
 
-  featureFlags: publicProcedure.query(() => FEATURES),
-
   getAgentConfig: publicProcedure.query(({ ctx }) => {
     const keys = [
       SETTINGS_KEYS.timezone,

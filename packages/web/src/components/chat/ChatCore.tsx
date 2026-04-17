@@ -84,6 +84,9 @@ export interface ChatCoreProps {
   /** Threaded into MessageParts so the "Download as image" action can embed them. */
   sourceTitle?: string;
   sourceCreatedAt?: number;
+  /** Called at download time to fetch the freshest title (async-generated titles
+   *  race with a user clicking "Download as image" right after the stream ends). */
+  resolveSourceTitle?: () => Promise<string | undefined>;
 
   className?: string;
 }
@@ -122,6 +125,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
       readOnly = false,
       sourceTitle,
       sourceCreatedAt,
+      resolveSourceTitle,
       className,
     },
     ref,
@@ -325,6 +329,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
                       progressStore={progressStore}
                       sourceTitle={sourceTitle}
                       sourceCreatedAt={sourceCreatedAt}
+                      resolveSourceTitle={resolveSourceTitle}
                     />
                   </div>
                 );

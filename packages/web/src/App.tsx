@@ -1,14 +1,24 @@
 import { lazy, Suspense, useCallback, useSyncExternalStore } from "react";
+import { FEATURES } from "@oko/shared";
 import { Shell } from "./components/layout/Shell";
 import { Sidebar, type Page } from "./components/layout/Sidebar";
 import { Spinner } from "./components/ui/Spinner";
 
-const Dashboard = lazy(() => import("./pages/Dashboard").then(m => ({ default: m.Dashboard })));
 const Debug = lazy(() => import("./pages/Debug").then(m => ({ default: m.Debug })));
-const Monitors = lazy(() => import("./pages/Monitors").then(m => ({ default: m.Monitors })));
 const Settings = lazy(() => import("./pages/Settings").then(m => ({ default: m.Settings })));
+const Dashboard = FEATURES.dashboards
+  ? lazy(() => import("./pages/Dashboard").then(m => ({ default: m.Dashboard })))
+  : null;
+const Monitors = FEATURES.monitors
+  ? lazy(() => import("./pages/Monitors").then(m => ({ default: m.Monitors })))
+  : null;
 
-const validPages = new Set<string>(["dashboard", "debug", "monitors", "settings"]);
+const validPages = new Set<string>([
+  "debug",
+  "settings",
+  ...(FEATURES.dashboards ? ["dashboard"] : []),
+  ...(FEATURES.monitors ? ["monitors"] : []),
+]);
 
 interface RouteState {
   page: Page;
@@ -89,7 +99,7 @@ export function App() {
       }
     >
       <Suspense fallback={<PageFallback />}>
-        {currentPage === "dashboard" && (
+        {Dashboard && currentPage === "dashboard" && (
           <Dashboard
             key={currentDashboardId ?? "default"}
             dashboardId={currentDashboardId}
@@ -103,7 +113,7 @@ export function App() {
             onSessionChange={selectSession}
           />
         )}
-        {currentPage === "monitors" && <Monitors />}
+        {Monitors && currentPage === "monitors" && <Monitors />}
         {currentPage === "settings" && <Settings />}
       </Suspense>
     </Shell>

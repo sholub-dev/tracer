@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { SESSION_KIND } from "@oko/shared";
+import { FEATURES, SESSION_KIND } from "@oko/shared";
 import { usePolling } from "../../lib/hooks";
 import { theme } from "../../lib/theme";
 import { trpc } from "../../lib/trpc";
@@ -37,16 +37,11 @@ const NavIcon = ({ page }: { page: Page }) => {
   }
 };
 
-function useNavItems(): { page: Page; label: string }[] {
-  const flags = trpc.settings.featureFlags.useQuery(undefined, {
-    staleTime: Infinity,
-  });
-  return [
-    ...(flags.data?.dashboards ? [{ page: "dashboard" as const, label: "Dashboard" }] : []),
-    { page: "debug" as const, label: "Debug" },
-    ...(flags.data?.monitors ? [{ page: "monitors" as const, label: "Monitors" }] : []),
-  ];
-}
+const NAV_ITEMS: { page: Page; label: string }[] = [
+  ...(FEATURES.dashboards ? [{ page: "dashboard" as const, label: "Dashboard" }] : []),
+  { page: "debug" as const, label: "Debug" },
+  ...(FEATURES.monitors ? [{ page: "monitors" as const, label: "Monitors" }] : []),
+];
 
 export function Sidebar({
   currentPage,
@@ -58,15 +53,15 @@ export function Sidebar({
   onSelectDashboard,
   onNewDashboard,
 }: SidebarProps) {
-  const navItems = useNavItems();
-
   const sessionsQuery = trpc.sessions.list.useQuery(undefined, {
     staleTime: WEB_CONFIG.sessionStaleTimeMs,
   });
   const dashboardsQuery = trpc.dashboards.list.useQuery(undefined, {
-    enabled: currentPage === "dashboard",
+    enabled: FEATURES.dashboards && currentPage === "dashboard",
   });
-  const alertCountQuery = trpc.monitorAlerts.activeCount.useQuery();
+  const alertCountQuery = trpc.monitorAlerts.activeCount.useQuery(undefined, {
+    enabled: FEATURES.monitors,
+  });
   const activeStatusQuery = trpc.sessions.activeCount.useQuery();
   const utils = trpc.useUtils();
 
@@ -76,11 +71,13 @@ export function Sidebar({
     if (currentPage === "debug") utils.sessions.list.invalidate();
   }, WEB_CONFIG.activeStreamPollingMs, hasActiveStreams);
 
-  const shouldPollMonitors = trpc.monitors.shouldPoll.useQuery();
+  const shouldPollMonitors = trpc.monitors.shouldPoll.useQuery(undefined, {
+    enabled: FEATURES.monitors,
+  });
   usePolling(() => {
     utils.monitorAlerts.activeCount.invalidate();
     utils.monitors.shouldPoll.invalidate();
-  }, WEB_CONFIG.monitorPollingMs, shouldPollMonitors.data ?? false);
+  }, WEB_CONFIG.monitorPollingMs, (shouldPollMonitors.data ?? false) && FEATURES.monitors);
 
   const markViewedMutation = trpc.sessions.markViewed.useMutation();
 
@@ -172,7 +169,7 @@ export function Sidebar({
       </div>
 
       <nav className="flex-1 px-3 space-y-1 overflow-y-auto">
-        {navItems.map(({ page, label }) => {
+        {NAV_ITEMS.map(({ page, label }) => {
           const active = currentPage === page;
           return (
             <div key={page}>

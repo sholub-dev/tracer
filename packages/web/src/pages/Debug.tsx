@@ -250,10 +250,10 @@ function ImportedView({ sessionId, sessionTitle, initialMessages }: ImportedView
   }, [sourceCreatedAt]);
 
   const banner = (
-    <div className="px-10 pt-3">
-      <div className="text-xs text-[#9c9890] border-l-2 border-[#2b5ea7] pl-3 py-1">
-        Imported{sourceTitle ? ` from ${sourceTitle}` : ""}
-        {formattedDate ? ` · originally ${formattedDate}` : ""}
+    <div className={theme.titleBar}>
+      {sourceTitle && <h2 className={theme.titleText}>{sourceTitle}</h2>}
+      <div className="text-xs text-[#9c9890] mt-1">
+        Imported{formattedDate ? ` · originally ${formattedDate}` : ""}
       </div>
     </div>
   );
@@ -301,6 +301,11 @@ function DebugChat({ chatId, initialMessages, costBreakdown, activeProvider, set
   const markViewed = trpc.sessions.markViewed.useMutation();
   const truncateMessages = trpc.sessions.truncateMessages.useMutation();
   const saveMessages = trpc.sessions.saveMessages.useMutation();
+
+  const resolveSourceTitle = useCallback(async () => {
+    const fresh = await utils.sessions.get.fetch({ id: chatId });
+    return fresh?.title;
+  }, [utils, chatId]);
 
   const handleRetry = () => {
     if (!coreRef.current) return;
@@ -496,6 +501,7 @@ Base the report entirely on the investigation data and findings from this conver
         variant="full"
         sourceTitle={sessionTitle}
         sourceCreatedAt={sessionUpdatedAt}
+        resolveSourceTitle={resolveSourceTitle}
         scrollHeader={sessionTitleHeader}
         emptyStateExtras={emptyStateNotifiers}
         onBeforeStop={handleBeforeStop}

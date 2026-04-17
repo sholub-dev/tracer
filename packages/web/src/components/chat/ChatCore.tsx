@@ -78,6 +78,13 @@ export interface ChatCoreProps {
     defaults: { label: ReactNode; content: ReactNode },
   ) => ReactNode;
 
+  /** When true, hide the composer, Continue button, and error-banner Retry. */
+  readOnly?: boolean;
+
+  /** Threaded into MessageParts so the "Download as image" action can embed them. */
+  sourceTitle?: string;
+  sourceCreatedAt?: number;
+
   className?: string;
 }
 
@@ -112,6 +119,9 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
       beforeInput,
       afterMessages,
       renderMessage,
+      readOnly = false,
+      sourceTitle,
+      sourceCreatedAt,
       className,
     },
     ref,
@@ -313,6 +323,8 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
                       parts={msg.parts}
                       isAnimating={isAnimating}
                       progressStore={progressStore}
+                      sourceTitle={sourceTitle}
+                      sourceCreatedAt={sourceCreatedAt}
                     />
                   </div>
                 );
@@ -346,7 +358,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
                 </div>
               )}
 
-              {needsContinue && (
+              {!readOnly && needsContinue && (
                 <div className={`flex flex-col items-center gap-2 ${v.continueMargin} ${pad}`}>
                   <span className="text-xs text-[#9c9890] font-sans">Response was interrupted</span>
                   <button
@@ -361,7 +373,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
 
               {afterMessages && <div className={pad}>{afterMessages}</div>}
 
-              {error && (
+              {!readOnly && error && (
                 <div className={pad}>
                   <div className="mt-3 text-sm text-[#b33a2a] bg-[#b33a2a]/5 border border-[#b33a2a]/20 rounded px-4 py-3 flex items-center gap-3">
                     <span className="flex-1">{error.message}</span>
@@ -383,6 +395,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
         </div>
 
         {beforeInput}
+        {!readOnly && (
         <form onSubmit={handleSubmit} className={v.inputArea}>
           <div className={variant === "full" ? "flex gap-3 items-start" : "flex gap-2"}>
             <textarea
@@ -422,6 +435,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
             )}
           </div>
         </form>
+        )}
       </div>
     );
   },

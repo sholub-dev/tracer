@@ -1,4 +1,4 @@
-import React, { useRef, useCallback } from "react";
+import React, { useRef, useCallback, useState } from "react";
 import { Streamdown } from "streamdown";
 import { domToPng } from "modern-screenshot";
 import { CLIENT_TOOL_NAMES } from "@oko/shared";
@@ -7,41 +7,82 @@ import type { ProgressStore } from "../../lib/progress-store";
 import { theme } from "../../lib/theme";
 import type { UIMessage } from "ai";
 import { CopyMessageButton } from "./CopyMessageButton";
+import { encodePngWithPayload } from "../../lib/png-steg";
 
 interface MessagePartsProps {
   parts: UIMessage["parts"];
   isAnimating: boolean;
   progressStore: ProgressStore;
+  sourceTitle?: string;
+  sourceCreatedAt?: number;
 }
 
 /** Marker the agent writes to signal "analysis starts here". Stripped from display. */
 export const ANALYSIS_MARKER = "<analysis>";
 
 /** Analysis container with its own copy/download buttons. */
-function AnalysisSection({ parts, children }: { parts: UIMessage["parts"]; children: React.ReactNode }) {
+function AnalysisSection({
+  parts,
+  children,
+  sourceTitle,
+  sourceCreatedAt,
+}: {
+  parts: UIMessage["parts"];
+  children: React.ReactNode;
+  sourceTitle?: string;
+  sourceCreatedAt?: number;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const handleDownload = useCallback(async () => {
     const el = containerRef.current;
     if (!el) return;
     try {
       const dataUrl = await domToPng(el, { scale: 2 });
+      const bytes = new Uint8Array(await (await fetch(dataUrl)).arrayBuffer());
+
+      // Carry all parts from the analysis slice as-is: text, reasoning, and
+      // tool invocations (with their inputs and outputs) so charts, tables,
+      // and sub-agent results render on re-import. The begin_analysis marker
+      // has already been excluded by the slicing logic above.
+      const payload = JSON.stringify({
+        v: 1,
+        kind: "analysis",
+        sourceTitle: sourceTitle ?? "",
+        sourceCreatedAt: sourceCreatedAt ?? Math.floor(Date.now() / 1000),
+        parts,
+      });
+
+      if (payload.length > 2 * 1024 * 1024) {
+        setDownloadError("Analysis too large to embed metadata");
+        setTimeout(() => setDownloadError(null), 2500);
+        return;
+      }
+
+      const out = await encodePngWithPayload(bytes, new TextEncoder().encode(payload));
+      const blob = new Blob([out.buffer as ArrayBuffer], { type: "image/png" });
+      const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = dataUrl;
+      a.href = url;
       const now = new Date();
       const stamp = `${now.toISOString().slice(0, 10)}-${String(now.getHours()).padStart(2, "0")}-${String(now.getMinutes()).padStart(2, "0")}`;
       a.download = `analysis-${stamp}.png`;
       a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
     } catch {
-      // Silent fail — domToPng not supported
+      // Silent fail — domToPng or chunk write not supported
     }
-  }, []);
+  }, [parts, sourceTitle, sourceCreatedAt]);
 
   return (
     <div ref={containerRef} className={`${theme.analysisContainer} relative group/analysis`}>
       <div className="flex items-center justify-between mb-1">
         <div className={theme.summaryLabel}>Analysis</div>
         <div className="flex items-center gap-0.5 opacity-0 group-hover/analysis:opacity-100 transition-opacity">
+          {downloadError && (
+            <span className="text-[10px] text-[#b33a2a] mr-1">{downloadError}</span>
+          )}
           <CopyMessageButton contentRef={containerRef} parts={parts} size={12} />
           <button
             type="button"
@@ -70,7 +111,7 @@ function DownloadIcon({ size = 14 }: { size?: number }) {
 }
 
 export const MessageParts = React.memo(
-  function MessageParts({ parts, isAnimating, progressStore }: MessagePartsProps) {
+  function MessageParts({ parts, isAnimating, progressStore, sourceTitle, sourceCreatedAt }: MessagePartsProps) {
     if (parts.length === 0 && !isAnimating) {
       return <span className="text-sm italic text-[#9c9890]">(interrupted)</span>;
     }
@@ -175,7 +216,7 @@ export const MessageParts = React.memo(
     return (
       <>
         {before}
-        <AnalysisSection parts={analysisParts}>
+        <AnalysisSection parts={analysisParts} sourceTitle={sourceTitle} sourceCreatedAt={sourceCreatedAt}>
           {after}
         </AnalysisSection>
       </>
@@ -184,6 +225,10 @@ export const MessageParts = React.memo(
   (prev, next) => {
     // Always re-render streaming messages (content is changing)
     if (prev.isAnimating || next.isAnimating) return false;
+    // Source metadata feeds the "download as image" payload — a late-arriving
+    // title must trigger a re-render so the AnalysisSection closure sees it.
+    if (prev.sourceTitle !== next.sourceTitle) return false;
+    if (prev.sourceCreatedAt !== next.sourceCreatedAt) return false;
     // Completed messages: parts are stable, skip re-render
     if (prev.parts === next.parts) return true;
     // When a tool part transitions state (e.g. input-available → output-available),

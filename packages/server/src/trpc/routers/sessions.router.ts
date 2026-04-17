@@ -1,6 +1,13 @@
 import { z } from "zod";
-import { eq, desc, notLike, and, or, ne, sql } from "drizzle-orm";
-import { SESSION_PREFIX, DEFAULT_SESSION_TITLE, unixNow } from "@oko/shared";
+import { eq, desc, notLike, and, or, ne, sql, isNull } from "drizzle-orm";
+import {
+  SESSION_PREFIX,
+  SESSION_KIND,
+  DEFAULT_SESSION_TITLE,
+  unixNow,
+  ImportedAnalysisSchema,
+  CLIENT_TOOL_NAMES,
+} from "@oko/shared";
 import { publicProcedure, router } from "../trpc.js";
 import { chatSessions, agentRuns } from "../../db/schema.js";
 
@@ -19,6 +26,7 @@ export const sessionsRouter = router({
         id: chatSessions.id,
         title: chatSessions.title,
         status: chatSessions.status,
+        kind: chatSessions.kind,
         updatedAt: chatSessions.updatedAt,
       })
       .from(chatSessions)
@@ -59,7 +67,7 @@ export const sessionsRouter = router({
         console.warn(`[sessions] Corrupted messages for session ${row.id}`);
       }
       return {
-        id: row.id, title: row.title, status: row.status, messages, updatedAt: row.updatedAt,
+        id: row.id, title: row.title, status: row.status, kind: row.kind, messages, updatedAt: row.updatedAt,
       };
     }),
 
@@ -101,6 +109,7 @@ export const sessionsRouter = router({
       .where(and(
         notLike(chatSessions.id, `${SESSION_PREFIX.DASHBOARD}%`),
         notLike(chatSessions.id, `${SESSION_PREFIX.MONITORS}%`),
+        or(isNull(chatSessions.kind), ne(chatSessions.kind, SESSION_KIND.IMPORTED)),
         or(
           eq(chatSessions.status, "streaming"),
           eq(chatSessions.status, "done"),
@@ -148,6 +157,42 @@ export const sessionsRouter = router({
         .where(eq(chatSessions.id, input.id))
         .run();
       return { success: true };
+    }),
+
+  importAnalysis: publicProcedure
+    .input(ImportedAnalysisSchema)
+    .mutation(({ ctx, input }) => {
+      const id = crypto.randomUUID();
+      const assistantMessage = {
+        id: crypto.randomUUID(),
+        role: "assistant" as const,
+        metadata: {
+          sourceTitle: input.sourceTitle,
+          sourceCreatedAt: input.sourceCreatedAt,
+        },
+        parts: [
+          {
+            type: CLIENT_TOOL_NAMES.BEGIN_ANALYSIS,
+            toolCallId: crypto.randomUUID(),
+            state: "output-available" as const,
+            input: {},
+            output: { status: "Analysis mode active." },
+          },
+          ...input.parts,
+        ],
+      };
+      const title = input.sourceTitle.slice(0, 80) || DEFAULT_SESSION_TITLE;
+      ctx.db
+        .insert(chatSessions)
+        .values({
+          id,
+          title,
+          status: "idle",
+          kind: SESSION_KIND.IMPORTED,
+          messages: JSON.stringify([assistantMessage]),
+        })
+        .run();
+      return { id };
     }),
 
   truncateMessages: publicProcedure

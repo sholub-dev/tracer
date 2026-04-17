@@ -27,6 +27,7 @@ export function runSetup(): void {
       title TEXT NOT NULL,
       messages TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'idle',
+      kind TEXT,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
@@ -132,6 +133,7 @@ export function runSetup(): void {
   for (const ddl of [
     `ALTER TABLE sub_agent_runs ADD COLUMN session_id TEXT`,
     `ALTER TABLE tool_memories ADD COLUMN review_note TEXT`,
+    `ALTER TABLE chat_sessions ADD COLUMN kind TEXT`,
   ]) {
     try { sqlite.exec(ddl); } catch { /* column already exists */ }
   }

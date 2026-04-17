@@ -7,10 +7,11 @@ import { ChatCore, type ChatCoreRef } from "../components/chat/ChatCore";
 import { CopyMessageButton } from "../components/chat/CopyMessageButton";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { ProviderToggle } from "../components/ui/ProviderToggle";
-import { DEFAULT_SESSION_TITLE } from "@oko/shared";
+import { DEFAULT_SESSION_TITLE, ImportedAnalysisSchema, SESSION_KIND } from "@oko/shared";
 import { SessionTitle } from "../components/debug/SessionTitle";
 import { CostDisplay, computeCostBreakdown, type CostBreakdown } from "../components/debug/CostDisplay";
 import { EditMessageForm } from "../components/debug/EditMessageForm";
+import { decodePngPayload } from "../lib/png-steg";
 
 interface DebugProps {
   sessionId: string | null;
@@ -23,6 +24,101 @@ export function Debug({ sessionId, onSessionChange }: DebugProps) {
   useEffect(() => {
     if (!sessionId) onSessionChange(resolvedId);
   }, [sessionId, resolvedId, onSessionChange]);
+
+  // ── Drag-and-drop import ─────────────────────────────────────────────
+  const [dragCounter, setDragCounter] = useState(0);
+  const [dropError, setDropError] = useState<string | null>(null);
+  const importMutation = trpc.sessions.importAnalysis.useMutation();
+  const dropUtils = trpc.useUtils();
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragCounter(0);
+    const files = e.dataTransfer.files;
+    if (!files || files.length !== 1 || files[0].type !== "image/png") {
+      setDropError("Only single PNG files are supported.");
+      return;
+    }
+    const file = files[0];
+    if (file.size > 10 * 1024 * 1024) {
+      setDropError("PNG is too large (>10 MB).");
+      return;
+    }
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let payload: Uint8Array | null;
+      try {
+        payload = await decodePngPayload(bytes);
+      } catch {
+        setDropError("Not a valid PNG file.");
+        return;
+      }
+      if (!payload) {
+        setDropError("No analysis data found in this image.");
+        return;
+      }
+      let parsed;
+      try {
+        parsed = ImportedAnalysisSchema.parse(JSON.parse(new TextDecoder().decode(payload)));
+      } catch {
+        setDropError("Analysis data is malformed or from an incompatible version.");
+        return;
+      }
+      const { id } = await importMutation.mutateAsync(parsed);
+      dropUtils.sessions.list.setData(undefined, (prev) => {
+        const row = {
+          id,
+          title: parsed.sourceTitle.slice(0, 80) || DEFAULT_SESSION_TITLE,
+          status: "idle" as const,
+          kind: SESSION_KIND.IMPORTED as string | null,
+          updatedAt: Math.floor(Date.now() / 1000),
+          titlePending: false,
+        };
+        return prev ? [row, ...prev] : [row];
+      });
+      setDropError(null);
+      onSessionChange(id);
+    } catch {
+      setDropError("Couldn't import analysis.");
+    }
+  }, [importMutation, dropUtils, onSessionChange]);
+
+  const dropHandlers = {
+    onDragEnter: (e: React.DragEvent) => {
+      if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+      e.preventDefault();
+      setDragCounter((c) => c + 1);
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+      e.preventDefault();
+    },
+    onDragLeave: () => setDragCounter((c) => Math.max(0, c - 1)),
+    onDrop: handleDrop,
+  };
+
+  const dropOverlay = dragCounter > 0 ? (
+    <div
+      className="absolute inset-0 z-40 pointer-events-none flex items-center justify-center bg-[#2b5ea7]/10 border-2 border-dashed border-[#2b5ea7] rounded"
+    >
+      <span className="text-sm font-medium text-[#2b5ea7] bg-white/90 px-4 py-2 rounded shadow-sm">
+        Drop PNG to import analysis
+      </span>
+    </div>
+  ) : null;
+
+  const dropBanner = dropError ? (
+    <div className="absolute top-2 left-1/2 -translate-x-1/2 z-40 text-sm text-[#b33a2a] bg-[#b33a2a]/5 border border-[#b33a2a]/20 rounded px-4 py-2 flex items-center gap-3 shadow-sm">
+      <span>{dropError}</span>
+      <button
+        type="button"
+        onClick={() => setDropError(null)}
+        className="text-xs underline shrink-0 font-sans"
+      >
+        dismiss
+      </button>
+    </div>
+  ) : null;
 
   const [activeProvider, setActiveProviderRaw] = useState<string | null>(
     () => localStorage.getItem("oko:activeProvider"),
@@ -73,19 +169,17 @@ export function Debug({ sessionId, onSessionChange }: DebugProps) {
   }, [costQuery.data]);
 
   // Wait for session data to load when resuming
+  let body: React.ReactNode;
   if (sessionId && sessionQuery.isLoading) {
-    return (
+    body = (
       <div className={theme.chatContainer}>
         <div className="flex items-center justify-center h-full">
           <span className={theme.chatEmptyState}>Loading session...</span>
         </div>
       </div>
     );
-  }
-
-  // If the server is still streaming (user navigated away and came back), show LiveStreamView
-  if (sessionQuery.data?.status === "streaming") {
-    return (
+  } else if (sessionQuery.data?.status === "streaming") {
+    body = (
       <LiveStreamView
         key={resolvedId}
         sessionId={resolvedId}
@@ -95,17 +189,89 @@ export function Debug({ sessionId, onSessionChange }: DebugProps) {
         beforeInput={<div className="px-10 pt-2 flex justify-end"><ProviderToggle activeProvider={activeProvider} onToggle={setActiveProvider} /></div>}
       />
     );
+  } else if (sessionQuery.data?.kind === SESSION_KIND.IMPORTED) {
+    body = (
+      <ImportedView
+        key={resolvedId}
+        sessionId={resolvedId}
+        sessionTitle={sessionQuery.data.title}
+        initialMessages={initialMessages ?? []}
+      />
+    );
+  } else {
+    body = (
+      <DebugChat
+        key={resolvedId}
+        chatId={resolvedId}
+        initialMessages={initialMessages}
+        costBreakdown={costBreakdown}
+        activeProvider={activeProvider}
+        setActiveProvider={setActiveProvider}
+        sessionTitle={sessionQuery.data?.title}
+        sessionUpdatedAt={sessionQuery.data?.updatedAt}
+      />
+    );
   }
 
   return (
-    <DebugChat
-      key={resolvedId}
-      chatId={resolvedId}
-      initialMessages={initialMessages}
-      costBreakdown={costBreakdown}
-      activeProvider={activeProvider}
-      setActiveProvider={setActiveProvider}
-    />
+    <div className="relative h-full" {...dropHandlers}>
+      {body}
+      {dropBanner}
+      {dropOverlay}
+    </div>
+  );
+}
+
+// ── Read-only view for imported sessions ─────────────────────────────────────
+
+interface ImportedViewProps {
+  sessionId: string;
+  sessionTitle: string;
+  initialMessages: UIMessage[];
+}
+
+function ImportedView({ sessionId, sessionTitle, initialMessages }: ImportedViewProps) {
+  const coreRef = useRef<ChatCoreRef>(null);
+  const first = initialMessages[0] as UIMessage & {
+    metadata?: { sourceTitle?: string; sourceCreatedAt?: number };
+  } | undefined;
+  const sourceTitle = first?.metadata?.sourceTitle ?? sessionTitle;
+  const sourceCreatedAt = first?.metadata?.sourceCreatedAt;
+
+  const formattedDate = useMemo(() => {
+    if (!sourceCreatedAt) return "";
+    try {
+      return new Date(sourceCreatedAt * 1000).toLocaleDateString(undefined, {
+        year: "numeric", month: "short", day: "numeric",
+      });
+    } catch {
+      return "";
+    }
+  }, [sourceCreatedAt]);
+
+  const banner = (
+    <div className="px-10 pt-3">
+      <div className="text-xs text-[#9c9890] border-l-2 border-[#2b5ea7] pl-3 py-1">
+        Imported{sourceTitle ? ` from ${sourceTitle}` : ""}
+        {formattedDate ? ` · originally ${formattedDate}` : ""}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className={theme.chatContainer}>
+      <ChatCore
+        ref={coreRef}
+        chatId={sessionId}
+        apiEndpoint="/api/chat"
+        initialMessages={initialMessages}
+        variant="full"
+        readOnly
+        sourceTitle={sourceTitle}
+        sourceCreatedAt={sourceCreatedAt}
+        scrollHeader={banner}
+      />
+    </div>
   );
 }
 
@@ -115,9 +281,11 @@ interface DebugChatProps {
   costBreakdown: CostBreakdown | null;
   activeProvider: string | null;
   setActiveProvider: (type: string) => void;
+  sessionTitle?: string;
+  sessionUpdatedAt?: number;
 }
 
-function DebugChat({ chatId, initialMessages, costBreakdown, activeProvider, setActiveProvider }: DebugChatProps) {
+function DebugChat({ chatId, initialMessages, costBreakdown, activeProvider, setActiveProvider, sessionTitle, sessionUpdatedAt }: DebugChatProps) {
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
@@ -326,6 +494,8 @@ Base the report entirely on the investigation data and findings from this conver
         placeholder="Ask a debugging question..."
         initialMessages={initialMessages}
         variant="full"
+        sourceTitle={sessionTitle}
+        sourceCreatedAt={sessionUpdatedAt}
         scrollHeader={sessionTitleHeader}
         emptyStateExtras={emptyStateNotifiers}
         onBeforeStop={handleBeforeStop}
@@ -341,7 +511,7 @@ Base the report entirely on the investigation data and findings from this conver
             utils.sessions.list.setData(undefined, (prev) => {
               if (!prev || prev.some((s) => s.id === chatId)) return prev;
               added = true;
-              return [{ id: chatId, title: DEFAULT_SESSION_TITLE, status: "streaming", updatedAt: Math.floor(Date.now() / 1000), titlePending: true }, ...prev];
+              return [{ id: chatId, title: DEFAULT_SESSION_TITLE, status: "streaming", kind: null, updatedAt: Math.floor(Date.now() / 1000), titlePending: true }, ...prev];
             });
             if (added) {
               utils.sessions.activeCount.setData(undefined, (prev) =>
@@ -355,6 +525,11 @@ Base the report entirely on the investigation data and findings from this conver
               markViewed.mutate({ id: chatId });
             }
             utils.sessions.getCost.invalidate({ id: chatId });
+            // Only refetch for a title update while the title is still pending
+            // — avoids a round-trip on every completion of a named session.
+            if (sessionTitle === DEFAULT_SESSION_TITLE) {
+              utils.sessions.get.invalidate({ id: chatId });
+            }
           }
         }}
         extraBody={activeProvider ? { activeProvider } : undefined}

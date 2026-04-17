@@ -196,7 +196,7 @@ export class McpProvider extends BaseProvider {
     const command = local ? "node" : "npx";
     const args = local
       ? [local, ...(entry.args ?? [])]
-      : ["-y", entry.package, ...(entry.args ?? [])];
+      : ["-y", `${entry.package}@${entry.version}`, ...(entry.args ?? [])];
 
     const transport = new Experimental_StdioMCPTransport({
       command,

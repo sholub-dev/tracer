@@ -40,7 +40,7 @@ async function main() {
   const scheduler = new MonitorScheduler(db, providers);
   scheduler.start();
 
-  const server = serve({ fetch: app.fetch, port: CONFIG.port }, (info) => {
+  const server = serve({ fetch: app.fetch, port: CONFIG.port, hostname: CONFIG.host }, (info) => {
     console.log(`Tracer server running on http://localhost:${info.port}`);
   });
   server.on("error", (err: NodeJS.ErrnoException) => {

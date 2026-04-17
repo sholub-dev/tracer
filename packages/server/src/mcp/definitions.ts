@@ -7,6 +7,8 @@
 export interface McpServerEntry {
   /** npm package to run via npx, e.g. "@google-cloud/observability-mcp" */
   package: string;
+  /** Exact npm version to pin; avoids floating to `latest` on every spawn. */
+  version: string;
   /** Extra CLI args after the package name */
   args?: string[];
   /** Maps provider config keys to env var names for the MCP process */
@@ -36,6 +38,7 @@ export const mcpDefinitions = new Map<string, McpServerDefinition>([
       servers: [
         {
           package: "@google-cloud/observability-mcp",
+          version: "0.2.3",
           envMapping: {
             projectId: "GOOGLE_CLOUD_PROJECT",
           },

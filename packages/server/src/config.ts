@@ -20,6 +20,9 @@ export const CONFIG = {
   /** HTTP server port. Override with TRACER_PORT env var. */
   port: Number(process.env.TRACER_PORT) || 3579,
 
+  /** HTTP server bind address. Loopback by default; set TRACER_HOST=0.0.0.0 to expose externally. */
+  host: process.env.TRACER_HOST || "127.0.0.1",
+
   /** CORS origin. null = derive from port at runtime as http://localhost:{port}. */
   corsOrigin: process.env.TRACER_CORS_ORIGIN ?? null as string | null,
 

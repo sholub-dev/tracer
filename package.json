@@ -1,29 +1,29 @@
 {
-  "name": "oko-sh",
+  "name": "tracer-sh",
   "version": "0.6.2",
   "type": "module",
   "description": "Local-first debugging & analysis platform",
   "license": "PolyForm-Shield-1.0.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sholub1989/oko.git"
+    "url": "git+https://github.com/sholub-dev/tracer.git"
   },
   "packageManager": "pnpm@10.10.0",
   "engines": {
     "node": ">=20.0.0"
   },
   "bin": {
-    "oko-sh": "./bin/oko.mjs"
+    "tracer-sh": "./bin/tracer.mjs"
   },
   "files": [
-    "bin/oko.mjs",
+    "bin/tracer.mjs",
     "packages/server/dist/",
     "packages/web/dist/"
   ],
   "scripts": {
     "predev": "pnpm install --frozen-lockfile 2>/dev/null || pnpm install",
-    "dev": "concurrently --kill-others -n server,web -c blue,green \"pnpm --filter @oko/server dev\" \"pnpm --filter @oko/web dev\"",
-    "build": "pnpm --filter @oko/shared build && pnpm --filter @oko/server build && pnpm --filter @oko/web build",
+    "dev": "concurrently --kill-others -n server,web -c blue,green \"pnpm --filter @tracer-sh/server dev\" \"pnpm --filter @tracer-sh/web dev\"",
+    "build": "pnpm --filter @tracer-sh/shared build && pnpm --filter @tracer-sh/server build && pnpm --filter @tracer-sh/web build",
     "start": "node packages/server/dist/index.js",
     "lint": "tsc --noEmit",
     "release": "bin/release.sh",

@@ -1,6 +1,6 @@
 import { useCallback, useSyncExternalStore } from "react";
 
-import type { ProgressPart } from "@oko/shared";
+import type { ProgressPart } from "@tracer-sh/shared";
 
 export interface NrqlProgress {
   parts: ProgressPart[];

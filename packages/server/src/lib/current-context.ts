@@ -5,7 +5,7 @@ import type { Db } from "../db/client.js";
 /** Returns a short system-prompt block with the current date/time. */
 export function getCurrentDateBlock(db?: Db): string {
   const timezone = (db ? readAppSetting<string>(db, SETTINGS_KEYS.timezone) : null)
-    ?? process.env.OKO_TIMEZONE
+    ?? process.env.TRACER_TIMEZONE
     ?? DEFAULTS.timezone;
   const now = new Date();
   const formatted = new Intl.DateTimeFormat("en-US", {

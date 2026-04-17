@@ -26,7 +26,7 @@ function readCurrentVersion(): string {
     ]) {
       try {
         const pkg = JSON.parse(readFileSync(candidate, "utf-8"));
-        if (pkg.name === "oko-sh" && pkg.version) return pkg.version;
+        if (pkg.name === "tracer-sh" && pkg.version) return pkg.version;
       } catch { /* try next */ }
     }
   } catch { /* fallback */ }
@@ -44,7 +44,7 @@ function isNewerVersion(latest: string, current: string): boolean {
 
 function fetchLatestNpmVersion(): Promise<string | null> {
   return new Promise((resolve) => {
-    exec("npm view oko-sh version", { encoding: "utf-8", timeout: CONFIG.npmViewTimeoutMs }, (err, stdout) => {
+    exec("npm view tracer-sh version", { encoding: "utf-8", timeout: CONFIG.npmViewTimeoutMs }, (err, stdout) => {
       if (err) { resolve(null); return; }
       const version = stdout.trim();
       resolve(version || null);
@@ -78,7 +78,7 @@ export function checkForUpdateBackground(): void {
     const available = isNewerVersion(latest, current);
     cachedStatus = { available, currentVersion: current, latestVersion: latest };
     if (available) {
-      console.log(`Update available: v${current} → v${latest} (run: npm update -g oko-sh)`);
+      console.log(`Update available: v${current} → v${latest} (run: npm update -g tracer-sh)`);
     }
   }).catch(() => {
     cachedStatus = { available: false, currentVersion: current, latestVersion: null };

@@ -1,4 +1,4 @@
-import type { IProvider, ProviderStatus } from "@oko/shared";
+import type { IProvider, ProviderStatus } from "@tracer-sh/shared";
 import type { Db } from "../db/client.js";
 import { providerConfigs } from "../db/schema.js";
 

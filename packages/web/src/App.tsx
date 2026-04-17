@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useSyncExternalStore } from "react";
-import { FEATURES } from "@oko/shared";
+import { FEATURES } from "@tracer-sh/shared";
 import { Shell } from "./components/layout/Shell";
 import { Sidebar, type Page } from "./components/layout/Sidebar";
 import { Spinner } from "./components/ui/Spinner";

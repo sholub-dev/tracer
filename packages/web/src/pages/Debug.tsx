@@ -7,7 +7,7 @@ import { ChatCore, type ChatCoreRef } from "../components/chat/ChatCore";
 import { CopyMessageButton } from "../components/chat/CopyMessageButton";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { ProviderToggle } from "../components/ui/ProviderToggle";
-import { DEFAULT_SESSION_TITLE, ImportedAnalysisSchema, SESSION_KIND } from "@oko/shared";
+import { DEFAULT_SESSION_TITLE, ImportedAnalysisSchema, SESSION_KIND } from "@tracer-sh/shared";
 import { SessionTitle } from "../components/debug/SessionTitle";
 import { CostDisplay, computeCostBreakdown, type CostBreakdown } from "../components/debug/CostDisplay";
 import { EditMessageForm } from "../components/debug/EditMessageForm";
@@ -121,10 +121,10 @@ export function Debug({ sessionId, onSessionChange }: DebugProps) {
   ) : null;
 
   const [activeProvider, setActiveProviderRaw] = useState<string | null>(
-    () => localStorage.getItem("oko:activeProvider"),
+    () => localStorage.getItem("tracer:activeProvider"),
   );
   const setActiveProvider = useCallback((type: string) => {
-    localStorage.setItem("oko:activeProvider", type);
+    localStorage.setItem("tracer:activeProvider", type);
     setActiveProviderRaw(type);
   }, []);
 

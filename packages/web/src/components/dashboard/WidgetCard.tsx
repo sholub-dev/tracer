@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { theme } from "../../lib/theme";
-import { substituteTimeRange } from "@oko/shared";
+import { substituteTimeRange } from "@tracer-sh/shared";
 import { QueryChart } from "../charts/QueryChart";
 import { trpc } from "../../lib/trpc";
 import { ConfirmDialog } from "../ui/ConfirmDialog";

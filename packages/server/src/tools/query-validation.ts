@@ -1,5 +1,5 @@
-import { substituteTimeRange } from "@oko/shared";
-import type { IProvider } from "@oko/shared";
+import { substituteTimeRange } from "@tracer-sh/shared";
+import type { IProvider } from "@tracer-sh/shared";
 
 /** Check that a query contains the required {{SINCE}} and {{UNTIL}} placeholders. */
 export function requireTimeRangePlaceholders(query: string): { error: string } | null {

@@ -3,8 +3,8 @@ import { tool } from "ai";
 import { eq, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import type { ProviderRegistry } from "../providers/registry.js";
-import { unixNow } from "@oko/shared";
-import type { ChatToolWriter as StreamWriter } from "@oko/shared";
+import { unixNow } from "@tracer-sh/shared";
+import type { ChatToolWriter as StreamWriter } from "@tracer-sh/shared";
 import { dashboardWidgets, dashboards } from "../db/schema.js";
 import { collectBaseTools } from "./shared-tool-setup.js";
 import { requireTimeRangePlaceholders, executeValidationQuery } from "./query-validation.js";
@@ -204,7 +204,7 @@ export function collectDashboardTools(
   // ── Widget context (injected fresh on every request) ──
   const widgetContext = getWidgetContext(db, dbId);
 
-  const basePrompt = `You are a dashboard builder assistant for the OKO platform. You help users create, update, and delete dashboard widgets that display live observability data.
+  const basePrompt = `You are a dashboard builder assistant for the Tracer platform. You help users create, update, and delete dashboard widgets that display live observability data.
 
 When a user asks to create a widget, use the create_widget tool with an appropriate query. When they ask to modify one, use update_widget. When they ask to remove one, use delete_widget.
 

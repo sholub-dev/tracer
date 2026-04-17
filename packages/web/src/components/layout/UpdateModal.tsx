@@ -27,7 +27,7 @@ export function UpdateModal({ open, onClose }: UpdateModalProps) {
       <div className="text-sm text-[#666666] mb-4">
         <p>Run this command to update:</p>
         <code className="block mt-2 p-2 bg-[#1a1a1a] rounded font-mono text-xs text-[#e0e0e0]">
-          npm update -g oko-sh
+          npm update -g tracer-sh
         </code>
       </div>
       <div className="flex justify-end">

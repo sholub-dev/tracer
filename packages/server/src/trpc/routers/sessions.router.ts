@@ -7,7 +7,7 @@ import {
   unixNow,
   ImportedAnalysisSchema,
   CLIENT_TOOL_NAMES,
-} from "@oko/shared";
+} from "@tracer-sh/shared";
 import { publicProcedure, router } from "../trpc.js";
 import { chatSessions, agentRuns } from "../../db/schema.js";
 

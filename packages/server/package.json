@@ -1,5 +1,5 @@
 {
-  "name": "@oko/server",
+  "name": "@tracer-sh/server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -24,7 +24,7 @@
     "@ai-sdk/mcp": "^1.0.21",
     "@hono/node-server": "^1.19.9",
     "@hono/trpc-server": "^0.4.2",
-    "@oko/shared": "workspace:*",
+    "@tracer-sh/shared": "workspace:*",
     "@trpc/server": "^11.10.0",
     "ai": "^6.0.140",
     "better-sqlite3": "^12.6.2",

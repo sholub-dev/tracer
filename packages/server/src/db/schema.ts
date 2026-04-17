@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
-import { unixNow } from "@oko/shared";
+import { unixNow } from "@tracer-sh/shared";
 
 export const providerConfigs = sqliteTable("provider_configs", {
   id: integer("id").primaryKey({ autoIncrement: true }),

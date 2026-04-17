@@ -1,12 +1,12 @@
 import { streamText, generateText, stepCountIs, smoothStream } from "ai";
-import type { ProgressPart } from "@oko/shared";
+import type { ProgressPart } from "@tracer-sh/shared";
 
 import type { Db } from "../../db/client.js";
 import { resolveSubAgentModel } from "../../llm/resolve.js";
 import { extractUsage, addTokenUsage, emptyUsage, recordAgentRun } from "../../llm/usage.js";
 import { subAgentRuns, memoryOperations } from "../../db/schema.js";
 import { runMemoryAgent } from "../utility/memory.js";
-import type { ChatToolWriter as StreamWriter, ChatToolMemoryContext as MemoryContext } from "@oko/shared";
+import type { ChatToolWriter as StreamWriter, ChatToolMemoryContext as MemoryContext } from "@tracer-sh/shared";
 import { DEFAULTS, SETTINGS_KEYS } from "../../config.js";
 import { readAppSetting } from "../../db/config-reader.js";
 import { getCurrentDateBlock } from "../../lib/current-context.js";

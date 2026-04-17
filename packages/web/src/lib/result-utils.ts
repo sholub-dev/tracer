@@ -1,4 +1,4 @@
-import { isUnixMs, isUnixSec } from "@oko/shared";
+import { isUnixMs, isUnixSec } from "@tracer-sh/shared";
 
 export const HIDDEN_KEYS = new Set(["beginTimeSeconds", "endTimeSeconds", "inspectedCount"]);
 

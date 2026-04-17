@@ -1,6 +1,6 @@
 import { serve } from "@hono/node-server";
 import { eq } from "drizzle-orm";
-import { unixNow } from "@oko/shared";
+import { unixNow } from "@tracer-sh/shared";
 import { CONFIG } from "./config.js";
 import { checkForUpdateBackground } from "./updater.js";
 import { db } from "./db/client.js";
@@ -41,7 +41,7 @@ async function main() {
   scheduler.start();
 
   const server = serve({ fetch: app.fetch, port: CONFIG.port }, (info) => {
-    console.log(`OKO server running on http://localhost:${info.port}`);
+    console.log(`Tracer server running on http://localhost:${info.port}`);
   });
   server.on("error", (err: NodeJS.ErrnoException) => {
     if (err.code === "EADDRINUSE") {
@@ -65,6 +65,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("Failed to start OKO server:", err);
+  console.error("Failed to start Tracer server:", err);
   process.exit(1);
 });

@@ -1,8 +1,8 @@
 import React, { memo, useEffect, useRef } from "react";
 import { Streamdown } from "streamdown";
-import { CLIENT_TOOL_NAMES } from "@oko/shared";
+import { CLIENT_TOOL_NAMES } from "@tracer-sh/shared";
 import { JsonTree } from "../ui/JsonTree";
-import type { ProgressPart } from "@oko/shared";
+import type { ProgressPart } from "@tracer-sh/shared";
 import { theme } from "../../lib/theme";
 import ResultView from "../charts/ResultView";
 import { useProgress, type ProgressStore } from "../../lib/progress-store";

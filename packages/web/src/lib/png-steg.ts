@@ -5,12 +5,12 @@
  * strip ancillary chunks but preserve pixels losslessly (Slack, Discord,
  * email, AirDrop).
  *
- * Frame format: [magic "OKO1" (4 bytes)] [length u32 big-endian (4 bytes)] [payload].
+ * Frame format: [magic "TRC1" (4 bytes)] [length u32 big-endian (4 bytes)] [payload].
  *
  * Does NOT survive lossy re-encoding (JPEG conversion, aggressive resize).
  */
 
-const MAGIC = Uint8Array.from([0x4f, 0x4b, 0x4f, 0x31]); // "OKO1"
+const MAGIC = Uint8Array.from([0x54, 0x52, 0x43, 0x31]); // "TRC1"
 const LENGTH_FIELD_BYTES = 4; // u32 big-endian
 const HEADER_BYTES = MAGIC.length + LENGTH_FIELD_BYTES;
 const MAX_PAYLOAD_BYTES = 10 * 1024 * 1024; // decode-side sanity cap against malformed headers
@@ -98,7 +98,7 @@ export async function encodePngWithPayload(pngBytes: Uint8Array, payload: Uint8A
 }
 
 /**
- * Return the payload bytes carried by `pngBytes`, or null if no OKO header
+ * Return the payload bytes carried by `pngBytes`, or null if no Tracer header
  * is present (unrelated PNG, or LSBs were destroyed by re-encoding).
  */
 export async function decodePngPayload(pngBytes: Uint8Array): Promise<Uint8Array | null> {

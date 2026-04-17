@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { tool } from "ai";
-import { TOOL_NAMES } from "@oko/shared";
+import { TOOL_NAMES } from "@tracer-sh/shared";
 
 /** Marker tool the agent calls to signal the start of its analysis section. */
 export const beginAnalysisTool = tool({

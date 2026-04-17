@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { eq, isNull, desc, sql } from "drizzle-orm";
-import { unixNow } from "@oko/shared";
+import { unixNow } from "@tracer-sh/shared";
 import { publicProcedure, router } from "../trpc.js";
 import { monitorAlerts, monitors } from "../../db/schema.js";
 

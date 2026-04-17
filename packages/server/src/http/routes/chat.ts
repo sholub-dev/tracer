@@ -1,7 +1,7 @@
 import type { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { createUIMessageStreamResponse, type UIMessage } from "ai";
-import { dashboardSessionId, SESSION_PREFIX, DEFAULT_SESSION_TITLE, DEFAULT_CHAT_MODE, type ChatMode } from "@oko/shared";
+import { dashboardSessionId, SESSION_PREFIX, DEFAULT_SESSION_TITLE, DEFAULT_CHAT_MODE, type ChatMode } from "@tracer-sh/shared";
 import type { Context } from "../../trpc/context.js";
 import { loadSessionMessages, runChatAgent } from "../../agents/base-agent.js";
 import { collectChatTools } from "../../tools/chat-tools.js";

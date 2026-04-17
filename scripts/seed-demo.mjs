@@ -1,5 +1,5 @@
 /**
- * Seed script to insert a demo session into the OKO database
+ * Seed script to insert a demo session into the Tracer database
  * for README screenshots. All data is fictional.
  *
  * Usage: node scripts/seed-demo.mjs
@@ -10,8 +10,8 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
-const okoHome = process.env.OKO_HOME || join(homedir(), ".oko");
-const dbPath = join(okoHome, "data", "oko.db");
+const tracerHome = process.env.TRACER_HOME || join(homedir(), ".tracer");
+const dbPath = join(tracerHome, "data", "tracer.db");
 const db = new Database(dbPath);
 
 const SESSION_ID = "demo-checkout-latency-spike";

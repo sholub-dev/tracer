@@ -3,7 +3,7 @@
  * between NR and GCP direct-mode tool setups.
  */
 
-import type { AfterCompleteParams, ChatToolMemoryContext } from "@oko/shared";
+import type { AfterCompleteParams, ChatToolMemoryContext } from "@tracer-sh/shared";
 import type { Db } from "../db/client.js";
 import { memoryOperations } from "../db/schema.js";
 import { runMemoryAgent } from "../agents/utility/memory.js";

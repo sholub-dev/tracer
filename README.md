@@ -1,11 +1,11 @@
-# OKO
+# Tracer
 
-[![npm version](https://img.shields.io/npm/v/oko-sh)](https://www.npmjs.com/package/oko-sh)
+[![npm version](https://img.shields.io/npm/v/tracer-sh)](https://www.npmjs.com/package/tracer-sh)
 
 Local-first AI-powered observability platform.
 
 During an incident, most time goes to switching between observability tools
-and gathering context — not fixing the problem. OKO connects your providers
+and gathering context — not fixing the problem. Tracer connects your providers
 to a single AI chat interface so you find the root cause in one place.
 
 ## Debug
@@ -15,7 +15,7 @@ Chat with an AI agent that queries your providers in real-time and finds root ca
 - Natural language investigation
 - Live query execution with inline charts
 - Post-mortem reports — download as Markdown to share
-- Share investigations as PNG — drop the exported image back into OKO to re-open the analysis
+- Share investigations as PNG — drop the exported image back into Tracer to re-open the analysis
 - Agent memory across sessions
 - Session history and cost tracking
 
@@ -37,14 +37,14 @@ Configure providers, LLM credentials, agent behavior, and memory. All data is st
 ```
 ┌─────────┐       your API keys         ┌──────────────────┐
 │         │ ◄──────────────────────────►│  Observability   │
-│   OKO   │                             │  Providers       │
+│ Tracer  │                             │  Providers       │
 │  local  │       your API keys         ├──────────────────┤
 │         │ ◄──────────────────────────►│  LLM Providers   │
 └─────────┘                             └──────────────────┘
 ```
 
 Everything runs on your machine. Your data stays local in a SQLite database.
-OKO talks directly to your provider and LLM APIs using your own API keys —
+Tracer talks directly to your provider and LLM APIs using your own API keys —
 no intermediary servers, no data leaves your machine except API calls you control.
 
 ## Install
@@ -52,14 +52,14 @@ no intermediary servers, no data leaves your machine except API calls you contro
 Requires [Node.js 20+](https://nodejs.org/).
 
 ```bash
-npx oko-sh
+npx tracer-sh
 ```
 
 Or install globally:
 
 ```bash
-npm install -g oko-sh
-oko-sh
+npm install -g tracer-sh
+tracer-sh
 ```
 
 Open `http://localhost:3579`, go to **Settings** to add your API keys and choose an LLM — done.
@@ -73,13 +73,13 @@ Open `http://localhost:3579`, go to **Settings** to add your API keys and choose
 ## Uninstall
 
 ```bash
-npm uninstall -g oko-sh
+npm uninstall -g tracer-sh
 ```
 
 To also remove your local database (settings, sessions, API keys):
 
 ```bash
-rm -rf ~/.oko
+rm -rf ~/.tracer
 ```
 
 ## Troubleshooting
@@ -87,14 +87,14 @@ rm -rf ~/.oko
 | Problem | Fix |
 |---------|-----|
 | `better-sqlite3` build fails | macOS: `xcode-select --install` / Linux: `sudo apt install build-essential python3` |
-| Port in use | `OKO_PORT=3580 oko-sh` |
+| Port in use | `TRACER_PORT=3580 tracer-sh` |
 | No LLM responses | Add an API key in Settings |
 
 ## Contributing
 
 Contributions are welcome! There are two main ways to help:
 
-**Report bugs or request features** — [open an issue](https://github.com/sholub1989/oko/issues). Include steps to reproduce for bugs, or a clear description for feature requests.
+**Report bugs or request features** — [open an issue](https://github.com/sholub-dev/tracer/issues). Include steps to reproduce for bugs, or a clear description for feature requests.
 
 **Submit a code change:**
 

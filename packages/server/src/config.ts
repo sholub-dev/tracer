@@ -7,7 +7,7 @@
  * fallbacks when no DB value is set. Env vars override everything.
  */
 
-import type { KnownModelId } from "@oko/shared";
+import type { KnownModelId } from "@tracer-sh/shared";
 
 export interface ModelConfig {
   provider: string;
@@ -17,11 +17,11 @@ export interface ModelConfig {
 // ── Developer-only constants (not user-controllable) ──
 
 export const CONFIG = {
-  /** HTTP server port. Override with OKO_PORT env var. */
-  port: Number(process.env.OKO_PORT) || 3579,
+  /** HTTP server port. Override with TRACER_PORT env var. */
+  port: Number(process.env.TRACER_PORT) || 3579,
 
   /** CORS origin. null = derive from port at runtime as http://localhost:{port}. */
-  corsOrigin: process.env.OKO_CORS_ORIGIN ?? null as string | null,
+  corsOrigin: process.env.TRACER_CORS_ORIGIN ?? null as string | null,
 
   // ── LLM defaults ──
 

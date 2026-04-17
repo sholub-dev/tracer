@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { tool } from "ai";
-import type { ChatToolMemoryContext, ChatToolWriter, ProviderToolKit } from "@oko/shared";
+import type { ChatToolMemoryContext, ChatToolWriter, ProviderToolKit } from "@tracer-sh/shared";
 import {
   runSubAgent,
   subAgentModelOutput,

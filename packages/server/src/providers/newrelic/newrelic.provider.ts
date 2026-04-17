@@ -2,13 +2,13 @@ import type {
   ChatMode,
   ChatToolWriter,
   ChatToolMemoryContext,
-  OkoError,
-  OkoLogEntry,
-  OkoTransaction,
+  TracerError,
+  TracerLogEntry,
+  TracerTransaction,
   PingResult,
   ProviderToolKit,
   TimeRange,
-} from "@oko/shared";
+} from "@tracer-sh/shared";
 import type { NewRelicProviderConfig, NrqlResult } from "./types.js";
 import { BaseProvider } from "../base.provider.js";
 import { NerdGraphClient } from "./nerdgraph.client.js";
@@ -65,7 +65,7 @@ export class NewRelicProvider extends BaseProvider {
     this.connected = false;
   }
 
-  async getErrors(timeRange: TimeRange): Promise<OkoError[]> {
+  async getErrors(timeRange: TimeRange): Promise<TracerError[]> {
     const nrql = errorQuery(timeRange.since, timeRange.until);
     const response = await this.client.query(nrql);
     const results = response.data?.actor.account.nrql.results ?? [];
@@ -86,7 +86,7 @@ export class NewRelicProvider extends BaseProvider {
     });
   }
 
-  async getTransactions(timeRange: TimeRange): Promise<OkoTransaction[]> {
+  async getTransactions(timeRange: TimeRange): Promise<TracerTransaction[]> {
     const nrql = transactionQuery(timeRange.since, timeRange.until);
     const response = await this.client.query(nrql);
     const results = response.data?.actor.account.nrql.results ?? [];
@@ -100,7 +100,7 @@ export class NewRelicProvider extends BaseProvider {
     }));
   }
 
-  async getLogs(timeRange: TimeRange, filter?: string): Promise<OkoLogEntry[]> {
+  async getLogs(timeRange: TimeRange, filter?: string): Promise<TracerLogEntry[]> {
     const nrql = logQuery(timeRange.since, filter, timeRange.until);
     const response = await this.client.query(nrql);
     const results = response.data?.actor.account.nrql.results ?? [];

@@ -1,6 +1,6 @@
 import { generateText } from "ai";
 import { eq } from "drizzle-orm";
-import { unixNow } from "@oko/shared";
+import { unixNow } from "@tracer-sh/shared";
 import { chatSessions } from "../../db/schema.js";
 import { resolveUtilityModel } from "../../llm/resolve.js";
 import { extractUsage, recordAgentRun } from "../../llm/usage.js";

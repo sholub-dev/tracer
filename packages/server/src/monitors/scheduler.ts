@@ -1,5 +1,5 @@
 import { eq, and, isNull } from "drizzle-orm";
-import { substituteTimeRange, unixNow } from "@oko/shared";
+import { substituteTimeRange, unixNow } from "@tracer-sh/shared";
 import type { Db } from "../db/client.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 import { monitors, monitorAlerts } from "../db/schema.js";

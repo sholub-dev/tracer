@@ -1,6 +1,6 @@
 import type { Db } from "../db/client.js";
 import type { ProviderRegistry } from "../providers/registry.js";
-import type { ChatToolWriter as StreamWriter, AfterCompleteParams, ChatMode } from "@oko/shared";
+import type { ChatToolWriter as StreamWriter, AfterCompleteParams, ChatMode } from "@tracer-sh/shared";
 import { toolMemories } from "../db/schema.js";
 
 export interface BaseToolSetup {

@@ -5,7 +5,7 @@
 import { z } from "zod";
 import { tool } from "ai";
 import type { NewRelicProvider } from "./newrelic.provider.js";
-import { formatTimestamps, type AfterCompleteParams, type ChatToolMemoryContext, type ChatToolWriter } from "@oko/shared";
+import { formatTimestamps, type AfterCompleteParams, type ChatToolMemoryContext, type ChatToolWriter } from "@tracer-sh/shared";
 import {
   runSubAgent,
   injectMemories,

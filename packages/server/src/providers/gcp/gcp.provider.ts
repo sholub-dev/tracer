@@ -4,7 +4,7 @@ import type {
   ChatToolMemoryContext,
   ProviderToolKit,
   PingResult,
-} from "@oko/shared";
+} from "@tracer-sh/shared";
 import { McpProvider } from "../../mcp/mcp-provider.js";
 import type { McpServerDefinition } from "../../mcp/definitions.js";
 import { createGcpTools, createGcpDirectTools, GCP_DIRECT_MODE_MAX_STEPS } from "./tools.js";

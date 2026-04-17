@@ -1,7 +1,7 @@
 import type { Db } from "../db/client.js";
 import type { ProviderRegistry } from "../providers/registry.js";
-import type { ChatToolWriter as StreamWriter, ChatMode } from "@oko/shared";
-import { DEFAULT_CHAT_MODE } from "@oko/shared";
+import type { ChatToolWriter as StreamWriter, ChatMode } from "@tracer-sh/shared";
+import { DEFAULT_CHAT_MODE } from "@tracer-sh/shared";
 import { readAppSetting } from "../db/config-reader.js";
 import { collectBaseTools, type BaseToolSetup } from "./shared-tool-setup.js";
 

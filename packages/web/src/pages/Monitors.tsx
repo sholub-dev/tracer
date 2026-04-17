@@ -9,7 +9,7 @@ import { TimeRangePicker } from "../components/ui/TimeRangePicker";
 import { Badge } from "../components/ui/Badge";
 import { ToggleSwitch } from "../components/ui/ToggleSwitch";
 import { DEFAULT_SINCE, DEFAULT_UNTIL } from "../lib/nrql-utils";
-import { substituteTimeRange } from "@oko/shared";
+import { substituteTimeRange } from "@tracer-sh/shared";
 import { MONITOR_PRESETS, timeseriesClause, parseThreshold, formatTime, resolveQueryDisplay, statusVariant } from "../lib/monitor-utils";
 
 export function Monitors() {

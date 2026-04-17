@@ -1,7 +1,7 @@
 import React, { useRef, useCallback, useState } from "react";
 import { Streamdown } from "streamdown";
 import { domToPng } from "modern-screenshot";
-import { CLIENT_TOOL_NAMES } from "@oko/shared";
+import { CLIENT_TOOL_NAMES } from "@tracer-sh/shared";
 import { ToolPartRenderer } from "./ToolPartRenderer";
 import type { ProgressStore } from "../../lib/progress-store";
 import { theme } from "../../lib/theme";

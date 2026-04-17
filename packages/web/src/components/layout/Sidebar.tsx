@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { FEATURES, SESSION_KIND } from "@oko/shared";
+import { FEATURES, SESSION_KIND } from "@tracer-sh/shared";
 import { usePolling } from "../../lib/hooks";
 import { theme } from "../../lib/theme";
 import { trpc } from "../../lib/trpc";
@@ -161,7 +161,7 @@ export function Sidebar({
       <div className="p-6">
         <h1 className={`text-2xl font-bold ${theme.sidebarLogo} flex items-center gap-2`}>
           <img src="/logo.svg" alt="" className="w-6 h-6" />
-          OKO
+          Tracer
         </h1>
         <p className={`text-xs mt-1 ${theme.sidebarSubtitle}`}>
           Observability Platform

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { eq, desc } from "drizzle-orm";
-import { dashboardSessionId, unixNow } from "@oko/shared";
+import { dashboardSessionId, unixNow } from "@tracer-sh/shared";
 import { publicProcedure, router } from "../trpc.js";
 import { dashboards, chatSessions } from "../../db/schema.js";
 

@@ -3,8 +3,8 @@ import { tool } from "ai";
 import { eq, desc } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import type { ProviderRegistry } from "../providers/registry.js";
-import { unixNow } from "@oko/shared";
-import type { ChatToolWriter as StreamWriter } from "@oko/shared";
+import { unixNow } from "@tracer-sh/shared";
+import type { ChatToolWriter as StreamWriter } from "@tracer-sh/shared";
 import { monitors } from "../db/schema.js";
 import { collectBaseTools } from "./shared-tool-setup.js";
 import { validateCondition } from "../monitors/condition.js";
@@ -204,7 +204,7 @@ export function collectMonitorTools(
 
   const monitorContext = getMonitorContext(db);
 
-  const basePrompt = `You are a monitor builder assistant for the OKO platform. You help users create, update, and delete monitors that periodically check observability data and alert when conditions are met.
+  const basePrompt = `You are a monitor builder assistant for the Tracer platform. You help users create, update, and delete monitors that periodically check observability data and alert when conditions are met.
 
 When a user asks to create a monitor, use the create_monitor tool. When they ask to modify one, use update_monitor. When they ask to remove one, use delete_monitor. Use toggle_monitor to enable/disable.
 

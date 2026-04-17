@@ -1,5 +1,5 @@
 import type { LanguageModelUsage } from "ai";
-import type { TokenUsage } from "@oko/shared";
+import type { TokenUsage } from "@tracer-sh/shared";
 import type { Db } from "../db/client.js";
 import { agentRuns } from "../db/schema.js";
 

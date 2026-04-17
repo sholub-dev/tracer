@@ -1,11 +1,11 @@
 import type {
   IProvider,
-  OkoError,
-  OkoLogEntry,
-  OkoTransaction,
+  TracerError,
+  TracerLogEntry,
+  TracerTransaction,
   PingResult,
   TimeRange,
-} from "@oko/shared";
+} from "@tracer-sh/shared";
 
 export abstract class BaseProvider implements IProvider {
   abstract readonly name: string;
@@ -18,8 +18,8 @@ export abstract class BaseProvider implements IProvider {
   abstract testConnection(): Promise<boolean>;
   abstract ping(): Promise<PingResult>;
   abstract dispose(): Promise<void>;
-  abstract getErrors(timeRange: TimeRange): Promise<OkoError[]>;
-  abstract getTransactions(timeRange: TimeRange): Promise<OkoTransaction[]>;
-  abstract getLogs(timeRange: TimeRange, filter?: string): Promise<OkoLogEntry[]>;
+  abstract getErrors(timeRange: TimeRange): Promise<TracerError[]>;
+  abstract getTransactions(timeRange: TimeRange): Promise<TracerTransaction[]>;
+  abstract getLogs(timeRange: TimeRange, filter?: string): Promise<TracerLogEntry[]>;
   abstract executeRawQuery(query: string): Promise<unknown>;
 }

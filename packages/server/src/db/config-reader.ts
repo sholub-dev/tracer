@@ -1,5 +1,5 @@
 import { eq, inArray } from "drizzle-orm";
-import { unixNow } from "@oko/shared";
+import { unixNow } from "@tracer-sh/shared";
 import type { Db } from "./client.js";
 import { providerConfigs, appSettings } from "./schema.js";
 

@@ -22,7 +22,7 @@ interface SearchableSelectProps {
 }
 
 export function useStarred(storageKey: string | undefined): [Set<string>, (value: string) => void] {
-  const key = storageKey ? `oko:starred:${storageKey}` : null;
+  const key = storageKey ? `tracer:starred:${storageKey}` : null;
   const [starred, setStarred] = useState<Set<string>>(() => {
     if (!key) return new Set();
     try {

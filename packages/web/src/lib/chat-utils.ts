@@ -1,5 +1,5 @@
 import type { ProgressStore } from "./progress-store";
-import type { ProgressPart } from "@oko/shared";
+import type { ProgressPart } from "@tracer-sh/shared";
 
 /**
  * Shared onData handler for progress store updates.

@@ -1,4 +1,4 @@
-import { substituteTimeRange } from "@oko/shared";
+import { substituteTimeRange } from "@tracer-sh/shared";
 import type { Threshold } from "../components/charts/ChartView";
 import { WEB_CONFIG } from "./config";
 

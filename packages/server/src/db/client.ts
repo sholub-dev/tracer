@@ -5,11 +5,11 @@ import Database, { type Database as DatabaseType } from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "./schema.js";
 
-export const OKO_HOME = process.env.OKO_HOME || join(homedir(), ".oko");
-const dataDir = join(OKO_HOME, "data");
+export const TRACER_HOME = process.env.TRACER_HOME || join(homedir(), ".tracer");
+const dataDir = join(TRACER_HOME, "data");
 mkdirSync(dataDir, { recursive: true });
 
-export const sqlite: DatabaseType = new Database(join(dataDir, "oko.db"));
+export const sqlite: DatabaseType = new Database(join(dataDir, "tracer.db"));
 sqlite.pragma("journal_mode = WAL");
 sqlite.pragma("foreign_keys = ON");
 

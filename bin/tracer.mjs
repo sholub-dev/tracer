@@ -12,7 +12,7 @@ const RESTART_EXIT_CODE = 75;
 
 const banner = `
   ╔═══════════════════════════════════╗
-  ║         OKO Debug Platform        ║
+  ║       Tracer Debug Platform       ║
   ╚═══════════════════════════════════╝
 `;
 

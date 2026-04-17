@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { eq } from "drizzle-orm";
-import { DEFAULT_CHAT_MODE } from "@oko/shared";
+import { DEFAULT_CHAT_MODE } from "@tracer-sh/shared";
 import { publicProcedure, router } from "../trpc.js";
 import { providerConfigs, appSettings } from "../../db/schema.js";
 import { readProviderConfig, readAppSetting, readAppSettings, writeAppSetting } from "../../db/config-reader.js";

@@ -39,7 +39,7 @@ importers:
       '@hono/trpc-server':
         specifier: ^0.4.2
         version: 0.4.2(@trpc/server@11.10.0(typescript@5.9.3))(hono@4.11.9)
-      '@oko/shared':
+      '@tracer-sh/shared':
         specifier: workspace:*
         version: link:../shared
       '@trpc/server':
@@ -89,12 +89,12 @@ importers:
       '@ai-sdk/react':
         specifier: ^3.0.88
         version: 3.0.88(react@19.2.4)(zod@4.3.6)
-      '@oko/shared':
-        specifier: workspace:*
-        version: link:../shared
       '@tanstack/react-query':
         specifier: ^5.90.21
         version: 5.90.21(react@19.2.4)
+      '@tracer-sh/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@trpc/client':
         specifier: ^11.10.0
         version: 11.10.0(@trpc/server@11.10.0(typescript@5.9.3))(typescript@5.9.3)
@@ -129,12 +129,12 @@ importers:
         specifier: ^2.2.6
         version: 2.2.6
     devDependencies:
-      '@oko/server':
-        specifier: workspace:*
-        version: link:../server
       '@tailwindcss/vite':
         specifier: ^4.1.18
         version: 4.1.18(vite@7.3.1(@types/node@25.2.1)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0))
+      '@tracer-sh/server':
+        specifier: workspace:*
+        version: link:../server
       '@types/react':
         specifier: ^19.2.14
         version: 19.2.14

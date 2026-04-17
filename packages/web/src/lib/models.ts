@@ -1,4 +1,4 @@
-import type { KnownModelId } from "@oko/shared";
+import type { KnownModelId } from "@tracer-sh/shared";
 
 interface ModelInfo {
   provider: string;

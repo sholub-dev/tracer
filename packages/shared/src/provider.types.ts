@@ -5,7 +5,7 @@ export interface TimeRange {
 }
 
 /** Normalized error from any provider */
-export interface OkoError {
+export interface TracerError {
   id: string;
   appName: string;
   errorClass: string;
@@ -18,7 +18,7 @@ export interface OkoError {
 }
 
 /** Normalized transaction from any provider */
-export interface OkoTransaction {
+export interface TracerTransaction {
   name: string;
   avgDuration: number;
   throughput: number;
@@ -27,7 +27,7 @@ export interface OkoTransaction {
 }
 
 /** Normalized log entry from any provider */
-export interface OkoLogEntry {
+export interface TracerLogEntry {
   timestamp: string;
   level: string;
   message: string;
@@ -105,9 +105,9 @@ export interface IProvider {
   ping(): Promise<PingResult>;
   dispose(): Promise<void>;
 
-  getErrors(timeRange: TimeRange): Promise<OkoError[]>;
-  getTransactions(timeRange: TimeRange): Promise<OkoTransaction[]>;
-  getLogs(timeRange: TimeRange, filter?: string): Promise<OkoLogEntry[]>;
+  getErrors(timeRange: TimeRange): Promise<TracerError[]>;
+  getTransactions(timeRange: TimeRange): Promise<TracerTransaction[]>;
+  getLogs(timeRange: TimeRange, filter?: string): Promise<TracerLogEntry[]>;
   executeRawQuery(query: string): Promise<unknown>;
 
   /** Return chat tools and prompt fragments for this provider */

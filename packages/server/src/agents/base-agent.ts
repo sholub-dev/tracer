@@ -1,12 +1,12 @@
 import { streamText, smoothStream, convertToModelMessages, stepCountIs, createUIMessageStream, type UIMessage, type ToolSet } from "ai";
 import { eq, sql } from "drizzle-orm";
-import { DEFAULT_SESSION_TITLE, unixNow, type AfterCompleteParams } from "@oko/shared";
+import { DEFAULT_SESSION_TITLE, unixNow, type AfterCompleteParams } from "@tracer-sh/shared";
 import { chatSessions } from "../db/schema.js";
 import { resolveModel, type ProviderOptions, type ResolvedModel } from "../llm/resolve.js";
 import { extractUsage, recordAgentRun } from "../llm/usage.js";
 import { StreamBroadcaster } from "../lib/stream-broadcaster.js";
 import type { Context } from "../trpc/context.js";
-import type { ChatToolWriter as StreamWriter } from "@oko/shared";
+import type { ChatToolWriter as StreamWriter } from "@tracer-sh/shared";
 import { getCurrentDateBlock } from "../lib/current-context.js";
 
 /**
@@ -110,7 +110,7 @@ async function processLLMStream(
   if (collected.systemPrompt) {
     systemPrompt = collected.systemPrompt;
   } else {
-    const basePrompt = `You are a helpful debugging assistant for the OKO platform.
+    const basePrompt = `You are Tracer — an AI debugging assistant for engineers investigating incidents across their observability stack. Be direct, follow evidence, and surface uncertainty rather than guessing. Skip preamble and caveats; get to the answer.
 
 If a tool call fails, retry with a corrected approach. If you fail the same tool call twice, DO NOT retry again — stop and explain the issue to the user. Ask clarifying questions if needed. Never silently give up.
 

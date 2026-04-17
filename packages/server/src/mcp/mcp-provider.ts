@@ -4,15 +4,15 @@ import { dirname, resolve } from "node:path";
 import { createMCPClient } from "@ai-sdk/mcp";
 import { Experimental_StdioMCPTransport } from "@ai-sdk/mcp/mcp-stdio";
 import type {
-  OkoError,
-  OkoLogEntry,
-  OkoTransaction,
+  TracerError,
+  TracerLogEntry,
+  TracerTransaction,
   PingResult,
   TimeRange,
   ChatToolWriter,
   ChatToolMemoryContext,
   ProviderToolKit,
-} from "@oko/shared";
+} from "@tracer-sh/shared";
 import { BaseProvider } from "../providers/base.provider.js";
 import type { McpServerDefinition, McpServerEntry } from "./definitions.js";
 import { createMcpChatTools } from "./mcp-tools.js";
@@ -150,13 +150,13 @@ export class McpProvider extends BaseProvider {
   }
 
   // Structured data methods — MCP-backed providers expose data through tool calls, not these typed APIs.
-  async getErrors(_timeRange: TimeRange): Promise<OkoError[]> {
+  async getErrors(_timeRange: TimeRange): Promise<TracerError[]> {
     return [];
   }
-  async getTransactions(_timeRange: TimeRange): Promise<OkoTransaction[]> {
+  async getTransactions(_timeRange: TimeRange): Promise<TracerTransaction[]> {
     return [];
   }
-  async getLogs(_timeRange: TimeRange, _filter?: string): Promise<OkoLogEntry[]> {
+  async getLogs(_timeRange: TimeRange, _filter?: string): Promise<TracerLogEntry[]> {
     return [];
   }
   async executeRawQuery(_query: string): Promise<unknown> {

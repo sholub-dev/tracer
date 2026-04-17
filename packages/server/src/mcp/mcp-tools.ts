@@ -155,7 +155,7 @@ export function wrapMcpTools(
 /**
  * Creates orchestrator-facing chat tools for an MCP-backed provider.
  *
- * Produces a single tool named after the provider type (e.g. "newrelic")
+ * Produces a single tool named after the provider type (e.g. "gcp")
  * that spawns a sub-agent with access to all discovered MCP tools.
  */
 export function createMcpChatTools(

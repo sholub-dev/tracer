@@ -5,7 +5,7 @@
 
 /** A single MCP server that can be launched via npx. */
 export interface McpServerEntry {
-  /** npm package to run via npx, e.g. "@newrelic/mcp-server-newrelic" */
+  /** npm package to run via npx, e.g. "@google-cloud/observability-mcp" */
   package: string;
   /** Extra CLI args after the package name */
   args?: string[];
@@ -27,24 +27,6 @@ export interface McpServerDefinition {
 
 /** Registry of known MCP server definitions, keyed by provider type. */
 export const mcpDefinitions = new Map<string, McpServerDefinition>([
-  [
-    "newrelic",
-    {
-      label: "New Relic MCP",
-      systemPromptHint:
-        "You are a New Relic observability expert. Use the available MCP tools to query New Relic data — errors, transactions, logs, NRQL queries, entity lookups, and more. Focus on concrete findings with specific values (counts, timestamps, service names, error messages).",
-      servers: [
-        {
-          package: "@newrelic/mcp-server-newrelic",
-          envMapping: {
-            apiKey: "NEW_RELIC_API_KEY",
-            accountId: "NEW_RELIC_ACCOUNT_ID",
-            region: "NEW_RELIC_REGION",
-          },
-        },
-      ],
-    },
-  ],
   [
     "gcp",
     {

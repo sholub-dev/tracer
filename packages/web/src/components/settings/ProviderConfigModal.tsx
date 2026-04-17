@@ -22,12 +22,6 @@ interface ProviderConfigModalProps {
   onSave: () => void;
   onClose: () => void;
   onRemove: () => void;
-  /** Available modes for this provider (e.g. ["api", "mcp"]). */
-  modes?: Array<"api" | "mcp">;
-  /** Currently selected mode. */
-  selectedMode?: "api" | "mcp";
-  /** Called when the user switches mode. */
-  onModeChange?: (mode: "api" | "mcp") => void;
 }
 
 /** Returns true if the value is still the server-masked placeholder (not user-entered). */
@@ -48,12 +42,7 @@ export function ProviderConfigModal({
   onSave,
   onClose,
   onRemove,
-  modes,
-  selectedMode,
-  onModeChange,
 }: ProviderConfigModalProps) {
-  const showModeToggle = modes && modes.length > 1;
-
   const hasUnchangedPasswords = configFields.some(
     (f) =>
       f.required !== false &&
@@ -68,24 +57,6 @@ export function ProviderConfigModal({
   return (
     <Modal open={open} onClose={onClose}>
       <div className={theme.dialogTitle + " text-base mb-4"}>Configure {label}</div>
-
-      {showModeToggle && (
-        <div className="flex gap-1 mb-4 p-0.5 bg-[#e8e6e1] rounded">
-          {modes.map((mode) => (
-            <button
-              key={mode}
-              onClick={() => onModeChange?.(mode)}
-              className={`flex-1 px-3 py-1.5 text-sm rounded transition-colors ${
-                selectedMode === mode
-                  ? "bg-white text-[#1a1a1a] shadow-sm font-medium"
-                  : "text-[#666666] hover:text-[#1a1a1a]"
-              }`}
-            >
-              {mode === "api" ? "API" : "MCP"}
-            </button>
-          ))}
-        </div>
-      )}
 
       <div className="space-y-3">
         {configFields.map((field) => {

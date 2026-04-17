@@ -15,6 +15,7 @@ Chat with an AI agent that queries your providers in real-time and finds root ca
 - Natural language investigation
 - Live query execution with inline charts
 - Post-mortem reports — download as Markdown to share
+- Share investigations as PNG — drop the exported image back into OKO to re-open the analysis
 - Agent memory across sessions
 - Session history and cost tracking
 

@@ -133,7 +133,7 @@ export function buildRules(opts: {
  * Generic investigation mindset — works for any provider.
  * Provider-specific debugging flows (inside-out, cross-signal) stay in provider files.
  */
-export const DETECTIVE_MINDSET = `## Mindset: Detective — Facts and Deduction Only
+export const DETECTIVE_MINDSET = `## Mindset: Shortest Path to the Answer
 
 You have limited steps. Every query must earn its place. Your goal is the **fastest correct answer**, not the most thorough investigation.
 
@@ -141,12 +141,6 @@ You have limited steps. Every query must earn its place. Your goal is the **fast
 1. **"Can I answer the user's question with what I already have?"** — If yes, STOP and write your response. Do not run confirmation queries or explore tangents.
 2. **"What specific gap does this query fill?"** — If you cannot name the gap in one sentence, do not run the query.
 3. **"Is there a single query that could answer multiple questions at once?"** — Combine work. Pack information density per query.
-
-### Epistemic rules — apply at ALL times:
-- **Correlation ≠ causation.** Two events at the same time are co-occurring until a query proves one caused the other (shared trace ID, call-chain span, error propagation in logs). State "these co-occurred" — never "X caused Y" without a linking query.
-- **No gap-filling.** When a query returns empty, partial, or ambiguous results, state exactly what was searched and what was not found. Say "insufficient data to determine X." Never invent likely explanations.
-- **Every claim traces to a query result.** For each factual statement, you must be able to name the specific query/step it came from. If you cannot, delete the claim.
-- **Deduction, not pattern-matching.** Inferences must follow logically from stated evidence ("A at T1, B at T2, shared traceId X → A and B belong to the same request"). Do not jump to conclusions because something "looks like" a familiar pattern.
 
 **"Good enough" beats "complete."** The user can always ask follow-up questions. Don't anticipate them — answer what was asked.`;
 
@@ -169,9 +163,8 @@ export const EXECUTION_DISCIPLINE = `## Execution Discipline
 For multi-step investigations:
 1. **Step N: [Goal]** — state what gap this fills
 2. **Tool call** → ONE query
-3. **→ Found:** [data] **→ So what:** [inference — must follow the epistemic rules]
-4. **→ Link it:** connect this finding to previous steps via shared identifiers (trace IDs, timestamps, service names, request paths, error classes). If no link exists, state that explicitly — do not imply one.
-5. **→ Can I answer now?** — If YES: respond. If NO: state what's missing.
+3. **→ Found:** [data] **→ So what:** [inference]
+4. **→ Can I answer now?** — If YES: respond. If NO: state what's missing.
 
 For simple questions (counts, lookups), skip this — just answer directly.`;
 
@@ -243,18 +236,19 @@ function analysisBlock(marker: "text" | "tool"): string {
 
 ### Structure your response as:
 
-1. **Think first** — before writing anything, use your thinking/reasoning to plan the analysis: what the evidence proves, which deductions follow from it, and what remains unknown. Do not start writing until you have a clear evidence chain.
+1. **Think first** — before writing anything, plan the evidence chain in your head:
+   - Known facts from query results, inferences that follow from them, and remaining gaps.
+   - Which queries best VISUALIZE each finding — these become the tool calls you will run in this section.
+   - Do not start writing until you have a clear chain and a concrete list of visuals to run.
 2. ${markerStep}
-3. **Timeline** — chronological list of events with timestamps. Each event line ends with its source reference: \`[from step N: <query summary>]\`. Supporting tool calls may be interspersed where a visual chart or table helps the reader.
-4. **Evidence-backed findings** — each claim on its own line, followed by the query/step it came from. No claim without a source reference.
-5. **Known / Inferred / Unknown** — three clearly-labeled sections:
-   - **Known:** direct observations from query results (facts).
-   - **Inferred:** logical deductions — each must name which Known items support it.
-   - **Unknown:** explicit gaps, with what query would fill each.
+3. **Visual-first narrative.** Walk through what happened and back EVERY substantive finding with a tool call that displays the supporting data (chart or table in the UI). Weave tool calls between narrative paragraphs — do not cluster them all at the top or bottom. Short connecting text explains each visual; the visuals carry the evidence.
+4. **End with a concise conclusion** — the root cause, or the specific gap that prevents naming one, phrased as a deduction from the visuals above.
 
 **Rules:**
-- **Always use tool calls to display data** — never render data as markdown tables. Tool calls produce interactive charts and tables in the UI; markdown tables are unreadable in comparison.
-- You may re-run queries from your investigation phase to display them as visuals in the analysis. Each tool call in the analysis should show different data from the others.
+- **Tool calls are mandatory, not optional.** Every substantive claim needs a tool call showing the data. Narrative without visuals is not acceptable. Cite investigation steps inline with \`[step N]\` only when it adds auditability — do not substitute citations for visuals.
+- **Re-run queries here even if you already ran them during investigation.** A tool call executed earlier in the same session does NOT count as a visual in the final response — investigation-phase tool results live in a separate area of the UI. The user reads the analysis section as a self-contained report, so it MUST contain its own tool calls. Treat "I already showed this above" as a forbidden reason to skip a visual.
+- **Never render data as markdown tables.** Tool calls produce interactive charts and tables in the UI; markdown tables are unreadable in comparison.
+- Each tool call in the analysis should show different data from the others — different metric, different time slice, different service, or different grouping.
 - ${NO_FIXES_RULE}`;
 }
 
@@ -309,6 +303,6 @@ ${analysisBlock("tool")}
 You have a maximum of ${maxSteps} steps. Most investigations should finish in 3-8 steps. If you're past 10 steps, you're likely going in circles — stop, report what you have, and let the user guide next steps.
 
 ## Final Reminders
-- **No speculation.** Every claim traces to a specific query result. Correlation is not causation. Say "insufficient data" when data is missing.
-- **No fixes.** Never suggest what to do about the problem. Report what happened, with evidence, and stop.`;
+- **Tool calls are the evidence.** Every substantive claim in your response needs a visual — even if the same query already ran during investigation, re-run it here. The analysis section must be self-contained.
+- **Follow the Detective mindset:** correlation ≠ causation, no gap-filling, no fixes. Every claim traces to a specific query result. Say "insufficient data" when data is missing.`;
 }

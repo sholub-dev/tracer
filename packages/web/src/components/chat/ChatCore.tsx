@@ -87,6 +87,7 @@ export interface ChatCoreRef {
   sendMessage: (msg: { text: string }) => void;
   stop: () => void;
   scrollToBottom: (opts?: { animation?: "instant" | "smooth" }) => void;
+  scrollToTop: (opts?: { animation?: "instant" | "smooth" }) => void;
   progressStore: ProgressStore;
   status: string;
   isLoading: boolean;
@@ -121,7 +122,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
     const pad = variant === "panel" ? "px-4" : "px-10";
     const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-    const { scrollRef, contentRef, isAtBottom, handleWheel, scrollToBottom } = useChatScroll();
+    const { scrollRef, contentRef, isAtBottom, handleWheel, scrollToBottom, scrollToTop } = useChatScroll();
 
     // Stable refs for callbacks used inside Chat constructor
     const onDataRef = useRef(onData);
@@ -196,6 +197,14 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
       lastMessage?.role === "assistant" &&
       lastPart?.type.startsWith("tool-");
 
+    const lastPartState = (lastPart as { state?: string } | undefined)?.state;
+    const isSubAgentRunning =
+      lastPart?.type.startsWith("tool-") && lastPartState !== "output-available";
+    const isContentStreaming = lastPart?.type === "text" || lastPart?.type === "reasoning";
+    const showThinkingDots =
+      status === "submitted" ||
+      (status === "streaming" && !isContentStreaming && !isSubAgentRunning);
+
     const lastId = status === "streaming" ? messages[messages.length - 1]?.id : null;
 
     const handleStop = () => {
@@ -261,12 +270,13 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
         sendMessage,
         stop,
         scrollToBottom,
+        scrollToTop,
         progressStore,
         status,
         isLoading,
         error,
       }),
-      [messages, setMessages, sendMessage, stop, scrollToBottom, progressStore, status, isLoading, error],
+      [messages, setMessages, sendMessage, stop, scrollToBottom, scrollToTop, progressStore, status, isLoading, error],
     );
 
     return (
@@ -329,7 +339,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
                 );
               })}
 
-              {status === "submitted" && (
+              {showThinkingDots && (
                 <div className={pad}>
                   {messages.length > 0 && <div className={v.separator} />}
                   <ThinkingDots className={v.thinking} />

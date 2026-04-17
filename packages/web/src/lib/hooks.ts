@@ -20,6 +20,13 @@ export function useChatScroll() {
     el.scrollTo({ top: el.scrollHeight, behavior: opts?.animation === "smooth" ? "smooth" : "instant" });
   }, []);
 
+  const scrollToTop = useCallback((opts?: { animation?: "instant" | "smooth" }) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    shouldAutoScroll.current = false;
+    el.scrollTo({ top: 0, behavior: opts?.animation === "smooth" ? "smooth" : "instant" });
+  }, []);
+
   const handleWheel = useCallback((e: { deltaY: number }) => {
     if (e.deltaY < 0) shouldAutoScroll.current = false;
   }, []);
@@ -48,7 +55,7 @@ export function useChatScroll() {
     return () => ro.disconnect();
   }, [scrollToBottom]);
 
-  return { scrollRef, contentRef, isAtBottom, handleWheel, scrollToBottom };
+  return { scrollRef, contentRef, isAtBottom, handleWheel, scrollToBottom, scrollToTop };
 }
 
 /** Measure container size via ResizeObserver */

@@ -77,7 +77,7 @@ export function createGcpTools(
 
         return runSubAgent({
           providerType: "gcp",
-          db: db!,
+          db: db as Db,
           systemPrompt,
           task,
           toolCallId,

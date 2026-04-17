@@ -109,13 +109,14 @@ function MemoryBadge({ sessionId, streaming, onCostDataReady }: { sessionId: str
 
 /** Isolated title component — owns the sessions.list subscription so title polls
  *  don't cascade re-renders to the entire message list. */
-export function SessionTitle({ chatId, hasMessages, isLoading, onPostMortem, streaming, onCostDataReady }: {
+export function SessionTitle({ chatId, hasMessages, isLoading, onPostMortem, streaming, onCostDataReady, onTitleClick }: {
   chatId: string;
   hasMessages: boolean;
   isLoading: boolean;
   onPostMortem: () => void;
   streaming?: boolean;
   onCostDataReady?: () => void;
+  onTitleClick?: () => void;
 }) {
   const titleQuery = trpc.sessions.getTitle.useQuery({ id: chatId });
   const sessionTitle = titleQuery.data?.title;
@@ -146,11 +147,23 @@ export function SessionTitle({ chatId, hasMessages, isLoading, onPostMortem, str
   return (
     <div className={theme.titleBar}>
       <div className="flex items-center justify-between">
-        <h2 className={`${theme.titleText} transition-opacity duration-500 ${
-          !titlePending && sessionTitle ? "opacity-100" : "opacity-0"
-        }`}>
-          {!titlePending && sessionTitle ? sessionTitle : "\u00A0"}
-        </h2>
+        {(() => {
+          const resolved = !titlePending && sessionTitle;
+          const baseClass = `${theme.titleText} transition-opacity duration-500 ${resolved ? "opacity-100" : "opacity-0"}`;
+          const content = resolved ? sessionTitle : "\u00A0";
+          return onTitleClick ? (
+            <button
+              type="button"
+              onClick={onTitleClick}
+              title="Scroll to top"
+              className={`${baseClass} text-left hover:opacity-80 cursor-pointer`}
+            >
+              {content}
+            </button>
+          ) : (
+            <h2 className={baseClass}>{content}</h2>
+          );
+        })()}
         <div className="flex items-center gap-3">
           {hasMessages && <MemoryBadge sessionId={chatId} streaming={streaming ?? false} onCostDataReady={onCostDataReady} />}
           {streaming ? (

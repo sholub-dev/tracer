@@ -296,6 +296,7 @@ Base the report entirely on the investigation data and findings from this conver
       onPostMortem={handlePostMortem}
       streaming={isStreaming}
       onCostDataReady={refreshCostData}
+      onTitleClick={() => coreRef.current?.scrollToTop({ animation: "smooth" })}
     />
   );
 

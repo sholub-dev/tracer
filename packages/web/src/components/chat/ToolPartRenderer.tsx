@@ -1,4 +1,4 @@
-import React, { memo } from "react";
+import React, { memo, useEffect, useRef } from "react";
 import { Streamdown } from "streamdown";
 import { CLIENT_TOOL_NAMES } from "@oko/shared";
 import { JsonTree } from "../ui/JsonTree";
@@ -6,6 +6,7 @@ import type { ProgressPart } from "@oko/shared";
 import { theme } from "../../lib/theme";
 import ResultView from "../charts/ResultView";
 import { useProgress, type ProgressStore } from "../../lib/progress-store";
+import { ThinkingDots } from "./MessageParts";
 
 interface ToolPart {
   type: string;
@@ -86,8 +87,12 @@ const ToolCallItem = memo(function ToolCallItem({ toolName }: { toolName: string
 });
 
 const ReasoningItem = memo(function ReasoningItem({ content, isAnimating }: { content: string; isAnimating: boolean }) {
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    if (isAnimating && detailsRef.current) detailsRef.current.open = true;
+  }, [isAnimating]);
   return (
-    <details className="mb-2 border border-[#e8e3da]/30 rounded-md">
+    <details ref={detailsRef} className="mb-2 border border-[#e8e3da]/30 rounded-md">
       <summary className="cursor-pointer select-none px-3 py-1.5 text-xs text-[#9c9890] italic hover:text-[#6b6560] transition-colors">
         Thinking
       </summary>
@@ -153,6 +158,7 @@ const ProgressPartsList = memo(function ProgressPartsList({ parts, isAnimating }
         const idx = qIdx++;
         return <QueryItem key={i} query={p.query} results={p.results} index={idx} total={qTotal} />;
       })}
+      {isAnimating && <ThinkingDots className={theme.investigationThinking} />}
     </>
   );
 });
@@ -196,19 +202,22 @@ export const ToolPartRenderer = memo(function ToolPartRenderer({ part, progressS
         : (output.parts?.length ? output.parts : legacyToParts(output));
     } else if (progress?.parts?.length) {
       parts = progress.parts;
+    } else if (!isComplete) {
+      parts = [];
     }
 
-    if (parts?.length) {
+    if (parts) {
       const qCount = queryCount(parts);
+      const headerLabel = isComplete
+        ? `${label} Sub-Agent (${qCount} ${qCount === 1 ? "query" : "queries"})`
+        : qCount > 0
+          ? `Investigating... (${qCount} ${qCount === 1 ? "query" : "queries"})`
+          : `Investigating via ${label}...`;
       return (
         <div className={theme.investigationContainer}>
-          <div className={theme.investigationLabel}>
-            {isComplete
-              ? `${label} Sub-Agent (${qCount} ${qCount === 1 ? "query" : "queries"})`
-              : `Investigating... (${qCount} ${qCount === 1 ? "query" : "queries"})`}
-          </div>
+          <div className={theme.investigationLabel}>{headerLabel}</div>
           {part.input?.task && (
-            <div className="text-xs text-[#888] font-sans mb-2 italic">
+            <div className={theme.investigationTask}>
               Task: {part.input.task}
             </div>
           )}
@@ -244,9 +253,7 @@ export const ToolPartRenderer = memo(function ToolPartRenderer({ part, progressS
       );
     }
 
-    return (
-      <div className={theme.toolLoading}>Investigating via {label}...</div>
-    );
+    return null;
   }
 
   // ── Widget & Monitor CRUD tools ──

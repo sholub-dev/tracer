@@ -164,6 +164,8 @@ export const theme = {
     "border-l-2 border-[#2a7a4a] pl-4 my-3",
   investigationLabel:
     "text-[9px] uppercase tracking-[0.15em] text-[#2a7a4a] font-sans font-semibold mb-2",
+  investigationTask: "text-xs text-[#9c9890] font-sans mb-2 italic",
+  investigationThinking: "text-[#9c9890] py-2",
   analysisBlock:
     "text-sm text-[#444444] bg-[#f2f8f5] border border-[#c8e0d2] rounded px-4 py-3 my-2 leading-relaxed font-sans",
   summaryBlock:

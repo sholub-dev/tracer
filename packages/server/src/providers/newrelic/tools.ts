@@ -104,7 +104,7 @@ export function createNewRelicTools(provider: NewRelicProvider, memoryContext?: 
 
         return runSubAgent({
           providerType: "newrelic",
-          db: db!,
+          db: db as Db,
           systemPrompt,
           task,
           toolCallId,

@@ -68,6 +68,8 @@ export interface ChatCoreProps {
   header?: ReactNode;
   /** Rendered inside the scroll container (e.g. sticky headers) */
   scrollHeader?: ReactNode;
+  /** Rendered below the placeholder in the empty state */
+  emptyStateExtras?: ReactNode;
   beforeInput?: ReactNode;
   afterMessages?: ReactNode;
   renderMessage?: (
@@ -85,6 +87,7 @@ export interface ChatCoreRef {
   sendMessage: (msg: { text: string }) => void;
   stop: () => void;
   scrollToBottom: (opts?: { animation?: "instant" | "smooth" }) => void;
+  scrollToTop: (opts?: { animation?: "instant" | "smooth" }) => void;
   progressStore: ProgressStore;
   status: string;
   isLoading: boolean;
@@ -105,6 +108,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
       variant = "full",
       header,
       scrollHeader,
+      emptyStateExtras,
       beforeInput,
       afterMessages,
       renderMessage,
@@ -118,7 +122,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
     const pad = variant === "panel" ? "px-4" : "px-10";
     const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-    const { scrollRef, contentRef, isAtBottom, handleWheel, scrollToBottom } = useChatScroll();
+    const { scrollRef, contentRef, isAtBottom, handleWheel, scrollToBottom, scrollToTop } = useChatScroll();
 
     // Stable refs for callbacks used inside Chat constructor
     const onDataRef = useRef(onData);
@@ -193,6 +197,14 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
       lastMessage?.role === "assistant" &&
       lastPart?.type.startsWith("tool-");
 
+    const lastPartState = (lastPart as { state?: string } | undefined)?.state;
+    const isSubAgentRunning =
+      lastPart?.type.startsWith("tool-") && lastPartState !== "output-available";
+    const isContentStreaming = lastPart?.type === "text" || lastPart?.type === "reasoning";
+    const showThinkingDots =
+      status === "submitted" ||
+      (status === "streaming" && !isContentStreaming && !isSubAgentRunning);
+
     const lastId = status === "streaming" ? messages[messages.length - 1]?.id : null;
 
     const handleStop = () => {
@@ -258,12 +270,13 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
         sendMessage,
         stop,
         scrollToBottom,
+        scrollToTop,
         progressStore,
         status,
         isLoading,
         error,
       }),
-      [messages, setMessages, sendMessage, stop, scrollToBottom, progressStore, status, isLoading, error],
+      [messages, setMessages, sendMessage, stop, scrollToBottom, scrollToTop, progressStore, status, isLoading, error],
     );
 
     return (
@@ -277,12 +290,12 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
             onWheel={handleWheel}
             onCopy={normalizeClipboard}
           >
-            <div ref={contentRef}>
+            <div ref={contentRef} className="min-h-full flex flex-col">
               {scrollHeader}
 
               {messages.length === 0 && status !== "submitted" && (
-                <div className="py-16 flex items-center justify-center">
-                  <span className={v.emptyState}>{placeholder}</span>
+                <div className="flex-1 flex flex-col items-center justify-center gap-6 py-16">
+                  {emptyStateExtras ?? <span className={v.emptyState}>{placeholder}</span>}
                 </div>
               )}
 
@@ -326,7 +339,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
                 );
               })}
 
-              {status === "submitted" && (
+              {showThinkingDots && (
                 <div className={pad}>
                   {messages.length > 0 && <div className={v.separator} />}
                   <ThinkingDots className={v.thinking} />

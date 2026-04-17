@@ -296,7 +296,25 @@ Base the report entirely on the investigation data and findings from this conver
       onPostMortem={handlePostMortem}
       streaming={isStreaming}
       onCostDataReady={refreshCostData}
+      onTitleClick={() => coreRef.current?.scrollToTop({ animation: "smooth" })}
     />
+  );
+
+  const emptyStateNotifiers = (
+    <ul className="max-w-md space-y-4 text-sm text-[#b8b5af] font-serif text-center">
+      <li>
+        <div className="text-[#9c9890]">Garbage in, garbage out.</div>
+        <div>The clearer your question, the sharper the answer — vague ones can still work.</div>
+      </li>
+      <li>
+        <div className="text-[#9c9890]">Models hallucinate.</div>
+        <div>Don't take every claim at face value — verify the parts that matter.</div>
+      </li>
+      <li>
+        <div className="text-[#9c9890]">Self-review still matters.</div>
+        <div>Don't share findings with teammates until you've checked them yourself.</div>
+      </li>
+    </ul>
   );
 
   return (
@@ -309,6 +327,7 @@ Base the report entirely on the investigation data and findings from this conver
         initialMessages={initialMessages}
         variant="full"
         scrollHeader={sessionTitleHeader}
+        emptyStateExtras={emptyStateNotifiers}
         onBeforeStop={handleBeforeStop}
         onStatusChange={(status, msgs) => {
           const loading = status === "submitted" || status === "streaming";

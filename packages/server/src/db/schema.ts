@@ -36,6 +36,8 @@ export const chatSessions = sqliteTable("chat_sessions", {
   title: text("title").notNull(),
   messages: text("messages").notNull(),
   status: text("status").notNull().default("idle"),
+  /** Null for normal sessions. "imported" for sessions re-hydrated from a dropped analysis PNG. */
+  kind: text("kind"),
   createdAt: integer("created_at")
     .notNull()
     .$defaultFn(() => unixNow()),

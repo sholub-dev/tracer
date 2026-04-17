@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 /** Progress part types streamed from sub-agents to the client */
 export type ProgressPart =
   | { type: "query"; query: string; results: unknown }
@@ -22,3 +24,24 @@ export const TOOL_NAMES = {
 export const CLIENT_TOOL_NAMES = Object.fromEntries(
   Object.entries(TOOL_NAMES).map(([k, v]) => [k, `tool-${v}`]),
 ) as { [K in keyof typeof TOOL_NAMES]: `tool-${(typeof TOOL_NAMES)[K]}` };
+
+/**
+ * Schema for the JSON blob embedded in an analysis PNG. Lives in shared so
+ * both the server (`importAnalysis` mutation input) and the web client (drop
+ * handler validation) can use the same definition.
+ *
+ * Parts are accepted opaquely: text, reasoning, and tool parts (with their
+ * inputs and outputs) all survive the round-trip so imported sessions render
+ * identically to the original, including charts/tables backed by tool output.
+ * Size is bounded by the export-time guard in the web client and the overall
+ * tRPC body limit on the server.
+ */
+export const ImportedAnalysisSchema = z.object({
+  v: z.literal(1),
+  kind: z.literal("analysis"),
+  sourceTitle: z.string().max(400),
+  sourceCreatedAt: z.number().int().nonnegative(),
+  parts: z.array(z.looseObject({ type: z.string() })).max(200),
+});
+
+export type ImportedAnalysis = z.infer<typeof ImportedAnalysisSchema>;

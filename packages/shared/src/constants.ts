@@ -15,6 +15,11 @@ export const SESSION_PREFIX = {
   MONITORS: "__monitors__",
 } as const;
 
+export const SESSION_KIND = {
+  IMPORTED: "imported",
+} as const;
+export type SessionKind = (typeof SESSION_KIND)[keyof typeof SESSION_KIND];
+
 export function dashboardSessionId(dashboardId: string): string {
   return `${SESSION_PREFIX.DASHBOARD}:${dashboardId}`;
 }

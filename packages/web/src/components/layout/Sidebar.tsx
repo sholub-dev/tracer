@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { SESSION_KIND } from "@oko/shared";
 import { usePolling } from "../../lib/hooks";
 import { theme } from "../../lib/theme";
 import { trpc } from "../../lib/trpc";
@@ -96,6 +97,13 @@ export function Sidebar({
     );
     markViewedMutation.mutate({ id: currentSessionId });
   }, [sessionsQuery.data, currentSessionId, currentPage]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const { regularSessions, importedSessions } = useMemo(() => {
+    const all = sessionsQuery.data ?? [];
+    const regular = all.filter((s) => s.kind !== SESSION_KIND.IMPORTED);
+    const imported = all.filter((s) => s.kind === SESSION_KIND.IMPORTED);
+    return { regularSessions: regular, importedSessions: imported };
+  }, [sessionsQuery.data]);
 
   const alertCount = alertCountQuery.data ?? 0;
   const doneSessionCount = currentPage === "debug" && sessionsQuery.data
@@ -240,47 +248,53 @@ export function Sidebar({
                 </div>
               )}
 
-              {page === "debug" && (
-                <div className="mt-1 space-y-0.5">
+              {page === "debug" && (() => {
+                const renderRow = (session: (typeof regularSessions)[number]) => (
                   <button
-                    onClick={onNewSession}
-                    className={theme.sessionNewBtn}
+                    key={session.id}
+                    onClick={() => onSelectSession(session.id)}
+                    className={
+                      currentSessionId === session.id
+                        ? theme.sessionItemActive
+                        : theme.sessionItem
+                    }
                   >
-                    <span className="text-[10px]">+</span>
-                    New chat
+                    <span
+                      className={`truncate flex-1 text-left ${
+                        (session.status === "streaming" || session.status === "done") && session.id !== currentSessionId
+                          ? "text-[#2b5ea7] underline"
+                          : ""
+                      }`}
+                      title={session.title}
+                    >
+                      {session.title}
+                    </span>
+                    <span
+                      onClick={(e) => handleDeleteSession(e, session.id)}
+                      className={theme.sessionDeleteBtn}
+                    >
+                      ×
+                    </span>
                   </button>
-                  <ScrollableList>
-                    {sessionsQuery.data?.map((session) => (
-                      <button
-                        key={session.id}
-                        onClick={() => onSelectSession(session.id)}
-                        className={
-                          currentSessionId === session.id
-                            ? theme.sessionItemActive
-                            : theme.sessionItem
-                        }
-                      >
-                        <span
-                          className={`truncate flex-1 text-left ${
-                            (session.status === "streaming" || session.status === "done") && session.id !== currentSessionId
-                              ? "text-[#2b5ea7] underline"
-                              : ""
-                          }`}
-                          title={session.title}
-                        >
-                          {session.title}
-                        </span>
-                        <span
-                          onClick={(e) => handleDeleteSession(e, session.id)}
-                          className={theme.sessionDeleteBtn}
-                        >
-                          ×
-                        </span>
-                      </button>
-                    ))}
-                  </ScrollableList>
-                </div>
-              )}
+                );
+                return (
+                  <div className="mt-1 space-y-0.5">
+                    <button onClick={onNewSession} className={theme.sessionNewBtn}>
+                      <span className="text-[10px]">+</span>
+                      New chat
+                    </button>
+                    <ScrollableList>{regularSessions.map(renderRow)}</ScrollableList>
+                    {importedSessions.length > 0 && (
+                      <>
+                        <div className="text-[10px] uppercase tracking-wider text-[#9c9890]/60 px-3 pt-3 pb-1">
+                          Imported
+                        </div>
+                        <ScrollableList>{importedSessions.map(renderRow)}</ScrollableList>
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           );
         })}

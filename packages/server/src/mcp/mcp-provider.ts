@@ -149,7 +149,7 @@ export class McpProvider extends BaseProvider {
     return createMcpChatTools(this, this.definition, options);
   }
 
-  // Structured data methods — not available in MCP mode.
+  // Structured data methods — MCP-backed providers expose data through tool calls, not these typed APIs.
   async getErrors(_timeRange: TimeRange): Promise<OkoError[]> {
     return [];
   }
@@ -160,7 +160,7 @@ export class McpProvider extends BaseProvider {
     return [];
   }
   async executeRawQuery(_query: string): Promise<unknown> {
-    return { error: "Raw queries are not supported in MCP mode. Use API mode for dashboard widgets and direct queries." };
+    return { error: "Raw queries are not supported by MCP-backed providers." };
   }
 
   // ── Private ──

@@ -15,10 +15,6 @@ export interface ConfigField {
 export interface ProviderMeta {
   label: string;
   configFields: ConfigField[];
-  /** If present, this provider supports mode selection (e.g. API vs MCP). */
-  modes?: Array<"api" | "mcp">;
-  /** Config fields shown when MCP mode is selected. */
-  mcpConfigFields?: ConfigField[];
 }
 
 interface FactoryEntry {

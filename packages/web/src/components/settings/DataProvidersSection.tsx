@@ -6,12 +6,7 @@ import { WEB_CONFIG } from "../../lib/config";
 import { ProviderCard } from "./ProviderCard";
 import { ProviderConfigModal } from "./ProviderConfigModal";
 
-interface ProviderMeta { label: string; configFields: ConfigField[]; modes?: Array<"api" | "mcp">; mcpConfigFields?: ConfigField[] }
 type ConfigField = { key: string; label: string; type: string; required?: boolean };
-
-function fieldsForMode(meta: ProviderMeta, mode: "api" | "mcp"): ConfigField[] {
-  return mode === "mcp" && meta.mcpConfigFields ? meta.mcpConfigFields : meta.configFields;
-}
 
 function buildInitialValues(fields: ConfigField[], existingConfig?: Record<string, string>): Record<string, string> {
   const values: Record<string, string> = {};
@@ -48,7 +43,6 @@ export function DataProvidersSection() {
 
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
   const [formValues, setFormValues] = useState<Record<string, string>>({});
-  const [selectedMode, setSelectedMode] = useState<"api" | "mcp">("api");
   const [saveResult, setSaveResult] = useState<{ success: boolean; error?: string } | null>(null);
   const [confirmRemoveProvider, setConfirmRemoveProvider] = useState<string | null>(null);
   const [toggleError, setToggleError] = useState<Record<string, string>>({});
@@ -57,24 +51,9 @@ export function DataProvidersSection() {
     const config = configs?.find((c) => c.type === type);
     const meta = registeredTypes?.find((t) => t.type === type);
 
-    // Determine mode from existing config or default to "api"
-    const mode = (config?.config.__mode as "api" | "mcp") ?? "api";
-    setSelectedMode(mode);
-
-    const fields = meta ? fieldsForMode(meta, mode) : [];
-    setFormValues(buildInitialValues(fields, config?.config));
+    setFormValues(buildInitialValues(meta?.configFields ?? [], config?.config));
     setSaveResult(null);
     setEditingProvider(type);
-  }
-
-  function handleModeChange(mode: "api" | "mcp") {
-    const meta = registeredTypes?.find((t) => t.type === editingProvider);
-    if (!meta) return;
-
-    setSelectedMode(mode);
-    const config = configs?.find((c) => c.type === editingProvider);
-    setFormValues(buildInitialValues(fieldsForMode(meta, mode), config?.config));
-    setSaveResult(null);
   }
 
   function handleClose() {
@@ -85,13 +64,8 @@ export function DataProvidersSection() {
 
   async function handleSave(type: string) {
     setSaveResult(null);
-    const meta = registeredTypes?.find((t) => t.type === type);
-    // Include __mode in saved config if the provider supports modes
-    const configToSave = meta?.modes && meta.modes.length > 1
-      ? { ...formValues, __mode: selectedMode }
-      : formValues;
     try {
-      const result = await saveConfig.mutateAsync({ type, config: configToSave });
+      const result = await saveConfig.mutateAsync({ type, config: formValues });
       setSaveResult(result);
       if (result.success) {
         setEditingProvider(null);
@@ -134,18 +108,15 @@ export function DataProvidersSection() {
   const editingMeta = editingProvider ? providerTypes.find((t) => t.type === editingProvider) : null;
   const editingConfig = editingProvider ? configs?.find((c) => c.type === editingProvider) : null;
 
-  const activeConfigFields = editingMeta ? fieldsForMode(editingMeta, selectedMode) : [];
-
   return (
     <>
       <div className="flex flex-wrap gap-3">
-        {providerTypes.map(({ type, label, modes, configFields }) => {
+        {providerTypes.map(({ type, label, configFields }) => {
           const status = statuses?.find((s) => s.type === type);
           const config = configs?.find((c) => c.type === type);
           const configured = !!config;
           const ping = pingResults?.find((p) => p.type === type);
           const connected = ping ? ping.ok : !!status?.connected;
-          const configMode = config?.config.__mode as "api" | "mcp" | undefined;
           const hasConfigFields = configFields.length > 0;
 
           const pingError = ping && !ping.ok ? ping.error : undefined;
@@ -163,8 +134,6 @@ export function DataProvidersSection() {
               toggleError={toggleError[type]}
               pingError={pingError}
               hasConfigFields={hasConfigFields}
-              modes={modes}
-              activeMode={configMode}
               existingConfig={config?.config}
             />
           );
@@ -175,7 +144,7 @@ export function DataProvidersSection() {
         <ProviderConfigModal
           open={true}
           label={editingMeta.label}
-          configFields={activeConfigFields}
+          configFields={editingMeta.configFields}
           formValues={formValues}
           onFormChange={(key, value) => setFormValues((prev) => ({ ...prev, [key]: value }))}
           existingConfig={editingConfig?.config ?? null}
@@ -185,9 +154,6 @@ export function DataProvidersSection() {
           onSave={() => handleSave(editingProvider)}
           onClose={handleClose}
           onRemove={() => setConfirmRemoveProvider(editingProvider)}
-          modes={editingMeta.modes}
-          selectedMode={selectedMode}
-          onModeChange={handleModeChange}
         />
       )}
 

@@ -15,17 +15,12 @@ interface ProviderCardProps {
   toggleError?: string;
   pingError?: string;
   hasConfigFields: boolean;
-  /** Available modes for this provider (e.g. ["api", "mcp"]). */
-  modes?: Array<"api" | "mcp">;
-  /** Currently active mode from saved config. */
-  activeMode?: "api" | "mcp";
   /** Saved config for this provider (used by inline selectors like GcpProjectSelector). */
   existingConfig?: Record<string, string>;
 }
 
-export function ProviderCard({ type, label, connected, configured, onConfigure, onToggle, togglePending, toggleError, pingError, hasConfigFields, modes, activeMode, existingConfig }: ProviderCardProps) {
+export function ProviderCard({ type, label, connected, configured, onConfigure, onToggle, togglePending, toggleError, pingError, hasConfigFields, existingConfig }: ProviderCardProps) {
   const active = configured || connected;
-  const showModeBadge = configured && modes && modes.length > 1;
 
   return (
     <div className={theme.settingsCard + " w-80"}>
@@ -47,11 +42,6 @@ export function ProviderCard({ type, label, connected, configured, onConfigure, 
             <StatusIndicator status={connected ? "connected" : "disconnected"} />
           ) : (
             <span className="text-xs opacity-40">Not configured</span>
-          )}
-          {showModeBadge && (
-            <span className="text-xs px-1.5 py-0.5 rounded bg-[#e8e6e1] text-[#666666]">
-              via {activeMode === "mcp" ? "MCP" : "API"}
-            </span>
           )}
         </div>
         <button

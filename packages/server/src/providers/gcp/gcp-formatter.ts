@@ -29,7 +29,14 @@ function mdTable(headers: string[], rows: string[][]): string {
   const hdr = `| ${headers.join(" | ")} |`;
   const sep = `| ${headers.map(() => "---").join(" | ")} |`;
   const body = rows
-    .map((r) => `| ${r.map((c) => String(c).replace(/\|/g, "\\|").replace(/\n/g, " ")).join(" | ")} |`)
+    .map(
+      (r) =>
+        `| ${r
+          .map((c) =>
+            String(c).replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\n/g, " "),
+          )
+          .join(" | ")} |`,
+    )
     .join("\n");
   return `${hdr}\n${sep}\n${body}`;
 }

@@ -25,7 +25,7 @@
     "dev": "concurrently --kill-others -n server,web -c blue,green \"pnpm --filter @tracer-sh/server dev\" \"pnpm --filter @tracer-sh/web dev\"",
     "build": "pnpm --filter @tracer-sh/shared build && pnpm --filter @tracer-sh/server build && pnpm --filter @tracer-sh/web build",
     "start": "node packages/server/dist/index.js",
-    "lint": "tsc --noEmit",
+    "lint": "pnpm -r --parallel run typecheck",
     "release": "bin/release.sh",
     "prepublishOnly": "if [ -z \"${CI:-}\" ]; then echo 'ERROR: Do not publish manually. Use: pnpm release <version>' && exit 1; fi && pnpm build"
   },

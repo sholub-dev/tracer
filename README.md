@@ -1,6 +1,8 @@
 # Tracer
 
 [![npm version](https://img.shields.io/npm/v/tracer-sh)](https://www.npmjs.com/package/tracer-sh)
+[![CI](https://github.com/sholub-dev/tracer/actions/workflows/ci.yml/badge.svg)](https://github.com/sholub-dev/tracer/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/sholub-dev/tracer/actions/workflows/codeql.yml/badge.svg)](https://github.com/sholub-dev/tracer/actions/workflows/codeql.yml)
 
 Local-first AI-powered observability platform.
 
@@ -108,4 +110,4 @@ All PRs require approval before merging.
 
 ## License
 
-[PolyForm Shield 1.0.0](https://polyformproject.org/licenses/shield/1.0.0/) — free to use, except to build competing products.
+[Elastic License 2.0](https://www.elastic.co/licensing/elastic-license) — free for any use, including internal business use, modification, and redistribution. You may not offer it as a hosted or managed service competing with Tracer.

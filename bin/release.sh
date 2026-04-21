@@ -1,67 +1,76 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="$1"
-VERSION="${VERSION#v}"  # strip leading v if present
+VERSION="${1:-}"
+VERSION="${VERSION#v}"
 
 if [ -z "$VERSION" ]; then
   echo "Usage: pnpm release <version>"
-  echo "Example: pnpm release 0.5.0"
+  echo "Example: pnpm release 0.2.0"
   exit 1
 fi
 
-# Prevent manual npm publish — CI handles it
 if [ -n "${CI:-}" ]; then
-  echo "ERROR: release.sh is for local use only (bumps version, tags, pushes)."
-  echo "npm publish is handled by CI on tag push."
+  echo "ERROR: release.sh is for local use only (opens the version-bump PR and tags the merged release)."
+  echo "npm publish + GitHub release are handled by .github/workflows/release.yml on tag push."
   exit 1
 fi
 
-# Build first to ensure everything compiles
-echo "Building..."
-pnpm build
-
-# Audit the package before proceeding
-echo "Auditing package contents..."
-PACK_OUTPUT=$(npm pack --dry-run 2>&1)
-
-# Check for source code leaks
-if echo "$PACK_OUTPUT" | grep -qE '\.ts$|\.tsx$' | grep -v '\.d\.ts$'; then
-  echo "ERROR: TypeScript source files detected in package!"
-  echo "$PACK_OUTPUT" | grep -E '\.ts$|\.tsx$'
+if ! command -v gh >/dev/null 2>&1; then
+  echo "ERROR: gh CLI is required (https://cli.github.com/)."
   exit 1
 fi
 
-if echo "$PACK_OUTPUT" | grep -q '/src/'; then
-  echo "ERROR: src/ directories detected in package!"
-  echo "$PACK_OUTPUT" | grep '/src/'
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "ERROR: working tree has uncommitted changes."
   exit 1
 fi
 
-if echo "$PACK_OUTPUT" | grep -q '\.map$'; then
-  echo "ERROR: Sourcemap files detected in package!"
-  echo "$PACK_OUTPUT" | grep '\.map$'
+git fetch origin master --quiet
+git checkout master --quiet
+git pull --ff-only --quiet
+
+BRANCH="chore/release-${VERSION}"
+if git show-ref --verify --quiet "refs/heads/${BRANCH}"; then
+  echo "ERROR: branch ${BRANCH} already exists locally."
   exit 1
 fi
 
-# Show what will be published
-echo ""
-echo "Package contents:"
-echo "$PACK_OUTPUT" | grep "npm notice" | grep -E "^\s*npm notice\s+[0-9]" || true
-echo ""
+git checkout -b "$BRANCH"
 
-# Update package.json version
 node -e "
   const pkg = JSON.parse(require('fs').readFileSync('package.json','utf8'));
+  if (pkg.version === '$VERSION') {
+    console.error('ERROR: package.json is already at version $VERSION.');
+    process.exit(1);
+  }
   pkg.version = '$VERSION';
   require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
 "
 
-# Commit, tag, push — CI will publish to npm on tag push
 git add package.json
-git commit -m "v${VERSION}"
+git commit -m "v${VERSION}" --quiet
+git push -u origin "$BRANCH" --quiet
+
+PR_URL=$(gh pr create --title "v${VERSION}" --body "Version bump.")
+echo ""
+echo "Opened ${PR_URL}"
+echo ""
+echo "Merge the PR, then press Enter to tag v${VERSION} and trigger the release workflow."
+echo "(Ctrl-C to abort; you can tag manually later with: git checkout master && git pull && git tag v${VERSION} && git push origin v${VERSION})"
+read -r
+
+git checkout master --quiet
+git pull --ff-only --quiet
+
+MERGED_VERSION=$(node -e "console.log(require('./package.json').version)")
+if [ "$MERGED_VERSION" != "$VERSION" ]; then
+  echo "ERROR: package.json on master is at ${MERGED_VERSION}, expected ${VERSION}. Did the PR merge?"
+  exit 1
+fi
+
 git tag "v${VERSION}"
-git push origin master --tags
+git push origin "v${VERSION}" --quiet
 
 echo ""
-echo "Released v${VERSION} — CI will publish to npm automatically."
+echo "Tagged v${VERSION} — CI will publish to npm and create the GitHub Release."

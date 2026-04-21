@@ -12,9 +12,7 @@
   "engines": {
     "node": ">=20.0.0"
   },
-  "bin": {
-    "tracer-sh": "./bin/tracer.mjs"
-  },
+  "bin": "./bin/tracer.mjs",
   "files": [
     "bin/tracer.mjs",
     "packages/server/dist/",

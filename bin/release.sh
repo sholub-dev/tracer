@@ -26,33 +26,26 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
   exit 1
 fi
 
-git fetch origin master --quiet
-git checkout master --quiet
-git pull --ff-only --quiet
+sync_master() {
+  git checkout master --quiet
+  git pull --ff-only --quiet origin master
+}
+
+sync_master
 
 BRANCH="chore/release-${VERSION}"
 if git show-ref --verify --quiet "refs/heads/${BRANCH}"; then
-  echo "ERROR: branch ${BRANCH} already exists locally."
+  echo "ERROR: branch ${BRANCH} already exists. Delete with: git branch -D ${BRANCH}"
   exit 1
 fi
 
-git checkout -b "$BRANCH"
-
-node -e "
-  const pkg = JSON.parse(require('fs').readFileSync('package.json','utf8'));
-  if (pkg.version === '$VERSION') {
-    console.error('ERROR: package.json is already at version $VERSION.');
-    process.exit(1);
-  }
-  pkg.version = '$VERSION';
-  require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-"
-
+git checkout -b "$BRANCH" --quiet
+pnpm version "$VERSION" --no-git-tag-version >/dev/null
 git add package.json
 git commit -m "v${VERSION}" --quiet
 git push -u origin "$BRANCH" --quiet
 
-PR_URL=$(gh pr create --title "v${VERSION}" --body "Version bump.")
+PR_URL=$(gh pr create --title "v${VERSION}" --body "Bump version to ${VERSION}.")
 echo ""
 echo "Opened ${PR_URL}"
 echo ""
@@ -60,10 +53,9 @@ echo "Merge the PR, then press Enter to tag v${VERSION} and trigger the release 
 echo "(Ctrl-C to abort; you can tag manually later with: git checkout master && git pull && git tag v${VERSION} && git push origin v${VERSION})"
 read -r
 
-git checkout master --quiet
-git pull --ff-only --quiet
+sync_master
 
-MERGED_VERSION=$(node -e "console.log(require('./package.json').version)")
+MERGED_VERSION=$(node -p "require('./package.json').version")
 if [ "$MERGED_VERSION" != "$VERSION" ]; then
   echo "ERROR: package.json on master is at ${MERGED_VERSION}, expected ${VERSION}. Did the PR merge?"
   exit 1

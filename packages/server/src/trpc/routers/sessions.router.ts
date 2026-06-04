@@ -15,6 +15,7 @@ const AGENT_TYPE_LABELS: Record<string, string> = {
   chat: "Chat",
   newrelic: "New Relic sub-agent",
   gcp: "GCP sub-agent",
+  posthog: "PostHog sub-agent",
   title: "Title gen",
   memory: "Memory",
 };

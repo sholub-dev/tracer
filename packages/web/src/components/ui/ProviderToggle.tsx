@@ -7,9 +7,10 @@ import { GcpProjectPicker } from "./GcpProjectPicker";
 const SHORT_LABELS: Record<string, string> = {
   newrelic: "NR",
   gcp: "GCP",
+  posthog: "PH",
 };
 
-const PROVIDER_ORDER: Record<string, number> = { gcp: 0, newrelic: 1 };
+const PROVIDER_ORDER: Record<string, number> = { gcp: 0, newrelic: 1, posthog: 2 };
 function sortProviders<T extends { type: string }>(providers: T[]): T[] {
   return [...providers].sort(
     (a, b) => (PROVIDER_ORDER[a.type] ?? 99) - (PROVIDER_ORDER[b.type] ?? 99),

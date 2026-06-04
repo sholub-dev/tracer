@@ -16,6 +16,9 @@ const DOMAIN_LOADERS: Record<string, DomainLoader> = {
   gcp: async () =>
     (await import("../../providers/gcp/domain-knowledge.js"))
       .GCP_DOMAIN_KNOWLEDGE,
+  posthog: async () =>
+    (await import("../../providers/posthog/domain-knowledge.js"))
+      .POSTHOG_DOMAIN_KNOWLEDGE,
 };
 
 export async function getDomainKnowledge(

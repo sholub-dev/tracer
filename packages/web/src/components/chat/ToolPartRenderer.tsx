@@ -38,6 +38,8 @@ const SUB_AGENT_LABELS: Record<string, string> = {
   "tool-nrql": "New Relic",
   "tool-newrelic": "New Relic",
   "tool-gcp": "Google Cloud",
+  "tool-hogql": "PostHog",
+  "tool-posthog": "PostHog",
 };
 
 function getSubAgentLabel(toolType: string): string {

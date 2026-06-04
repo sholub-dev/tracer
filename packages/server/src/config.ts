@@ -29,7 +29,7 @@ export const CONFIG = {
   // ── LLM defaults ──
 
   defaultChatModel: { provider: "google", modelId: "gemini-3.1-pro-preview" } as ModelConfig,
-  defaultSubAgentModel: { provider: "google", modelId: "gemini-3-flash-preview" } as ModelConfig,
+  defaultSubAgentModel: { provider: "google", modelId: "gemini-3.1-pro-preview" } as ModelConfig,
   defaultUtilityModel: { provider: "google", modelId: "gemini-3.1-flash-lite-preview" } as ModelConfig,
 
   /** Models that support thinking/reasoning tokens. */

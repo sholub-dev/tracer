@@ -1,11 +1,12 @@
 /**
- * Registers the built-in provider factories (New Relic, GCP).
+ * Registers the built-in provider factories (New Relic, GCP, PostHog).
  * Extracted from index.ts for separation of concerns.
  */
 
 import type { ProviderRegistry } from "./registry.js";
 import { NewRelicProvider } from "./newrelic/newrelic.provider.js";
 import { GcpProvider } from "./gcp/gcp.provider.js";
+import { PosthogProvider } from "./posthog/posthog.provider.js";
 import { mcpDefinitions } from "../mcp/definitions.js";
 
 export function registerDefaultProviders(providers: ProviderRegistry): void {
@@ -35,6 +36,24 @@ export function registerDefaultProviders(providers: ProviderRegistry): void {
     {
       label: "Google Cloud",
       configFields: [],
+    },
+  );
+
+  providers.registerFactory(
+    "posthog",
+    (cfg) => new PosthogProvider({
+      type: "posthog",
+      apiKey: cfg.apiKey,
+      projectId: cfg.projectId,
+      host: cfg.host, // default (us.posthog.com) applied in PosthogClient
+    }),
+    {
+      label: "PostHog",
+      configFields: [
+        { key: "apiKey", label: "Personal API Key", type: "password" },
+        { key: "projectId", label: "Project ID", type: "text" },
+        { key: "host", label: "Host", type: "text", required: false },
+      ],
     },
   );
 }

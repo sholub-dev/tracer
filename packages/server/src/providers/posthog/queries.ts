@@ -4,9 +4,9 @@
  * getErrors/getTransactions/getLogs provider methods only.
  */
 
-/** Escape a single-quoted HogQL string literal. */
+/** Escape a single-quoted HogQL string literal. Backslashes first, then quotes. */
 function esc(value: string): string {
-  return value.replace(/'/g, "\\'");
+  return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 }
 
 /**

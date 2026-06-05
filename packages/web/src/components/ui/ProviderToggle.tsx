@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { UNIFIED_SCOPE } from "@tracer-sh/shared";
 import { trpc } from "../../lib/trpc";
 import { theme } from "../../lib/theme";
 import { WEB_CONFIG } from "../../lib/config";
@@ -8,6 +9,7 @@ const SHORT_LABELS: Record<string, string> = {
   newrelic: "NR",
   gcp: "GCP",
   posthog: "PH",
+  [UNIFIED_SCOPE]: "ALL",
 };
 
 const PROVIDER_ORDER: Record<string, number> = { gcp: 0, newrelic: 1, posthog: 2 };
@@ -38,12 +40,14 @@ export function ProviderToggle({ activeProvider, onToggle }: ProviderToggleProps
   const gcpConfig = configs?.find((c) => c.type === "gcp")?.config ?? null;
   const gcpProjectId = gcpConfig?.projectId ?? "";
 
-  // Auto-default to first connected provider, or correct stale/invalid selection
+  // Correct a stale/invalid selection (a provider that disconnected). The cross-provider
+  // "ALL" (unified) scope is always valid, and is the default everyone starts on.
   useEffect(() => {
     if (connected.length === 0) return;
-    if (!activeProvider || !connected.some((p) => p.type === activeProvider)) {
-      onToggle(connected[0].type);
-    }
+    const valid =
+      activeProvider === UNIFIED_SCOPE ||
+      connected.some((p) => p.type === activeProvider);
+    if (!valid) onToggle(UNIFIED_SCOPE);
   }, [activeProvider, connectedTypes]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!data && isLoading) return null;
@@ -51,22 +55,11 @@ export function ProviderToggle({ activeProvider, onToggle }: ProviderToggleProps
 
   const showGcpPicker = connected.some((p) => p.type === "gcp") && gcpConfig !== null;
 
-  if (connected.length === 1) {
-    const p = connected[0];
-    return (
-      <div className="flex items-center gap-2">
-        {showGcpPicker ? (
-          <GcpProjectPicker projectId={gcpProjectId} existingConfig={gcpConfig} />
-        ) : (
-          <span className="invisible text-[10px]">·</span>
-        )}
-        <span className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-sans rounded border border-[#c4c0b8] bg-[#ede9e3] text-[#4a4540]">
-          <span className={`inline-block w-1.5 h-1.5 rounded-full ${theme.statusDot.connected}`} />
-          {SHORT_LABELS[p.type] ?? p.type.toUpperCase()}
-        </span>
-      </div>
-    );
-  }
+  // Effective options = the cross-provider "ALL" chip plus every connected provider.
+  const options: Array<{ type: string; name: string }> = [
+    { type: UNIFIED_SCOPE, name: "Unified" },
+    ...connected,
+  ];
 
   return (
     <div className="flex items-center gap-1.5">
@@ -77,23 +70,31 @@ export function ProviderToggle({ activeProvider, onToggle }: ProviderToggleProps
           <GcpProjectPicker projectId={gcpProjectId} existingConfig={gcpConfig} />
         </span>
       )}
-      {connected.map((p) => {
+      {options.map((p) => {
         const isActive = activeProvider === p.type;
+        const isUnified = p.type === UNIFIED_SCOPE;
         return (
           <button
             key={p.type}
             type="button"
             onClick={() => onToggle(p.type)}
-            title={`${p.name}: ${isActive ? "active" : "click to switch"}`}
+            title={
+              isUnified
+                ? `Unified: one agent with every connected provider's query tools in one session${isActive ? " (active)" : ""}`
+                : `${p.name}: ${isActive ? "active" : "click to switch"}`
+            }
             className={`flex items-center gap-1 px-2 py-0.5 text-[10px] font-sans rounded border transition-all ${
               isActive
                 ? "border-[#c4c0b8] bg-[#ede9e3] text-[#4a4540] shadow-[inset_0_1px_2px_rgba(0,0,0,0.1)]"
                 : "border-[#e0dbd3] text-[#b0a898] hover:text-[#6b6560] hover:border-[#c4c0b8]"
             }`}
           >
+            {/* Unified gets a square accent (not a connection dot — it is a scope, not a provider). */}
             <span
-              className={`inline-block w-1.5 h-1.5 rounded-full ${
-                isActive ? theme.statusDot.connected : "bg-[#d4d0c8]"
+              className={`inline-block w-1.5 h-1.5 ${
+                isUnified
+                  ? `rounded-[1px] ${isActive ? "bg-[#2b5ea7]" : "bg-[#b9c4d4]"}`
+                  : `rounded-full ${isActive ? theme.statusDot.connected : "bg-[#d4d0c8]"}`
               }`}
             />
             {SHORT_LABELS[p.type] ?? p.type.toUpperCase()}

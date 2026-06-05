@@ -10,6 +10,8 @@ export function handleProgressData(
   data: { toolCallId: string; part: { type: string; [key: string]: unknown } },
 ) {
   progressStore.update(data.toolCallId, (prev) => {
+    // A retry clears the failed attempt's streamed parts before re-streaming.
+    if (data.part.type === "reset") return { parts: [] };
     const parts = [...(prev?.parts ?? [])];
     if (data.part.type === "tool-call") {
       parts.push({ type: "tool-call", toolName: data.part.toolName as string });
@@ -34,8 +36,12 @@ export function handleProgressData(
       }
       if (tcIdx !== -1) parts.splice(tcIdx, 1);
       parts.push({ type: "query", query: data.part.query as string, results: data.part.results });
+    } else if (data.part.type === "begin-analysis") {
+      // The sub-agent called begin_analysis — everything after this is its final Analysis,
+      // rendered in the distinct Analysis box (same as direct mode).
+      parts.push({ type: "analysis-start" });
     } else if (data.part.type === "mark-summary") {
-      // Stream ended — convert the last text part to summary styling
+      // Legacy: older sub-agents marked the last text part as a summary block.
       for (let i = parts.length - 1; i >= 0; i--) {
         if (parts[i].type === "text") {
           parts[i] = { ...parts[i], type: "summary" } as ProgressPart;

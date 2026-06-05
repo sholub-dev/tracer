@@ -71,8 +71,12 @@ export interface ChatToolMemoryContext {
   existingMemories: Array<{ id: number; toolName: string; note: string | null }>;
 }
 
-/** Chat architecture mode. */
-export type ChatMode = "orchestrator" | "direct";
+/**
+ * Chat architecture mode.
+ * - `direct`: one agent scoped to a single provider.
+ * - `unified`: one agent holding every connected provider's query tools at once.
+ */
+export type ChatMode = "direct" | "unified";
 
 /** Callback fired after a direct-mode chat session completes. */
 export interface AfterCompleteParams {

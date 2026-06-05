@@ -1,8 +1,3 @@
-import { extractMcpContent, isTransportError, detectTruncation } from "../../mcp/mcp-tools.js";
-import type { SubAgentQuery } from "../../agents/chat/sub-agent.js";
-import type { McpProvider } from "../../mcp/mcp-provider.js";
-import { CONFIG } from "../../config.js";
-
 // ── Helpers ──
 
 function fmtVal(v: unknown): string {
@@ -295,80 +290,4 @@ export function formatGcpResult(toolName: string, data: unknown): string {
       return "```json\n" + json.slice(0, 3_000) + "\n...[truncated]\n```";
     }
   }
-}
-
-// ── GCP-specific MCP tool wrapper ──
-
-const MAX_MODEL_RESULT_CHARS = CONFIG.maxModelResultChars;
-
-
-function buildGcpModelResult(toolName: string, normalized: unknown): string {
-  const formatted = formatGcpResult(toolName, normalized);
-  if (formatted.length <= MAX_MODEL_RESULT_CHARS) return formatted;
-  return (
-    formatted.slice(0, MAX_MODEL_RESULT_CHARS) +
-    "\n\n*[truncated — full results displayed in the UI]*"
-  );
-}
-
-/**
- * GCP-specific variant of wrapMcpTools that formats results as Markdown
- * tables before returning them to the sub-agent, rather than raw JSON.
- */
-export function wrapGcpMcpTools(
-  mcpTools: Record<string, any>,
-  provider: McpProvider,
-): {
-  wrappedTools: Record<string, any>;
-  mcpToolNames: string[];
-  collectedQueries: SubAgentQuery[];
-} {
-  const collectedQueries: SubAgentQuery[] = [];
-  const mcpToolNames = Object.keys(mcpTools);
-  const wrappedTools: Record<string, any> = {};
-
-  for (const [name, mcpTool] of Object.entries(mcpTools)) {
-    const originalExecute = (mcpTool as any).execute.bind(mcpTool);
-
-    wrappedTools[name] = {
-      ...mcpTool,
-      execute: async (input: any, context?: { abortSignal?: AbortSignal }) => {
-        const queryStr =
-          typeof input === "string" ? input : JSON.stringify(input).slice(0, 500);
-
-        const execArgs = context?.abortSignal
-          ? [input, { abortSignal: context.abortSignal }]
-          : [input];
-
-        try {
-          const result = await originalExecute(...execArgs);
-          const normalized = extractMcpContent(result);
-
-          if (detectTruncation(normalized)) {
-            const errorMsg =
-              `The result exceeded the server's size limit and was discarded. ` +
-              `To fix this:\n` +
-              `1. Reduce pageSize (use 5-10, never exceed 20)\n` +
-              `2. Add more specific filters to narrow results\n` +
-              `3. Request fewer fields or a shorter time range\n` +
-              `Retry with a more targeted query.`;
-            collectedQueries.push({ query: `${name}: ${queryStr}`, results: { error: errorMsg } });
-            return { content: [{ type: "text", text: errorMsg }] };
-          }
-
-          // Store full result for UI display
-          collectedQueries.push({ query: `${name}: ${queryStr}`, results: normalized });
-          // Return GCP-formatted Markdown to the model
-          return { content: [{ type: "text", text: buildGcpModelResult(name, normalized) }] };
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          collectedQueries.push({ query: `${name}: ${queryStr}`, results: { error: message } });
-          if (isTransportError(err)) provider.invalidateTools();
-          return { error: message };
-        }
-      },
-    };
-  }
-
-  return { wrappedTools, mcpToolNames, collectedQueries };
 }

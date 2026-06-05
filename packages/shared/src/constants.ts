@@ -10,6 +10,13 @@ export type KnownModelId = (typeof KNOWN_MODEL_IDS)[number];
 export const DEFAULT_SESSION_TITLE = "New chat";
 export const DEFAULT_CHAT_MODE = "direct" as const;
 
+/**
+ * Sentinel `activeProvider` value that selects the cross-provider Unified mode
+ * (one agent holding every connected provider's query tools in a single session)
+ * rather than a single provider. Flows through the existing activeProvider plumbing.
+ */
+export const UNIFIED_SCOPE = "__unified__";
+
 export const SESSION_PREFIX = {
   DASHBOARD: "__dashboard__",
   MONITORS: "__monitors__",

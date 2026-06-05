@@ -7,7 +7,7 @@ import { ChatCore, type ChatCoreRef } from "../components/chat/ChatCore";
 import { CopyMessageButton } from "../components/chat/CopyMessageButton";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { ProviderToggle } from "../components/ui/ProviderToggle";
-import { DEFAULT_SESSION_TITLE, ImportedAnalysisSchema, SESSION_KIND } from "@tracer-sh/shared";
+import { DEFAULT_SESSION_TITLE, ImportedAnalysisSchema, SESSION_KIND, UNIFIED_SCOPE } from "@tracer-sh/shared";
 import { SessionTitle } from "../components/debug/SessionTitle";
 import { CostDisplay, computeCostBreakdown, type CostBreakdown } from "../components/debug/CostDisplay";
 import { EditMessageForm } from "../components/debug/EditMessageForm";
@@ -120,8 +120,10 @@ export function Debug({ sessionId, onSessionChange }: DebugProps) {
     </div>
   ) : null;
 
+  // Default everyone into the cross-provider "ALL" (unified) scope; a stored preference
+  // (set when the user picks a specific provider) overrides it and carries across sessions.
   const [activeProvider, setActiveProviderRaw] = useState<string | null>(
-    () => localStorage.getItem("tracer:activeProvider"),
+    () => localStorage.getItem("tracer:activeProvider") ?? UNIFIED_SCOPE,
   );
   const setActiveProvider = useCallback((type: string) => {
     localStorage.setItem("tracer:activeProvider", type);

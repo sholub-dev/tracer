@@ -144,9 +144,6 @@ export function runSetup(): void {
   // Migration: add FK constraints to existing tables that lack them.
   // SQLite doesn't support ALTER TABLE ADD FOREIGN KEY, so we recreate tables.
   migrateForeignKeys();
-
-  // Orchestrator mode is now gated by FEATURES.orchestratorMode in the settings router.
-  // No need to force-delete the chat_mode setting on startup.
 }
 
 function migrateForeignKeys(): void {

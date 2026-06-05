@@ -8,6 +8,7 @@ import { StreamBroadcaster } from "../lib/stream-broadcaster.js";
 import type { Context } from "../trpc/context.js";
 import type { ChatToolWriter as StreamWriter } from "@tracer-sh/shared";
 import { getCurrentDateBlock } from "../lib/current-context.js";
+import { CONFIG } from "../config.js";
 
 /**
  * Sanitize messages loaded from the DB so incomplete tool parts (from aborted
@@ -114,7 +115,7 @@ async function processLLMStream(
 
 If a tool call fails, retry with a corrected approach. If you fail the same tool call twice, DO NOT retry again — stop and explain the issue to the user. Ask clarifying questions if needed. Never silently give up.
 
-When the user's question spans multiple providers, call the relevant provider tools IN PARALLEL in the same step. Each runs independently with its own sub-agent. After all complete, synthesize findings across providers.`;
+When the user's question spans multiple providers, query each relevant provider and synthesize findings across the results.`;
     const fragments = collected.promptFragments ?? [];
     systemPrompt = fragments.length > 0
       ? `${basePrompt}\n\n${fragments.join("\n\n")}`
@@ -219,13 +220,25 @@ When the user's question spans multiple providers, call the relevant provider to
 
   // This loop runs independently of any HTTP connection.
   const reader = uiStream.getReader();
+  let reasoningChars = 0; // per-step; code-level guard against runaway thinking loops
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      const v = value as Record<string, unknown>;
+      if (v.type === "start-step") {
+        reasoningChars = 0;
+      } else if (v.type === "reasoning-delta" && typeof v.delta === "string") {
+        reasoningChars += v.delta.length;
+        if (reasoningChars > CONFIG.maxReasoningCharsPerStep) {
+          console.warn(`[chat] reasoning exceeded ${CONFIG.maxReasoningCharsPerStep} chars in one step — aborting ${sessionId}`);
+          serverAbort.abort();
+          break;
+        }
+      }
       // Strip providerMetadata — the AI SDK emits it on some event types
       // but its own strictObject schema rejects it on the client side.
-      const { providerMetadata: _, ...clean } = value as Record<string, unknown>;
+      const { providerMetadata: _, ...clean } = v;
       broadcaster.emit(clean);
     }
   } catch (err) {

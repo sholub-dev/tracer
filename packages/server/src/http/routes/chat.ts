@@ -1,7 +1,7 @@
 import type { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { createUIMessageStreamResponse, type UIMessage } from "ai";
-import { dashboardSessionId, SESSION_PREFIX, DEFAULT_SESSION_TITLE, DEFAULT_CHAT_MODE, type ChatMode } from "@tracer-sh/shared";
+import { dashboardSessionId, SESSION_PREFIX, DEFAULT_SESSION_TITLE, UNIFIED_SCOPE, type ChatMode } from "@tracer-sh/shared";
 import type { Context } from "../../trpc/context.js";
 import { loadSessionMessages, runChatAgent } from "../../agents/base-agent.js";
 import { collectChatTools } from "../../tools/chat-tools.js";
@@ -9,8 +9,6 @@ import { collectDashboardTools } from "../../tools/dashboard-tools.js";
 import { collectMonitorTools } from "../../tools/monitor-tools.js";
 import { generateSessionTitle } from "../../agents/utility/title.js";
 import { resolveSubAgentModel } from "../../llm/resolve.js";
-import { readAppSetting } from "../../db/config-reader.js";
-import { SETTINGS_KEYS } from "../../config.js";
 
 export function registerChatRoutes(app: Hono, context: Context): void {
   app.post("/api/chat", async (c) => {
@@ -25,18 +23,24 @@ export function registerChatRoutes(app: Hono, context: Context): void {
       }
     }
 
-    // In direct mode, use the sub-agent model for the active provider
-    // instead of the default chat model.
-    const mode = readAppSetting<ChatMode>(context.db, SETTINGS_KEYS.chatMode) ?? DEFAULT_CHAT_MODE;
-    const modelOverride = mode === "direct" && activeProvider
-      ? resolveSubAgentModel(context.db, activeProvider)
+    // The chat toggle is the single source of truth for session scope: the unified sentinel
+    // means "one agent with every connected provider's tools" (no filter); any other value
+    // scopes to one provider (direct mode).
+    const isUnified = activeProvider === UNIFIED_SCOPE;
+    const mode: ChatMode = isUnified ? "unified" : "direct";
+    const scopedProvider = isUnified ? undefined : activeProvider;
+
+    // Direct mode on a single provider uses that provider's sub-agent model; unified mode uses
+    // the default (top-tier) chat model.
+    const modelOverride = mode === "direct" && scopedProvider
+      ? resolveSubAgentModel(context.db, scopedProvider)
       : undefined;
 
     const result = await runChatAgent({
       sessionId: id,
       messages,
       context,
-      collectTools: (writer) => collectChatTools(context.providers, context.db, writer, activeProvider),
+      collectTools: (writer) => collectChatTools(context.providers, context.db, writer, scopedProvider, mode),
       sessionTitle: (updatedMessages) => {
         const firstUserMsg = updatedMessages.find((m) => m.role === "user");
         const textPart = firstUserMsg?.parts.find((p) => p.type === "text");

@@ -15,7 +15,6 @@ import type {
 } from "@tracer-sh/shared";
 import { BaseProvider } from "../providers/base.provider.js";
 import type { McpServerDefinition, McpServerEntry } from "./definitions.js";
-import { createMcpChatTools } from "./mcp-tools.js";
 import { CONFIG } from "../config.js";
 
 type McpClient = Awaited<ReturnType<typeof createMCPClient>>;
@@ -141,12 +140,16 @@ export class McpProvider extends BaseProvider {
     }
   }
 
-  getChatTools(options: {
+  /**
+   * Base MCP providers expose no chat tools by default — concrete MCP-backed
+   * providers (e.g. GCP) override this with their own direct query tools.
+   */
+  getChatTools(_options: {
     writer?: ChatToolWriter;
     memoryContext?: ChatToolMemoryContext;
     db?: unknown;
   }): ProviderToolKit {
-    return createMcpChatTools(this, this.definition, options);
+    return { tools: {} };
   }
 
   // Structured data methods — MCP-backed providers expose data through tool calls, not these typed APIs.

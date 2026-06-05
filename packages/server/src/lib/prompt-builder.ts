@@ -1,16 +1,13 @@
 /**
- * Generic prompt assembly for provider sub-agents and direct mode.
- * Each provider supplies a ProviderPromptConfig with its domain knowledge;
- * the builders here produce the 3 standard prompt types with identical structure.
+ * Generic prompt assembly for provider direct-mode agents.
+ * Each provider supplies a ProviderPromptConfig with its domain knowledge.
+ * Unified mode composes these same pieces per provider via buildUnifiedModeFragment.
  */
 
 import {
   buildRules,
   DETECTIVE_MINDSET,
   EXECUTION_DISCIPLINE,
-  buildExecutionLoop,
-  buildFinalResponse,
-  buildDirectFinalResponse,
   buildAnalysisSection,
 } from "./shared-prompts.js";
 
@@ -22,54 +19,29 @@ export interface ProviderPromptConfig {
   insideOutDebugging: string;
   /** Extra sections appended after domain knowledge (e.g. cross-signal, tool reference). */
   extraSections?: string[];
-  directRoleIntro: string;
-  investigateRoleIntro: string;
-  /** Planning questions + buildPlanFormat call + example plan block. */
-  planningPhase: string;
-  executionLoopExample: string;
   directModeRoleIntro: string;
-  subAgentMaxSteps: number;
   directModeMaxSteps: number;
 }
 
-export function buildDirectSubAgentPrompt(config: ProviderPromptConfig): string {
-  return `${config.directRoleIntro}
-
-${config.authStopRule}
-
-## Rules
-${buildRules({ investigation: false, extraRules: config.extraRules })}
-
-${config.domainKnowledge}
-
-${buildDirectFinalResponse(config.subAgentMaxSteps)}
-
-Raw results are returned separately to the UI.`;
-}
-
-export function buildInvestigateSubAgentPrompt(config: ProviderPromptConfig): string {
+/**
+ * Role-less, per-provider block for the UNIFIED prompt (one agent, many providers).
+ * Contains only the provider-specific parts — auth rule, inside-out debugging, and domain
+ * knowledge (syntax, fields, anti-patterns). The shared intro, generic discipline, and
+ * analysis section are added ONCE by buildUnifiedModePrompt, not per provider.
+ */
+export function buildUnifiedModeFragment(config: ProviderPromptConfig): string {
   const extra = config.extraSections?.length ? "\n\n" + config.extraSections.join("\n\n") : "";
-
-  return `${config.investigateRoleIntro}
+  const rules = config.extraRules?.length
+    ? `\n\n### ${config.providerName} query rules\n` +
+      config.extraRules.map((r, i) => `${i + 1}. ${r}`).join("\n")
+    : "";
+  return `# ${config.providerName}
 
 ${config.authStopRule}
-
-## CRITICAL RULES
-${buildRules({ investigation: true, extraRules: config.extraRules })}
-
-${DETECTIVE_MINDSET}
 
 ${config.insideOutDebugging}
 
-${config.planningPhase}
-
-${buildExecutionLoop(config.executionLoopExample)}
-
-${config.domainKnowledge}${extra}
-
-${buildFinalResponse(config.subAgentMaxSteps)}
-
-Raw results are returned separately to the UI.`;
+${config.domainKnowledge}${extra}${rules}`;
 }
 
 export function buildDirectModePrompt(config: ProviderPromptConfig): string {

@@ -1,11 +1,9 @@
 import { z } from "zod";
 import { eq } from "drizzle-orm";
-import { DEFAULT_CHAT_MODE } from "@tracer-sh/shared";
 import { publicProcedure, router } from "../trpc.js";
 import { providerConfigs, appSettings } from "../../db/schema.js";
 import { readProviderConfig, readAppSetting, readAppSettings, writeAppSetting } from "../../db/config-reader.js";
 import { CONFIG, DEFAULTS, SETTINGS_KEYS, subAgentModelKey, type ModelConfig } from "../../config.js";
-import { FEATURES } from "../../feature-flags.js";
 
 export const settingsRouter = router({
   getApiKey: publicProcedure
@@ -63,21 +61,6 @@ export const settingsRouter = router({
     )
     .mutation(({ ctx, input }) => {
       writeAppSetting(ctx.db, SETTINGS_KEYS.chatModel, { provider: input.provider, modelId: input.modelId });
-      return { success: true };
-    }),
-
-  getChatMode: publicProcedure.query(({ ctx }) => {
-    if (!FEATURES.orchestratorMode) return DEFAULT_CHAT_MODE;
-    return readAppSetting<string>(ctx.db, SETTINGS_KEYS.chatMode) ?? DEFAULT_CHAT_MODE;
-  }),
-
-  saveChatMode: publicProcedure
-    .input(z.enum(["orchestrator", "direct"]))
-    .mutation(({ ctx, input }) => {
-      if (!FEATURES.orchestratorMode && input === "orchestrator") {
-        return { success: false };
-      }
-      writeAppSetting(ctx.db, SETTINGS_KEYS.chatMode, input);
       return { success: true };
     }),
 

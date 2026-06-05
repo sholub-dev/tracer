@@ -13,7 +13,7 @@ export function AgentMemorySection() {
     onSuccess: () => {
       utils.memory.list.invalidate();
       setNewNote("");
-      setNewProvider("orchestrator");
+      setNewProvider("unified");
       setShowAddForm(false);
     },
   });
@@ -35,7 +35,7 @@ export function AgentMemorySection() {
   const [editNote, setEditNote] = useState("");
   const [deleteMemoryId, setDeleteMemoryId] = useState<number | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
-  const [newProvider, setNewProvider] = useState("orchestrator");
+  const [newProvider, setNewProvider] = useState("unified");
   const [newNote, setNewNote] = useState("");
 
   function startEdit(id: number, note: string) {
@@ -55,7 +55,7 @@ export function AgentMemorySection() {
   }
 
   const providerOptions = [
-    { value: "orchestrator", label: "Orchestrator" },
+    { value: "unified", label: "Unified" },
     ...(registeredTypes ?? []).map((t) => ({ value: t.type, label: t.label })),
   ];
 
@@ -138,7 +138,7 @@ export function AgentMemorySection() {
               )}
             </button>
             <button
-              onClick={() => { setShowAddForm(false); setNewNote(""); setNewProvider("orchestrator"); }}
+              onClick={() => { setShowAddForm(false); setNewNote(""); setNewProvider("unified"); }}
               disabled={createMemory.isPending}
               className={theme.secondaryBtn}
             >

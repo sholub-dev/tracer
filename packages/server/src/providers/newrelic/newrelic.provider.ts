@@ -14,9 +14,8 @@ import { BaseProvider } from "../base.provider.js";
 import { NerdGraphClient } from "./nerdgraph.client.js";
 import { errorQuery, logQuery, transactionQuery } from "./queries.js";
 import {
-  createNewRelicTools,
   createNewRelicDirectTools,
-  newRelicSystemPrompt,
+  nrUnifiedFragment,
   NR_DIRECT_MODE_MAX_STEPS,
 } from "./tools.js";
 
@@ -125,30 +124,19 @@ export class NewRelicProvider extends BaseProvider {
     db?: unknown;
     mode?: ChatMode;
   }): ProviderToolKit {
-    if (options.mode === "direct") {
-      const direct = createNewRelicDirectTools(
-        this,
-        options.memoryContext,
-        options.writer,
-        options.db,
-      );
-      return {
-        tools: direct.tools,
-        systemPrompt: direct.systemPrompt,
-        maxSteps: NR_DIRECT_MODE_MAX_STEPS,
-        afterComplete: direct.afterComplete,
-      };
-    }
-
-    const tools = createNewRelicTools(
+    const direct = createNewRelicDirectTools(
       this,
       options.memoryContext,
       options.writer,
       options.db,
     );
     return {
-      tools,
-      promptFragments: [newRelicSystemPrompt],
+      tools: direct.tools,
+      maxSteps: NR_DIRECT_MODE_MAX_STEPS,
+      afterComplete: direct.afterComplete,
+      ...(options.mode === "unified"
+        ? { promptFragments: [nrUnifiedFragment] }
+        : { systemPrompt: direct.systemPrompt }),
     };
   }
 }

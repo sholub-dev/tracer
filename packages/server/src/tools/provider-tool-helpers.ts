@@ -37,6 +37,10 @@ export function buildAfterComplete(opts: {
 
   return (params: AfterCompleteParams) => {
     if (!db || !memoryContext) return;
+    // Nothing was queried for this provider in this session (common in unified mode, where every
+    // connected provider's afterComplete fires but typically only some were used) — there are no
+    // failures or struggles to learn from, so skip the memory agent and its operation markers.
+    if (collectedQueries.length === 0) return;
     const sessionId = params.sessionId;
 
     if (sessionId) {

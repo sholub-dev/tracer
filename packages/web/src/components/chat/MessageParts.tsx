@@ -3,6 +3,8 @@ import { Streamdown } from "streamdown";
 import { domToPng } from "modern-screenshot";
 import { CLIENT_TOOL_NAMES } from "@tracer-sh/shared";
 import { ToolPartRenderer } from "./ToolPartRenderer";
+import { ReasoningBlock } from "./ReasoningBlock";
+import { AnalysisContainer } from "./AnalysisContainer";
 import type { ProgressStore } from "../../lib/progress-store";
 import { theme } from "../../lib/theme";
 import type { UIMessage } from "ai";
@@ -84,9 +86,9 @@ function AnalysisSection({
   }, [parts, sourceTitle, sourceCreatedAt, resolveSourceTitle]);
 
   return (
-    <div ref={containerRef} className={`${theme.analysisContainer} relative group/analysis`}>
-      <div className="flex items-center justify-between mb-1">
-        <div className={theme.summaryLabel}>Analysis</div>
+    <AnalysisContainer
+      containerRef={containerRef}
+      actions={
         <div className="flex items-center gap-0.5 opacity-0 group-hover/analysis:opacity-100 transition-opacity">
           {downloadError && (
             <span className="text-[10px] text-[#b33a2a] mr-1">{downloadError}</span>
@@ -102,9 +104,10 @@ function AnalysisSection({
             <DownloadIcon size={12} />
           </button>
         </div>
-      </div>
+      }
+    >
       {children}
-    </div>
+    </AnalysisContainer>
   );
 }
 
@@ -154,16 +157,7 @@ export const MessageParts = React.memo(
 
     function renderPart(part: UIMessage["parts"][number], i: number | string, textOverride?: string) {
       if (part.type === "reasoning") {
-        return (
-          <details key={i} className="mb-2 border border-[#e8e3da]/30 rounded-md">
-            <summary className="cursor-pointer select-none px-3 py-1.5 text-xs text-[#9c9890] italic hover:text-[#6b6560] transition-colors">
-              Thinking
-            </summary>
-            <div className="px-3 pb-2 text-sm text-[#9c9890] italic">
-              <Streamdown isAnimating={isAnimating} controls={{ code: true }} linkSafety={{ enabled: false }}>{part.text}</Streamdown>
-            </div>
-          </details>
-        );
+        return <ReasoningBlock key={i} content={part.text} isAnimating={isAnimating} />;
       }
       if (part.type === "text") {
         const text = textOverride ?? part.text;

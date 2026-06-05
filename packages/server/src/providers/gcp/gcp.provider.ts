@@ -7,7 +7,7 @@ import type {
 } from "@tracer-sh/shared";
 import { McpProvider } from "../../mcp/mcp-provider.js";
 import type { McpServerDefinition } from "../../mcp/definitions.js";
-import { createGcpTools, createGcpDirectTools, GCP_DIRECT_MODE_MAX_STEPS } from "./tools.js";
+import { createGcpDirectTools, GCP_DIRECT_MODE_MAX_STEPS, buildGcpUnifiedFragment } from "./tools.js";
 import { getGcpAuth, clearGcpAuthCache } from "./gcp-auth.js";
 
 export class GcpProvider extends McpProvider {
@@ -38,22 +38,24 @@ export class GcpProvider extends McpProvider {
     db?: unknown;
     mode?: ChatMode;
   }): ProviderToolKit {
-    if (options.mode === "direct") {
-      const direct = createGcpDirectTools(
-        this,
-        options.memoryContext,
-        options.writer,
-        options.db,
-        this.config.projectId,
-      );
-      return {
-        tools: direct.tools,
-        systemPrompt: direct.systemPrompt,
-        maxSteps: GCP_DIRECT_MODE_MAX_STEPS,
-        afterComplete: direct.afterComplete,
-      };
-    }
-
-    return createGcpTools(this, options.memoryContext, options.writer, options.db, this.config.projectId);
+    const direct = createGcpDirectTools(
+      this,
+      options.memoryContext,
+      options.writer,
+      options.db,
+      this.config.projectId,
+    );
+    // When the MCP cache is cold/unavailable, createGcpDirectTools returns no tools. In unified
+    // mode, omit the GCP prompt fragment in that case so the shared prompt never advertises GCP
+    // query tools that aren't actually registered.
+    const hasTools = Object.keys(direct.tools).length > 0;
+    return {
+      tools: direct.tools,
+      maxSteps: GCP_DIRECT_MODE_MAX_STEPS,
+      afterComplete: direct.afterComplete,
+      ...(options.mode === "unified"
+        ? (hasTools ? { promptFragments: [buildGcpUnifiedFragment(this.config.projectId)] } : {})
+        : { systemPrompt: direct.systemPrompt }),
+    };
   }
 }

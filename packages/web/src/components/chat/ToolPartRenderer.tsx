@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useRef } from "react";
+import React, { memo } from "react";
 import { Streamdown } from "streamdown";
 import { CLIENT_TOOL_NAMES } from "@tracer-sh/shared";
 import { JsonTree } from "../ui/JsonTree";
@@ -7,6 +7,8 @@ import { theme } from "../../lib/theme";
 import ResultView from "../charts/ResultView";
 import { useProgress, type ProgressStore } from "../../lib/progress-store";
 import { ThinkingDots } from "./MessageParts";
+import { ReasoningBlock } from "./ReasoningBlock";
+import { AnalysisContainer } from "./AnalysisContainer";
 
 interface ToolPart {
   type: string;
@@ -33,19 +35,43 @@ const CRUD_LABELS: Record<string, { done: string; loading: string; errorLabel: s
   [CLIENT_TOOL_NAMES.TOGGLE_MONITOR]: { done: "Monitor Toggled", loading: "Toggling monitor...", errorLabel: "Monitor Error" },
 };
 
-/** Nice labels for known sub-agent tools. Unknown tools derive a label from the tool name. */
+/** Provider labels by query-tool part type. `tool-execute_*` are the direct query tools a single
+ *  agent calls itself (direct + unified mode); the bare `tool-nrql`/`tool-posthog`/... keys render
+ *  persisted orchestrator-era sessions. GCP's tools come from its MCP server with dynamic names
+ *  (e.g. tool-list_log_entries), so they have no fixed key — GCP is the only MCP-backed provider,
+ *  so any unmapped provider query tool is GCP (handled by the fallback below). */
 const SUB_AGENT_LABELS: Record<string, string> = {
+  "tool-execute_nrql": "New Relic",
+  "tool-execute_hogql": "PostHog",
   "tool-nrql": "New Relic",
   "tool-newrelic": "New Relic",
-  "tool-gcp": "Google Cloud",
   "tool-hogql": "PostHog",
   "tool-posthog": "PostHog",
 };
 
 function getSubAgentLabel(toolType: string): string {
-  if (toolType in SUB_AGENT_LABELS) return SUB_AGENT_LABELS[toolType];
-  const name = toolType.replace(/^tool-/, "");
-  return name.charAt(0).toUpperCase() + name.slice(1);
+  return SUB_AGENT_LABELS[toolType] ?? "Google Cloud";
+}
+
+/** Map a provider query-tool part type to its per-provider accent key (left border + label).
+ *  Unmapped tools are GCP's dynamically-named MCP tools, so they resolve to the gcp accent. */
+const SUB_AGENT_ACCENTS: Record<string, string> = {
+  "tool-execute_nrql": "newrelic",
+  "tool-execute_hogql": "posthog",
+  "tool-nrql": "newrelic",
+  "tool-newrelic": "newrelic",
+  "tool-hogql": "posthog",
+  "tool-posthog": "posthog",
+};
+
+function getProviderAccent(toolType: string): { container: string; label: string } {
+  const key = SUB_AGENT_ACCENTS[toolType] ?? "gcp";
+  return (
+    theme.investigationAccents[key] ?? {
+      container: theme.investigationContainer,
+      label: theme.investigationLabel,
+    }
+  );
 }
 
 function isSubAgentOutput(output: unknown): output is SubAgentOutput {
@@ -74,6 +100,7 @@ function queryCount(parts: ProgressPart[]): number {
 
 const TOOL_LABELS: Record<string, string> = {
   execute_nrql: "Executing NRQL query",
+  execute_hogql: "Executing HogQL query",
 };
 
 // ── Memoized part components ──
@@ -85,23 +112,6 @@ const ToolCallItem = memo(function ToolCallItem({ toolName }: { toolName: string
       <span className="inline-block w-3.5 h-3.5 border-2 border-[#2b5ea7] border-t-transparent rounded-full animate-spin" />
       <span className="text-sm text-[#2b5ea7] font-sans">{label}</span>
     </div>
-  );
-});
-
-const ReasoningItem = memo(function ReasoningItem({ content, isAnimating }: { content: string; isAnimating: boolean }) {
-  const detailsRef = useRef<HTMLDetailsElement>(null);
-  useEffect(() => {
-    if (isAnimating && detailsRef.current) detailsRef.current.open = true;
-  }, [isAnimating]);
-  return (
-    <details ref={detailsRef} className="mb-2 border border-[#e8e3da]/30 rounded-md">
-      <summary className="cursor-pointer select-none px-3 py-1.5 text-xs text-[#9c9890] italic hover:text-[#6b6560] transition-colors">
-        Thinking
-      </summary>
-      <div className="px-3 pb-2 text-sm text-[#9c9890] italic">
-        <Streamdown isAnimating={isAnimating} controls={{ code: true }} linkSafety={{ enabled: false }}>{content}</Streamdown>
-      </div>
-    </details>
   );
 });
 
@@ -136,30 +146,63 @@ const QueryItem = memo(function QueryItem({ query, results, index, total }: { qu
   );
 });
 
+/** Render one progress part. `inAnalysis` selects clean prose (like direct mode's
+ *  Analysis section) vs the lighter investigation-phase text styling. */
+function renderProgressPart(
+  p: ProgressPart,
+  key: number,
+  isAnimating: boolean,
+  qTotal: number,
+  nextQueryIndex: () => number,
+  inAnalysis: boolean,
+) {
+  if (p.type === "tool-call") {
+    if (!isAnimating) return null;
+    return <ToolCallItem key={key} toolName={p.toolName} />;
+  }
+  if (p.type === "reasoning") {
+    return <ReasoningBlock key={key} content={p.content} isAnimating={isAnimating} />;
+  }
+  if (p.type === "text") {
+    if (inAnalysis) {
+      if (!p.content.trim()) return null;
+      return (
+        <Streamdown key={key} isAnimating={isAnimating} controls={{ code: true }} linkSafety={{ enabled: false }}>
+          {p.content}
+        </Streamdown>
+      );
+    }
+    return <TextItem key={key} content={p.content} isAnimating={isAnimating} />;
+  }
+  if (p.type === "summary") {
+    return <SummaryItem key={key} content={p.content} />;
+  }
+  if (p.type === "query" && p.query) {
+    const idx = nextQueryIndex();
+    return <QueryItem key={key} query={p.query} results={p.results} index={idx} total={qTotal} />;
+  }
+  return null;
+}
+
 const ProgressPartsList = memo(function ProgressPartsList({ parts, isAnimating }: { parts: ProgressPart[]; isAnimating: boolean }) {
   const qTotal = queryCount(parts);
   let qIdx = 0;
+  const nextQueryIndex = () => qIdx++;
+
+  // Split at the begin_analysis marker (like MessageParts does for direct mode): the part
+  // before it is the investigation, everything after is the final Analysis box.
+  const markerIdx = parts.findIndex((p) => p.type === "analysis-start");
+  const before = markerIdx === -1 ? parts : parts.slice(0, markerIdx);
+  const after = markerIdx === -1 ? [] : parts.slice(markerIdx + 1);
 
   return (
     <>
-      {parts.map((p, i) => {
-        if (p.type === "tool-call") {
-          if (!isAnimating) return null;
-          return <ToolCallItem key={i} toolName={p.toolName} />;
-        }
-        if (p.type === "reasoning") {
-          return <ReasoningItem key={i} content={p.content} isAnimating={isAnimating} />;
-        }
-        if (p.type === "text") {
-          return <TextItem key={i} content={p.content} isAnimating={isAnimating} />;
-        }
-        if (p.type === "summary") {
-          return <SummaryItem key={i} content={p.content} />;
-        }
-        if (p.type !== "query" || !p.query) return null;
-        const idx = qIdx++;
-        return <QueryItem key={i} query={p.query} results={p.results} index={idx} total={qTotal} />;
-      })}
+      {before.map((p, i) => renderProgressPart(p, i, isAnimating, qTotal, nextQueryIndex, false))}
+      {after.length > 0 && (
+        <AnalysisContainer>
+          {after.map((p, i) => renderProgressPart(p, before.length + 1 + i, isAnimating, qTotal, nextQueryIndex, true))}
+        </AnalysisContainer>
+      )}
       {isAnimating && <ThinkingDots className={theme.investigationThinking} />}
     </>
   );
@@ -181,14 +224,15 @@ export const ToolPartRenderer = memo(function ToolPartRenderer({ part, progressS
 
   if (isSubAgent) {
     const label = getSubAgentLabel(part.type);
+    const accent = getProviderAccent(part.type);
     const isComplete = part.state === "output-available";
     const output = isComplete ? part.output : undefined;
 
     // Handle error output
     if (isComplete && isSubAgentOutput(output) && output.error) {
       return (
-        <div className={theme.investigationContainer}>
-          <div className={theme.investigationLabel}>{label} Sub-Agent</div>
+        <div className={accent.container}>
+          <div className={accent.label}>{label}</div>
           <div className={theme.resultErrorMessage}>{output.error}</div>
         </div>
       );
@@ -210,14 +254,16 @@ export const ToolPartRenderer = memo(function ToolPartRenderer({ part, progressS
 
     if (parts) {
       const qCount = queryCount(parts);
+      // Always keep the provider name in the header — in unified mode several providers'
+      // query tools stream side by side, so each must be unambiguously labeled.
       const headerLabel = isComplete
-        ? `${label} Sub-Agent (${qCount} ${qCount === 1 ? "query" : "queries"})`
+        ? `${label} (${qCount} ${qCount === 1 ? "query" : "queries"})`
         : qCount > 0
-          ? `Investigating... (${qCount} ${qCount === 1 ? "query" : "queries"})`
-          : `Investigating via ${label}...`;
+          ? `${label} — investigating (${qCount} ${qCount === 1 ? "query" : "queries"})`
+          : `Querying ${label}...`;
       return (
-        <div className={theme.investigationContainer}>
-          <div className={theme.investigationLabel}>{headerLabel}</div>
+        <div className={accent.container}>
+          <div className={accent.label}>{headerLabel}</div>
           {part.input?.task && (
             <div className={theme.investigationTask}>
               Task: {part.input.task}

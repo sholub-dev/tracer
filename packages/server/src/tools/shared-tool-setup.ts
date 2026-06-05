@@ -2,6 +2,9 @@ import type { Db } from "../db/client.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 import type { ChatToolWriter as StreamWriter, AfterCompleteParams, ChatMode } from "@tracer-sh/shared";
 import { toolMemories } from "../db/schema.js";
+import { buildUnifiedModePrompt } from "../lib/shared-prompts.js";
+import { injectMemories } from "../agents/chat/sub-agent.js";
+import { DEFAULTS } from "../config.js";
 
 export interface BaseToolSetup {
   tools: Record<string, unknown>;
@@ -57,8 +60,24 @@ export function collectBaseTools(
     }
   }
 
-  // Merge system prompts from all providers (direct mode)
-  const systemPrompt = systemPrompts.length > 0 ? systemPrompts.join("\n\n---\n\n") : undefined;
+  // System prompt assembly:
+  // - unified: ONE coherent prompt — shared intro/discipline/analysis once + each provider's
+  //   role-less fragment (begin_analysis already comes from the merged direct tools).
+  // - direct: a single connected provider supplies its own complete system prompt.
+  const systemPrompt =
+    mode === "unified"
+      ? (promptFragments.length > 0
+          ? injectMemories(
+              buildUnifiedModePrompt(promptFragments, maxSteps ?? DEFAULTS.directModeMaxSteps),
+              // Unified holds every connected provider's tools, so surface all their memories
+              // (direct mode injects the active provider's memories via its own systemPrompt).
+              {
+                toolName: "unified",
+                existingMemories: memories.filter((m) => connectedProviders.some((p) => p.type === m.toolName)),
+              },
+            )
+          : undefined)
+      : (systemPrompts.length > 0 ? systemPrompts.join("\n\n---\n\n") : undefined);
 
   // Chain afterComplete callbacks so all providers run their post-processing
   const afterComplete = afterCompleteCallbacks.length > 0

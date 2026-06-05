@@ -159,11 +159,28 @@ export const theme = {
   // ── Analysis container (direct mode, blue accent) ──
   analysisContainer: "bg-[#eaf0f8] border border-[#2b5ea7]/20 rounded px-4 py-3 my-3",
 
-  // ── Sub-agent investigation (green accent) ──
+  // ── Sub-agent investigation (default green accent; per-provider overrides below) ──
   investigationContainer:
     "border-l-2 border-[#2a7a4a] pl-4 my-3",
   investigationLabel:
     "text-[9px] uppercase tracking-[0.15em] text-[#2a7a4a] font-sans font-semibold mb-2",
+  // Per-provider sub-agent accents (left border + label). Falls back to the green default.
+  // New Relic green, PostHog amber, GCP violet — mutually distinct and distinct from the
+  // blue (#2b5ea7) direct-mode Analysis box.
+  investigationAccents: {
+    newrelic: {
+      container: "border-l-2 border-[#2a7a4a] pl-4 my-3",
+      label: "text-[9px] uppercase tracking-[0.15em] text-[#2a7a4a] font-sans font-semibold mb-2",
+    },
+    posthog: {
+      container: "border-l-2 border-[#f7a501] pl-4 my-3",
+      label: "text-[9px] uppercase tracking-[0.15em] text-[#f7a501] font-sans font-semibold mb-2",
+    },
+    gcp: {
+      container: "border-l-2 border-[#7c3aed] pl-4 my-3",
+      label: "text-[9px] uppercase tracking-[0.15em] text-[#7c3aed] font-sans font-semibold mb-2",
+    },
+  } as Record<string, { container: string; label: string }>,
   investigationTask: "text-xs text-[#9c9890] font-sans mb-2 italic",
   investigationThinking: "text-[#9c9890] py-2",
   analysisBlock:

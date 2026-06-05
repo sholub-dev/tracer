@@ -4,9 +4,6 @@
  */
 
 export const FEATURES = {
-  /** Two-agent orchestrator mode (disabled — direct mode only). */
-  orchestratorMode: false,
-
   /** Dashboard page with grid widgets. */
   dashboards: false,
 

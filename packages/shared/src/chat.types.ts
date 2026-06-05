@@ -6,6 +6,10 @@ export type ProgressPart =
   | { type: "text"; content: string }
   | { type: "tool-call"; toolName: string }
   | { type: "reasoning"; content: string }
+  // Marks where the sub-agent's `begin_analysis` tool fired — everything after it
+  // is the final Analysis (rendered in the distinct Analysis box, like direct mode).
+  | { type: "analysis-start" }
+  // Legacy: older persisted sessions styled the last text part as a summary block.
   | { type: "summary"; content: string };
 
 /** Tool names as registered on the server */

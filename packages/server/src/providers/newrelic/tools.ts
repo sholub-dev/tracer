@@ -7,9 +7,7 @@ import { tool } from "ai";
 import type { NewRelicProvider } from "./newrelic.provider.js";
 import { formatTimestamps, type AfterCompleteParams, type ChatToolMemoryContext, type ChatToolWriter } from "@tracer-sh/shared";
 import {
-  runSubAgent,
   injectMemories,
-  subAgentModelOutput,
   type SubAgentQuery,
 } from "../../agents/chat/sub-agent.js";
 import type { Db } from "../../db/client.js";
@@ -18,13 +16,11 @@ import { beginAnalysisTool, ANALYSIS_TOOL_NAME } from "../../tools/analysis-tool
 import { formatNrqlCsv, sanitizeNrqlRows } from "./nrql-formatter.js";
 import {
   NR_DIRECT_MODE_MAX_STEPS,
-  newRelicSystemPrompt,
   directModeSystemPrompt,
-  directSubAgentPrompt,
-  investigateSubAgentPrompt,
+  nrUnifiedFragment,
 } from "./prompts.js";
 
-export { NR_DIRECT_MODE_MAX_STEPS, newRelicSystemPrompt };
+export { NR_DIRECT_MODE_MAX_STEPS, nrUnifiedFragment };
 
 // ── Shared tool builder ──
 
@@ -82,42 +78,3 @@ export function createNewRelicDirectTools(
   };
 }
 
-export function createNewRelicTools(provider: NewRelicProvider, memoryContext?: ChatToolMemoryContext, writer?: ChatToolWriter, db?: unknown) {
-  return {
-    nrql: tool({
-      description:
-        "Investigate New Relic data by describing WHAT you want to find out. A sub-agent will autonomously write and execute NRQL queries, handle error recovery, and save lessons learned. Results are AUTOMATICALLY displayed to the user in a rich UI — NEVER repeat or reformat them in your text response. If the sub-agent's analysis includes a question, use conversation context to answer it or ask the user.",
-      inputSchema: z.object({
-        task: z.string().describe("A clear description of what to investigate (e.g. 'find recent errors and their root causes', 'check latency for /api/users endpoint in the last hour')"),
-        directive: z.enum(["DIRECT", "INVESTIGATE"]).describe(
-          "DIRECT for simple lookups/counts. INVESTIGATE for root-cause analysis, tracing, cross-referencing."
-        ),
-      }),
-      execute: async ({ task, directive }, { toolCallId, abortSignal }) => {
-        if (!db) {
-          return { error: "Database not available for model resolution." };
-        }
-
-        const collectedQueries: SubAgentQuery[] = [];
-        const executeNrql = buildExecuteNrqlTool(provider, collectedQueries);
-        const systemPrompt = directive === "DIRECT" ? directSubAgentPrompt : investigateSubAgentPrompt;
-
-        return runSubAgent({
-          providerType: "newrelic",
-          db: db as Db,
-          systemPrompt,
-          task,
-          toolCallId,
-          queryTools: { execute_nrql: executeNrql },
-          queryToolNames: ["execute_nrql"],
-          collectedQueries,
-          memoryContext,
-          writer,
-          sessionId: writer?.sessionId,
-          abortSignal,
-        });
-      },
-      toModelOutput: ({ output }) => subAgentModelOutput(output),
-    }),
-  };
-}

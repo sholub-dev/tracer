@@ -2,15 +2,19 @@ import type { Db } from "../db/client.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 import type { ChatToolWriter as StreamWriter, ChatMode } from "@tracer-sh/shared";
 import { DEFAULT_CHAT_MODE } from "@tracer-sh/shared";
-import { readAppSetting } from "../db/config-reader.js";
 import { collectBaseTools, type BaseToolSetup } from "./shared-tool-setup.js";
 
 type ChatToolsResult = Omit<BaseToolSetup, "connectedProviders" | "tools"> & {
   tools: Record<string, unknown> | undefined;
 };
 
-export function collectChatTools(registry: ProviderRegistry, db: Db, writer?: StreamWriter, activeProvider?: string): ChatToolsResult {
-  const mode = readAppSetting<ChatMode>(db, "chat_mode") ?? DEFAULT_CHAT_MODE;
+export function collectChatTools(
+  registry: ProviderRegistry,
+  db: Db,
+  writer?: StreamWriter,
+  activeProvider?: string,
+  mode: ChatMode = DEFAULT_CHAT_MODE,
+): ChatToolsResult {
   const { tools, promptFragments, systemPrompt, maxSteps, afterComplete, connectedProviders } =
     collectBaseTools(registry, db, writer, mode, activeProvider);
 

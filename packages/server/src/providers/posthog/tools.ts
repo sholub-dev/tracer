@@ -7,9 +7,7 @@ import { tool } from "ai";
 import type { PosthogProvider } from "./posthog.provider.js";
 import type { AfterCompleteParams, ChatToolMemoryContext, ChatToolWriter } from "@tracer-sh/shared";
 import {
-  runSubAgent,
   injectMemories,
-  subAgentModelOutput,
   type SubAgentQuery,
 } from "../../agents/chat/sub-agent.js";
 import type { Db } from "../../db/client.js";
@@ -18,13 +16,11 @@ import { beginAnalysisTool, ANALYSIS_TOOL_NAME } from "../../tools/analysis-tool
 import { formatHogqlCsv } from "./posthog-formatter.js";
 import {
   POSTHOG_DIRECT_MODE_MAX_STEPS,
-  posthogSystemPrompt,
   directModeSystemPrompt,
-  directSubAgentPrompt,
-  investigateSubAgentPrompt,
+  posthogUnifiedFragment,
 } from "./prompts.js";
 
-export { POSTHOG_DIRECT_MODE_MAX_STEPS, posthogSystemPrompt };
+export { POSTHOG_DIRECT_MODE_MAX_STEPS, posthogUnifiedFragment };
 
 // ── Shared tool builder ──
 
@@ -77,45 +73,5 @@ export function createPosthogDirectTools(
     },
     systemPrompt: injectMemories(directModeSystemPrompt, memoryContext),
     afterComplete: buildAfterComplete({ providerType: "posthog", db: db as Db | undefined, memoryContext, collectedQueries }),
-  };
-}
-
-export function createPosthogTools(provider: PosthogProvider, memoryContext?: ChatToolMemoryContext, writer?: ChatToolWriter, db?: unknown) {
-  return {
-    hogql: tool({
-      description:
-        "Investigate PostHog data by describing WHAT you want to find out. A sub-agent will autonomously write and execute HogQL queries, handle error recovery, and save lessons learned. Results are AUTOMATICALLY displayed to the user in a rich UI — NEVER repeat or reformat them in your text response. If the sub-agent's analysis includes a question, use conversation context to answer it or ask the user.",
-      inputSchema: z.object({
-        task: z.string().describe("A clear description of what to investigate (e.g. 'find recent $exception errors on checkout and how many users they affect', 'count pageviews per path in the last hour')"),
-        directive: z.enum(["DIRECT", "INVESTIGATE"]).describe(
-          "DIRECT for simple lookups/counts. INVESTIGATE for root-cause analysis, user-journey tracing, cross-referencing."
-        ),
-      }),
-      execute: async ({ task, directive }, { toolCallId, abortSignal }) => {
-        if (!db) {
-          return { error: "Database not available for model resolution." };
-        }
-
-        const collectedQueries: SubAgentQuery[] = [];
-        const executeHogql = buildExecuteHogqlTool(provider, collectedQueries);
-        const systemPrompt = directive === "DIRECT" ? directSubAgentPrompt : investigateSubAgentPrompt;
-
-        return runSubAgent({
-          providerType: "posthog",
-          db: db as Db,
-          systemPrompt,
-          task,
-          toolCallId,
-          queryTools: { execute_hogql: executeHogql },
-          queryToolNames: ["execute_hogql"],
-          collectedQueries,
-          memoryContext,
-          writer,
-          sessionId: writer?.sessionId,
-          abortSignal,
-        });
-      },
-      toModelOutput: ({ output }) => subAgentModelOutput(output),
-    }),
   };
 }

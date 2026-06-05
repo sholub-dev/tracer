@@ -165,6 +165,7 @@ export function AgentConfigSection() {
             />
             <span className="text-[10px] text-[#9c9890]">tokens</span>
           </div>
+
         </div>
 
         {/* Save button */}

@@ -15,9 +15,8 @@ import { PosthogClient } from "./posthog.client.js";
 import { rowsToObjects } from "./posthog-formatter.js";
 import { errorQuery, logQuery, transactionQuery } from "./queries.js";
 import {
-  createPosthogTools,
   createPosthogDirectTools,
-  posthogSystemPrompt,
+  posthogUnifiedFragment,
   POSTHOG_DIRECT_MODE_MAX_STEPS,
 } from "./tools.js";
 
@@ -118,30 +117,19 @@ export class PosthogProvider extends BaseProvider {
     db?: unknown;
     mode?: ChatMode;
   }): ProviderToolKit {
-    if (options.mode === "direct") {
-      const direct = createPosthogDirectTools(
-        this,
-        options.memoryContext,
-        options.writer,
-        options.db,
-      );
-      return {
-        tools: direct.tools,
-        systemPrompt: direct.systemPrompt,
-        maxSteps: POSTHOG_DIRECT_MODE_MAX_STEPS,
-        afterComplete: direct.afterComplete,
-      };
-    }
-
-    const tools = createPosthogTools(
+    const direct = createPosthogDirectTools(
       this,
       options.memoryContext,
       options.writer,
       options.db,
     );
     return {
-      tools,
-      promptFragments: [posthogSystemPrompt],
+      tools: direct.tools,
+      maxSteps: POSTHOG_DIRECT_MODE_MAX_STEPS,
+      afterComplete: direct.afterComplete,
+      ...(options.mode === "unified"
+        ? { promptFragments: [posthogUnifiedFragment] }
+        : { systemPrompt: direct.systemPrompt }),
     };
   }
 }

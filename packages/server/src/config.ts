@@ -45,6 +45,14 @@ export const CONFIG = {
 
   maxModelResultChars: 8_000,
 
+  /**
+   * Code-level cap on the reasoning ("thinking") text a model may stream within a
+   * single step. Enforced in the stream loops (not just via the provider
+   * thinkingBudget, which models sometimes ignore and loop indefinitely) — when a
+   * step exceeds this, the stream is aborted programmatically. Reset each step.
+   */
+  maxReasoningCharsPerStep: 40_000,
+
   // ── Monitor scheduler ──
 
   monitorTickIntervalMs: 10_000,
@@ -80,7 +88,6 @@ export const DEFAULTS = {
 /** App settings keys stored in the `app_settings` table. */
 export const SETTINGS_KEYS = {
   chatModel: "chat_model",
-  chatMode: "chat_mode",
   timezone: "timezone",
   directModeMaxSteps: "direct_mode_max_steps",
   subAgentMaxSteps: "sub_agent_max_steps",

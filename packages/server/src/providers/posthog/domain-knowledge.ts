@@ -17,6 +17,7 @@ HogQL is PostHog's SQL dialect (ClickHouse SQL under the hood). Queries read fro
 - \`SELECT ... FROM events\` — the main table. Standard SQL: \`WHERE\`, \`GROUP BY\`, \`HAVING\`, \`ORDER BY\`, \`LIMIT\`. Unlike NRQL, HogQL HAS \`GROUP BY\` and \`DISTINCT\`.
 - **LIMIT:** the API applies \`LIMIT 100\` when you omit one. For exploration set an explicit small \`LIMIT\` (10); increase to 20-50 only when needed; never start with 100+. Max for a personal-API-key request is 50,000. **OFFSET pagination is rejected** for personal API keys — paginate with a \`timestamp\` keyset filter instead.
 - Time filtering uses \`timestamp\` with ClickHouse intervals: \`WHERE timestamp >= now() - interval 24 hour\`. Also \`toStartOfDay(now())\`, \`toDateTime('2024-01-15 14:00:00')\`.
+- **Trends over time render as a line chart.** For any "over time" / "trend" / "by hour|day" question, \`GROUP BY\` a time bucket — \`toStartOfMinute|Hour|Day(timestamp)\` — select it as the FIRST column alongside your metric(s), and \`ORDER BY\` it. One numeric metric (optionally one breakdown column for multiple lines) plots as a timeseries; otherwise results show as a table. Example: \`SELECT toStartOfHour(timestamp) AS t, count() AS events FROM events WHERE timestamp >= now() - interval 24 hour GROUP BY t ORDER BY t\`.
 
 ### Properties
 - Event properties: \`properties.$current_url\`, \`properties.$browser\`, or custom \`properties.my_prop\`. PostHog auto-captured properties are prefixed with \`$\`.

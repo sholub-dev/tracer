@@ -13,7 +13,7 @@ import {
 import type { Db } from "../../db/client.js";
 import { toolModelOutput, buildAfterComplete } from "../../tools/provider-tool-helpers.js";
 import { beginAnalysisTool, ANALYSIS_TOOL_NAME } from "../../tools/analysis-tool.js";
-import { formatHogqlCsv } from "./posthog-formatter.js";
+import { formatHogqlCsv, toChartRows } from "./posthog-formatter.js";
 import {
   POSTHOG_DIRECT_MODE_MAX_STEPS,
   directModeSystemPrompt,
@@ -36,7 +36,10 @@ function buildExecuteHogqlTool(
     }),
     execute: async ({ query }, { toolCallId }) => {
       try {
-        const rows = (await provider.executeRawQuery(query)) as Record<string, unknown>[];
+        const raw = (await provider.executeRawQuery(query)) as Record<string, unknown>[];
+        // Reshape time-bucketed results into New Relic's chartable contract so they plot as a
+        // timeseries (no-op for non-timeseries shapes — they keep rendering as tables/badges).
+        const rows = toChartRows(raw);
         collectedQueries.push({ query, results: rows });
 
         writer?.write({
@@ -44,7 +47,10 @@ function buildExecuteHogqlTool(
           data: { toolCallId, part: { type: "query", query, results: rows } },
         });
 
-        const csv = formatHogqlCsv(rows);
+        // The model reads the CSV built from the ORIGINAL rows: HogQL already returns time buckets
+        // as readable strings under their own alias, so there is nothing to humanize — and using
+        // `raw` avoids relabeling/dropping the user's columns or mangling numeric metrics.
+        const csv = formatHogqlCsv(raw);
         return { parts: [{ type: "query" as const, query, results: rows }], analysis: csv };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

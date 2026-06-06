@@ -34,7 +34,12 @@
     "onlyBuiltDependencies": [
       "better-sqlite3",
       "esbuild"
-    ]
+    ],
+    "overrides": {
+      "mermaid": "^11.15.0",
+      "postcss": "^8.5.10",
+      "uuid": "^11.1.1"
+    }
   },
   "devDependencies": {
     "concurrently": "^9.2.1",

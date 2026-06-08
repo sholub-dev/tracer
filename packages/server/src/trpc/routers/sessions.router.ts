@@ -110,7 +110,15 @@ export const sessionsRouter = router({
       .where(and(
         notLike(chatSessions.id, `${SESSION_PREFIX.DASHBOARD}%`),
         notLike(chatSessions.id, `${SESSION_PREFIX.MONITORS}%`),
-        or(isNull(chatSessions.kind), ne(chatSessions.kind, SESSION_KIND.IMPORTED)),
+        // Imported sessions are read-only and API sessions are driven headlessly by
+        // external agents — neither should drive the "unviewed done" nav badge.
+        or(
+          isNull(chatSessions.kind),
+          and(
+            ne(chatSessions.kind, SESSION_KIND.IMPORTED),
+            ne(chatSessions.kind, SESSION_KIND.API),
+          ),
+        ),
         or(
           eq(chatSessions.status, "streaming"),
           eq(chatSessions.status, "done"),

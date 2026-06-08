@@ -24,6 +24,7 @@ export const SESSION_PREFIX = {
 
 export const SESSION_KIND = {
   IMPORTED: "imported",
+  API: "api",
 } as const;
 export type SessionKind = (typeof SESSION_KIND)[keyof typeof SESSION_KIND];
 

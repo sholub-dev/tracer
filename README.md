@@ -66,9 +66,19 @@ tracer-sh
 
 Open `http://localhost:3579`, go to **Settings** to add your API keys and choose an LLM — done.
 
+## Headless / CLI
+
+Run an investigation from the terminal and get back the final analysis — so other tools and agents (including Claude Code) can drive Tracer:
+
+```bash
+tracer-sh analyze "Why did checkout error rate spike after 14:00 UTC?"
+```
+
+Continue a prior run with `--session <id>`; pass `--json` for the full response (session id, queries, usage). Requires a running server.
+
 ## Supported Providers
 
-**Data:** New Relic (NRQL via NerdGraph), Google Cloud (Logs, Traces, Metrics, Errors)
+**Data:** New Relic (NRQL), Google Cloud (Logs, Traces, Metrics, Errors), PostHog (HogQL)
 
 **LLM:** Anthropic (Claude), Google (Gemini)
 

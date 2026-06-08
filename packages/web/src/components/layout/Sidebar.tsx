@@ -326,7 +326,7 @@ export function Sidebar({
             updateAvailable ? "cursor-pointer hover:text-[#2b5ea7]" : "cursor-default"
           }`}
         >
-          v{__APP_VERSION__}
+          v{updateCheck.data?.currentVersion ?? __APP_VERSION__}
           {updateAvailable ? (
             <span className="w-2 h-2 rounded-full bg-[#2b5ea7] animate-pulse" />
           ) : updateCheck.data && !updateCheck.isLoading ? (

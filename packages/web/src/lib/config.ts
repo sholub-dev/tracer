@@ -10,6 +10,13 @@ export const WEB_CONFIG = {
   activeStreamPollingMs: 5_000,
   monitorPollingMs: 60_000,
   updateCheckStaleTimeMs: 5 * 60 * 1000,
+  // ── Self-update restart: poll for the restarted server, then reload ──
+  /** Grace period before probing, to let the old server exit first. */
+  updateRestartProbeDelayMs: 1_500,
+  /** Interval between readiness probes while the server restarts. */
+  updateRestartPollMs: 1_000,
+  /** Give up polling and reload anyway after this long. */
+  updateRestartMaxWaitMs: 60_000,
 
   // ── Layout ──
 

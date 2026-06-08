@@ -67,6 +67,11 @@ export const CONFIG = {
   // ── Updater ──
 
   npmViewTimeoutMs: 10_000,
+  /** `npm install -g` can take a while (network + native rebuilds), so allow more headroom. */
+  npmInstallTimeoutMs: 120_000,
+  /** Buffer cap for `npm install -g` output; well above the 1MB default so a noisy
+   *  but successful install (native rebuild logs) isn't misreported as a failure. */
+  npmInstallMaxBufferBytes: 16 * 1024 * 1024,
 
   // ── Dashboard defaults ──
 

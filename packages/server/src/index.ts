@@ -2,7 +2,7 @@ import { serve } from "@hono/node-server";
 import { eq } from "drizzle-orm";
 import { unixNow } from "@tracer-sh/shared";
 import { CONFIG } from "./config.js";
-import { checkForUpdateBackground } from "./updater.js";
+import { checkForUpdateBackground, setRestartHandler } from "./updater.js";
 import { db } from "./db/client.js";
 import { runSetup } from "./db/setup.js";
 import { chatSessions } from "./db/schema.js";
@@ -50,18 +50,24 @@ async function main() {
     process.exit(1);
   });
 
-  const shutdown = async () => {
-    const timeout = setTimeout(() => process.exit(1), CONFIG.shutdownGracePeriodMs);
+  const shutdown = async (code = 0) => {
+    // If graceful teardown stalls, force-exit — but preserve a non-zero restart
+    // code so the launcher still respawns rather than treating it as a crash.
+    const timeout = setTimeout(() => process.exit(code === 0 ? 1 : code), CONFIG.shutdownGracePeriodMs);
     await scheduler.stop();
     for (const p of providers.getAllProviders()) {
       await p.dispose().catch(() => {});
     }
     clearTimeout(timeout);
-    process.exit(0);
+    process.exit(code);
   };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
-  process.on("SIGHUP", shutdown);
+  process.on("SIGINT", () => shutdown());
+  process.on("SIGTERM", () => shutdown());
+  process.on("SIGHUP", () => shutdown());
+  // A successful self-update asks for a graceful restart: tear down cleanly
+  // (dispose MCP subprocesses, stop the scheduler) then exit with the restart
+  // code so the launcher re-spawns the freshly installed server.
+  setRestartHandler(() => { void shutdown(CONFIG.restartExitCode); });
 }
 
 main().catch((err) => {

@@ -95,16 +95,17 @@ export function Sidebar({
     markViewedMutation.mutate({ id: currentSessionId });
   }, [sessionsQuery.data, currentSessionId, currentPage]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const { regularSessions, importedSessions } = useMemo(() => {
+  const { regularSessions, importedSessions, apiSessions } = useMemo(() => {
     const all = sessionsQuery.data ?? [];
-    const regular = all.filter((s) => s.kind !== SESSION_KIND.IMPORTED);
+    const regular = all.filter((s) => s.kind !== SESSION_KIND.IMPORTED && s.kind !== SESSION_KIND.API);
     const imported = all.filter((s) => s.kind === SESSION_KIND.IMPORTED);
-    return { regularSessions: regular, importedSessions: imported };
+    const api = all.filter((s) => s.kind === SESSION_KIND.API);
+    return { regularSessions: regular, importedSessions: imported, apiSessions: api };
   }, [sessionsQuery.data]);
 
   const alertCount = alertCountQuery.data ?? 0;
   const doneSessionCount = currentPage === "debug" && sessionsQuery.data
-    ? sessionsQuery.data.filter(s => s.status === "done" && s.id !== currentSessionId).length
+    ? sessionsQuery.data.filter(s => s.status === "done" && s.id !== currentSessionId && s.kind !== SESSION_KIND.API).length
     : (activeStatusQuery.data?.done ?? 0);
 
   const deleteSessionMutation = trpc.sessions.delete.useMutation();
@@ -287,6 +288,14 @@ export function Sidebar({
                           Imported
                         </div>
                         <ScrollableList>{importedSessions.map(renderRow)}</ScrollableList>
+                      </>
+                    )}
+                    {apiSessions.length > 0 && (
+                      <>
+                        <div className="text-[10px] uppercase tracking-wider text-[#9c9890]/60 px-3 pt-3 pb-1">
+                          API
+                        </div>
+                        <ScrollableList>{apiSessions.map(renderRow)}</ScrollableList>
                       </>
                     )}
                   </div>

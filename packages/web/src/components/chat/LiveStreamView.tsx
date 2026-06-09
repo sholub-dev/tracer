@@ -57,17 +57,18 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
       } catch { /* ignore parse errors */ }
     });
 
+    // Handlers only close the stream; onComplete fires from the reader loop
+    // below, after the remaining chunks are drained and the final flush runs —
+    // otherwise the parent could refetch/unmount before the last content renders.
     eventSource.addEventListener("done", () => {
       try { ctrl.close(); } catch { /* already closed */ }
       eventSource.close();
-      if (!cancelled) onCompleteRef.current();
     });
 
     eventSource.onerror = () => {
       // EventSource.CLOSED = permanent failure, close immediately
       if (eventSource.readyState === EventSource.CLOSED) {
         try { ctrl.close(); } catch { /* already closed */ }
-        if (!cancelled) onCompleteRef.current();
         return;
       }
       // Transient error — allow auto-reconnect, but give up after 3 within 10s
@@ -75,7 +76,6 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
       if (errorCount >= WEB_CONFIG.maxSseErrors) {
         try { ctrl.close(); } catch { /* already closed */ }
         eventSource.close();
-        if (!cancelled) onCompleteRef.current();
         return;
       }
       if (errorTimer) clearTimeout(errorTimer);
@@ -83,12 +83,26 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
     };
 
     (async () => {
+      // Throttle renders to one per chatThrottleMs: the server replays the
+      // whole buffered stream on subscribe, so chunks can arrive in a burst.
+      let latest: UIMessage | null = null;
+      let flushTimer: ReturnType<typeof setTimeout> | null = null;
+      const flush = () => {
+        flushTimer = null;
+        const msg = latest;
+        latest = null;
+        if (!cancelled && msg) setMessages([...initialMessagesRef.current, msg]);
+      };
       try {
         for await (const msg of readUIMessageStream({ stream: chunkStream })) {
           if (cancelled) break;
-          setMessages([...initialMessagesRef.current, msg]);
+          latest = msg;
+          if (flushTimer === null) flushTimer = setTimeout(flush, WEB_CONFIG.chatThrottleMs);
         }
       } catch { /* stream ended */ }
+      if (flushTimer !== null) clearTimeout(flushTimer);
+      flush();
+      if (!cancelled) onCompleteRef.current();
     })();
 
     return () => {

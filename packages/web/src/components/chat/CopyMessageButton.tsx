@@ -1,5 +1,4 @@
 import { useState, useCallback, type RefObject } from "react";
-import { domToPng } from "modern-screenshot";
 import { theme } from "../../lib/theme";
 import type { UIMessage } from "ai";
 import { ANALYSIS_MARKER } from "./MessageParts";
@@ -64,6 +63,7 @@ export function CopyMessageButton({ contentRef, parts, size = 14 }: CopyMessageB
     const el = contentRef.current;
     if (!el) return;
     try {
+      const { domToPng } = await import("modern-screenshot");
       const dataUrl = await domToPng(el, { scale: 2 });
       const res = await fetch(dataUrl);
       const blob = await res.blob();

@@ -1,6 +1,5 @@
 import React, { useRef, useCallback, useState } from "react";
 import { Streamdown } from "streamdown";
-import { domToPng } from "modern-screenshot";
 import { CLIENT_TOOL_NAMES } from "@tracer-sh/shared";
 import { ToolPartRenderer } from "./ToolPartRenderer";
 import { ReasoningBlock } from "./ReasoningBlock";
@@ -44,6 +43,7 @@ function AnalysisSection({
     const el = containerRef.current;
     if (!el) return;
     try {
+      const { domToPng } = await import("modern-screenshot");
       const dataUrl = await domToPng(el, { scale: 2 });
       const bytes = new Uint8Array(await (await fetch(dataUrl)).arrayBuffer());
 

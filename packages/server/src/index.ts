@@ -1,6 +1,6 @@
 import { serve } from "@hono/node-server";
 import { eq } from "drizzle-orm";
-import { unixNow } from "@tracer-sh/shared";
+import { FEATURES, unixNow } from "@tracer-sh/shared";
 import { CONFIG } from "./config.js";
 import { checkForUpdateBackground, setRestartHandler } from "./updater.js";
 import { db } from "./db/client.js";
@@ -37,8 +37,8 @@ async function main() {
   const context = createContext({ db, providers });
   const app = createApp(context);
 
-  const scheduler = new MonitorScheduler(db, providers);
-  scheduler.start();
+  const scheduler = FEATURES.monitors ? new MonitorScheduler(db, providers) : null;
+  scheduler?.start();
 
   const server = serve({ fetch: app.fetch, port: CONFIG.port, hostname: CONFIG.host }, (info) => {
     console.log(`Tracer server running on http://localhost:${info.port}`);
@@ -54,7 +54,7 @@ async function main() {
     // If graceful teardown stalls, force-exit — but preserve a non-zero restart
     // code so the launcher still respawns rather than treating it as a crash.
     const timeout = setTimeout(() => process.exit(code === 0 ? 1 : code), CONFIG.shutdownGracePeriodMs);
-    await scheduler.stop();
+    await scheduler?.stop();
     for (const p of providers.getAllProviders()) {
       await p.dispose().catch(() => {});
     }

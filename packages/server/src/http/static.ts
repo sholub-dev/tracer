@@ -30,19 +30,31 @@ export function mountStaticFiles(app: Hono): void {
 
   const indexHtml = readFileSync(resolve(webRoot, "index.html"), "utf-8");
 
+  // dist is immutable for the lifetime of the process — cache file bodies so
+  // repeat requests skip synchronous fs calls on the event loop.
+  const fileCache = new Map<string, { body: Buffer<ArrayBuffer>; headers: Record<string, string> }>();
+
   app.use("*", async (c, next) => {
     const reqPath = c.req.path.slice(1);
     if (!reqPath) { await next(); return; }
-    const filePath = resolve(webRoot, reqPath);
-    if (filePath.startsWith(webRoot) && existsSync(filePath) && !statSync(filePath).isDirectory()) {
+    let file = fileCache.get(reqPath);
+    if (!file) {
+      const filePath = resolve(webRoot, reqPath);
+      if (!filePath.startsWith(webRoot) || !existsSync(filePath) || statSync(filePath).isDirectory()) {
+        await next();
+        return;
+      }
       const mime = MIME_TYPES[extname(filePath)] || "application/octet-stream";
       const headers: Record<string, string> = { "Content-Type": mime };
       if (reqPath.startsWith("assets/")) {
         headers["Cache-Control"] = "public, max-age=31536000, immutable";
       }
-      return c.body(readFileSync(filePath), { headers });
+      file = { body: readFileSync(filePath), headers };
+      fileCache.set(reqPath, file);
     }
-    await next();
+    return c.body(file.body, { headers: file.headers });
   });
-  app.get("*", (c) => c.html(indexHtml));
+  // no-cache (revalidate, don't skip) so a self-update never serves a stale
+  // shell pointing at old hashed chunks.
+  app.get("*", (c) => c.html(indexHtml, 200, { "Cache-Control": "no-cache" }));
 }

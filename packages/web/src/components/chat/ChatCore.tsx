@@ -6,7 +6,7 @@ import {
   useCallback,
   useImperativeHandle,
   forwardRef,
-  createRef,
+  memo,
   type ReactNode,
 } from "react";
 import { useChat, Chat } from "@ai-sdk/react";
@@ -103,6 +103,70 @@ export interface ChatCoreRef {
   isLoading: boolean;
   error?: Error | undefined;
 }
+
+// Memoized so a streaming chunk only re-renders the row whose message object
+// changed — the AI SDK keeps untouched messages referentially stable.
+const MessageRow = memo(function MessageRow({
+  msg,
+  msgIndex,
+  isAnimating,
+  progressStore,
+  variant,
+  sourceTitle,
+  sourceCreatedAt,
+  resolveSourceTitle,
+  renderMessage,
+}: {
+  msg: UIMessage;
+  msgIndex: number;
+  isAnimating: boolean;
+  progressStore: ProgressStore;
+  variant: "full" | "panel";
+  sourceTitle?: string;
+  sourceCreatedAt?: number;
+  resolveSourceTitle?: () => Promise<string | undefined>;
+  renderMessage?: ChatCoreProps["renderMessage"];
+}) {
+  const v = VARIANT_CLASSES[variant];
+  const pad = variant === "panel" ? "px-4" : "px-10";
+  const messageRef = useRef<HTMLDivElement>(null);
+  const label = (
+    <div className={msg.role === "user" ? theme.chatUserLabel : theme.chatAssistantLabel}>
+      {msg.role === "user" ? "you" : "assistant"}
+    </div>
+  );
+  const content = (
+    <div className={msg.role === "user" ? v.userMessage : v.assistantMessage}>
+      <MessageParts
+        parts={msg.parts}
+        isAnimating={isAnimating}
+        progressStore={progressStore}
+        sourceTitle={sourceTitle}
+        sourceCreatedAt={sourceCreatedAt}
+        resolveSourceTitle={resolveSourceTitle}
+      />
+    </div>
+  );
+  const defaultRendering = (
+    <div className="relative group">
+      {!isAnimating && (
+        <div className={theme.chatMessageActions}>
+          <CopyMessageButton contentRef={messageRef} parts={msg.parts} />
+        </div>
+      )}
+      <div ref={messageRef} className={theme.chatMessageCard}>
+        {label}
+        {content}
+      </div>
+    </div>
+  );
+  return (
+    <div className={pad}>
+      {msgIndex > 0 && <div className={v.separator} />}
+      {renderMessage ? renderMessage(msg, msgIndex, { label, content }) : defaultRendering}
+    </div>
+  );
+});
 
 export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
   function ChatCore(
@@ -313,48 +377,20 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
                 </div>
               )}
 
-              {messages.map((msg, msgIndex) => {
-                const isAnimating = msg.id === lastId;
-                const messageRef = createRef<HTMLDivElement>();
-                const label = (
-                  <div className={msg.role === "user" ? theme.chatUserLabel : theme.chatAssistantLabel}>
-                    {msg.role === "user" ? "you" : "assistant"}
-                  </div>
-                );
-                const content = (
-                  <div className={msg.role === "user" ? v.userMessage : v.assistantMessage}>
-                    <MessageParts
-                      parts={msg.parts}
-                      isAnimating={isAnimating}
-                      progressStore={progressStore}
-                      sourceTitle={sourceTitle}
-                      sourceCreatedAt={sourceCreatedAt}
-                      resolveSourceTitle={resolveSourceTitle}
-                    />
-                  </div>
-                );
-                const defaultRendering = (
-                  <div className="relative group">
-                    {!isAnimating && (
-                      <div className={theme.chatMessageActions}>
-                        <CopyMessageButton contentRef={messageRef} parts={msg.parts} />
-                      </div>
-                    )}
-                    <div ref={messageRef} className={theme.chatMessageCard}>
-                      {label}
-                      {content}
-                    </div>
-                  </div>
-                );
-                return (
-                  <div key={msg.id || `msg-${msgIndex}`} className={pad}>
-                    {msgIndex > 0 && <div className={v.separator} />}
-                    {renderMessage
-                      ? renderMessage(msg, msgIndex, { label, content })
-                      : defaultRendering}
-                  </div>
-                );
-              })}
+              {messages.map((msg, msgIndex) => (
+                <MessageRow
+                  key={msg.id || `msg-${msgIndex}`}
+                  msg={msg}
+                  msgIndex={msgIndex}
+                  isAnimating={msg.id === lastId}
+                  progressStore={progressStore}
+                  variant={variant}
+                  sourceTitle={sourceTitle}
+                  sourceCreatedAt={sourceCreatedAt}
+                  resolveSourceTitle={resolveSourceTitle}
+                  renderMessage={renderMessage}
+                />
+              ))}
 
               {showThinkingDots && (
                 <div className={pad}>

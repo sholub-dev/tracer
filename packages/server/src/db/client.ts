@@ -13,6 +13,10 @@ chmodSync(dataDir, 0o700);
 
 export const sqlite: DatabaseType = new Database(join(dataDir, "tracer.db"));
 sqlite.pragma("journal_mode = WAL");
+// NORMAL skips the per-commit WAL fsync; with WAL a crash can lose the last
+// commit but never corrupts the database.
+sqlite.pragma("synchronous = NORMAL");
+sqlite.pragma("busy_timeout = 5000");
 sqlite.pragma("foreign_keys = ON");
 
 export const db = drizzle(sqlite, { schema });

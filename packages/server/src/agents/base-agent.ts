@@ -165,6 +165,7 @@ When the user's question spans multiple providers, query each relevant provider 
 
           const title = sessionTitle(enrichedMessages);
           const now = unixNow();
+          const messagesJson = JSON.stringify(enrichedMessages);
 
           recordAgentRun(context.db, {
             sessionId,
@@ -178,7 +179,7 @@ When the user's question spans multiple providers, query each relevant provider 
             .values({
               id: sessionId,
               title,
-              messages: JSON.stringify(enrichedMessages),
+              messages: messagesJson,
               status: "done",
               createdAt: now,
               updatedAt: now,
@@ -187,7 +188,7 @@ When the user's question spans multiple providers, query each relevant provider 
               target: chatSessions.id,
               set: {
                 title: sql`CASE WHEN ${chatSessions.title} = ${DEFAULT_SESSION_TITLE} THEN ${title} ELSE ${chatSessions.title} END`,
-                messages: JSON.stringify(enrichedMessages),
+                messages: messagesJson,
                 status: sql`CASE WHEN ${chatSessions.status} = 'idle' THEN 'idle' ELSE 'done' END`,
                 updatedAt: now,
               },

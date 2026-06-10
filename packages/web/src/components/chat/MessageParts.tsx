@@ -1,6 +1,6 @@
 import React, { useRef, useCallback, useState } from "react";
 import { Streamdown } from "streamdown";
-import { CLIENT_TOOL_NAMES } from "@tracer-sh/shared";
+import { ANALYSIS_MARKER, findAnalysisMarker } from "@tracer-sh/shared";
 import { ToolPartRenderer } from "./ToolPartRenderer";
 import { ReasoningBlock } from "./ReasoningBlock";
 import { AnalysisContainer } from "./AnalysisContainer";
@@ -18,9 +18,6 @@ interface MessagePartsProps {
   sourceCreatedAt?: number;
   resolveSourceTitle?: () => Promise<string | undefined>;
 }
-
-/** Marker the agent writes to signal "analysis starts here". Stripped from display. */
-export const ANALYSIS_MARKER = "<analysis>";
 
 /** Analysis container with its own copy/download buttons. */
 function AnalysisSection({
@@ -127,33 +124,9 @@ export const MessageParts = React.memo(
       return <span className="text-sm italic text-[#9c9890]">(interrupted)</span>;
     }
 
-    type AnalysisMarker =
-      | { kind: "tool"; partIdx: number }
-      | { kind: "text"; partIdx: number; charIdx: number };
-
-    let marker: AnalysisMarker | null = null;
-
-    // Priority 1: tool-based marker (begin_analysis tool call)
-    for (let i = 0; i < parts.length; i++) {
-      if (parts[i].type === CLIENT_TOOL_NAMES.BEGIN_ANALYSIS) {
-        marker = { kind: "tool", partIdx: i };
-        break;
-      }
-    }
-
-    // Priority 2: text-based marker (backward compat)
-    if (!marker) {
-      for (let i = 0; i < parts.length; i++) {
-        const p = parts[i];
-        if (p.type === "text") {
-          const idx = p.text.indexOf(ANALYSIS_MARKER);
-          if (idx !== -1) {
-            marker = { kind: "text", partIdx: i, charIdx: idx };
-            break;
-          }
-        }
-      }
-    }
+    // Tool-based marker (begin_analysis) takes priority over the legacy
+    // text marker — shared with the compaction split/render helpers.
+    const marker = findAnalysisMarker(parts);
 
     function renderPart(part: UIMessage["parts"][number], i: number | string, textOverride?: string) {
       if (part.type === "reasoning") {

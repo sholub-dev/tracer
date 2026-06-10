@@ -19,6 +19,7 @@ export const colors = {
   error: "#b33a2a",
   success: "#2a7a4a",
   warn: "#a07020",
+  compaction: "#8a6d3b",
 } as const;
 
 export const theme = {
@@ -158,6 +159,15 @@ export const theme = {
 
   // ── Analysis container (direct mode, blue accent) ──
   analysisContainer: "bg-[#eaf0f8] border border-[#2b5ea7]/20 rounded px-4 py-3 my-3",
+
+  // ── Compaction summary (sepia/parchment accent — distinct from blue analysis) ──
+  compactionContainer: "bg-[#f5f1e6] border border-[#8a6d3b]/25 rounded px-4 py-3 my-3",
+  compactionLabel:
+    "text-[9px] uppercase tracking-[0.15em] text-[#8a6d3b] font-sans font-semibold mb-1",
+  compactionButton:
+    "px-4 py-2 text-sm bg-[#f5f1e6] hover:bg-[#efe8d5] text-[#8a6d3b] font-sans font-medium rounded transition-colors border border-[#8a6d3b]/25",
+  compactionPill:
+    "flex items-center gap-2 px-4 py-2 text-sm font-sans text-[#8a6d3b] bg-[#f5f1e6] border border-[#8a6d3b]/25 rounded",
 
   // ── Sub-agent investigation (default green accent; per-provider overrides below) ──
   investigationContainer:

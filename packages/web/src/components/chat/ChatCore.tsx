@@ -11,6 +11,7 @@ import {
 } from "react";
 import { useChat, Chat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
+import { analysisSectionParts } from "@tracer-sh/shared";
 import { theme } from "../../lib/theme";
 import { ProgressStore } from "../../lib/progress-store";
 import { useChatScroll } from "../../lib/hooks";
@@ -68,6 +69,14 @@ export interface ChatCoreProps {
   header?: ReactNode;
   /** Rendered inside the scroll container (e.g. sticky headers) */
   scrollHeader?: ReactNode;
+  /** Rendered inside the scroll container, above the message list (e.g. compaction summary). */
+  beforeMessages?: ReactNode;
+  /** Hide the first N messages (render-only — state and requests keep the full list). */
+  collapseCount?: number;
+  /** Show only the analysis section of the message at this index (render-only) —
+   *  the kept boundary of an analysis compaction, whose working section (tool
+   *  calls, intermediate text) is already covered by the summary above. */
+  analysisOnlyIndex?: number;
   /** Rendered below the placeholder in the empty state */
   emptyStateExtras?: ReactNode;
   beforeInput?: ReactNode;
@@ -80,6 +89,12 @@ export interface ChatCoreProps {
 
   /** When true, hide the composer, Continue button, and error-banner Retry. */
   readOnly?: boolean;
+  /** When true, keep the composer visible but block all sending (e.g. while compacting). */
+  inputDisabled?: boolean;
+  /** Called before the error-banner Retry re-sends, with the index the client
+   *  list is cut to — lets the owner truncate the persisted copy in lockstep
+   *  (the failed user message is usually already stored server-side). */
+  onRetryTruncate?: (keepCount: number) => Promise<unknown>;
 
   /** Threaded into MessageParts so the "Download as image" action can embed them. */
   sourceTitle?: string;
@@ -109,6 +124,7 @@ export interface ChatCoreRef {
 const MessageRow = memo(function MessageRow({
   msg,
   msgIndex,
+  showSeparator,
   isAnimating,
   progressStore,
   variant,
@@ -119,6 +135,7 @@ const MessageRow = memo(function MessageRow({
 }: {
   msg: UIMessage;
   msgIndex: number;
+  showSeparator: boolean;
   isAnimating: boolean;
   progressStore: ProgressStore;
   variant: "full" | "panel";
@@ -162,7 +179,7 @@ const MessageRow = memo(function MessageRow({
   );
   return (
     <div className={pad}>
-      {msgIndex > 0 && <div className={v.separator} />}
+      {showSeparator && <div className={v.separator} />}
       {renderMessage ? renderMessage(msg, msgIndex, { label, content }) : defaultRendering}
     </div>
   );
@@ -182,11 +199,16 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
       variant = "full",
       header,
       scrollHeader,
+      beforeMessages,
+      collapseCount = 0,
+      analysisOnlyIndex,
       emptyStateExtras,
       beforeInput,
       afterMessages,
       renderMessage,
       readOnly = false,
+      inputDisabled = false,
+      onRetryTruncate,
       sourceTitle,
       sourceCreatedAt,
       resolveSourceTitle,
@@ -251,6 +273,22 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
 
     const isLoading = status === "submitted" || status === "streaming";
 
+    // Render-only collapse; ignore a boundary that exceeds the actual list
+    // (stale summary from a concurrent truncation) rather than hiding everything.
+    const collapse = collapseCount <= messages.length ? collapseCount : 0;
+
+    // Analysis-only view of a kept compaction boundary. Null when the message
+    // at the index has no analysis section (normal boundary, stale index) —
+    // the original then renders untouched. Keyed on the boundary message
+    // itself (stable across streaming ticks), not the whole array, so the
+    // boundary row's memo isn't broken on every streamed token.
+    const boundaryMsg = analysisOnlyIndex !== undefined ? messages[analysisOnlyIndex] : undefined;
+    const analysisOnlyMsg = useMemo(() => {
+      if (!boundaryMsg || boundaryMsg.role !== "assistant") return null;
+      const parts = analysisSectionParts(boundaryMsg.parts);
+      return parts ? { ...boundaryMsg, parts } : null;
+    }, [boundaryMsg]);
+
     // Track status transitions
     const prevStatus = useRef(status);
     const onStatusChangeRef = useRef(onStatusChange);
@@ -266,12 +304,13 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
       prevStatus.current = status;
     }, [status, messages]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Continue / retry detection
+    // Continue / retry detection. `messages.length > collapse` keeps the banner
+    // from rendering for an interrupted message that is collapsed out of view.
     const lastMessage = messages[messages.length - 1];
     const lastPart = lastMessage?.parts[lastMessage.parts.length - 1];
     const needsContinue =
       !isLoading &&
-      messages.length > 0 &&
+      messages.length > collapse &&
       lastMessage?.role === "assistant" &&
       lastPart?.type.startsWith("tool-");
 
@@ -309,10 +348,18 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
       return () => document.removeEventListener("keydown", onKeyDown);
     }, [isLoading]);
 
+    // Restore composer focus when an input lock (e.g. compaction) releases —
+    // disabling a focused textarea drops focus to <body>.
+    const prevInputDisabled = useRef(inputDisabled);
+    useEffect(() => {
+      if (prevInputDisabled.current && !inputDisabled) textareaRef.current?.focus();
+      prevInputDisabled.current = inputDisabled;
+    }, [inputDisabled]);
+
     const handleSubmit = (e: React.FormEvent) => {
       e.preventDefault();
       const text = input.trim();
-      if (!text || isLoading) return;
+      if (!text || isLoading || inputDisabled) return;
       setInput("");
       scrollToBottom({ animation: "instant" });
       sendMessage({ text });
@@ -325,7 +372,9 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
     }, [scrollToBottom]);
 
     // Retry last user message (used for error recovery)
-    const handleRetry = useCallback(() => {
+    const onRetryTruncateRef = useRef(onRetryTruncate);
+    onRetryTruncateRef.current = onRetryTruncate;
+    const handleRetry = useCallback(async () => {
       const msgs = messagesRef.current;
       let userIdx = -1;
       for (let i = msgs.length - 1; i >= 0; i--) {
@@ -335,6 +384,14 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
       const msg = msgs[userIdx];
       const textPart = msg.parts.find((p) => p.type === "text");
       if (!textPart || textPart.type !== "text") return;
+      // The failed user message may already be persisted server-side; trim the
+      // server copy too, or the re-send appends a duplicate and shifts every
+      // later message index (breaking edit/delete/compact boundaries).
+      try {
+        await onRetryTruncateRef.current?.(userIdx);
+      } catch {
+        return; // server truncate failed — leave state untouched, banner stays
+      }
       setMessages(msgs.slice(0, userIdx));
       sendMessageRef.current({ text: textPart.text });
     }, [setMessages]);
@@ -371,17 +428,20 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
             <div ref={contentRef} className="min-h-full flex flex-col">
               {scrollHeader}
 
+              {beforeMessages && <div className={pad}>{beforeMessages}</div>}
+
               {messages.length === 0 && status !== "submitted" && (
                 <div className="flex-1 flex flex-col items-center justify-center gap-6 py-16">
                   {emptyStateExtras ?? <span className={v.emptyState}>{placeholder}</span>}
                 </div>
               )}
 
-              {messages.map((msg, msgIndex) => (
+              {messages.map((msg, msgIndex) => msgIndex < collapse ? null : (
                 <MessageRow
                   key={msg.id || `msg-${msgIndex}`}
-                  msg={msg}
+                  msg={msgIndex === analysisOnlyIndex && analysisOnlyMsg ? analysisOnlyMsg : msg}
                   msgIndex={msgIndex}
+                  showSeparator={msgIndex > collapse}
                   isAnimating={msg.id === lastId}
                   progressStore={progressStore}
                   variant={variant}
@@ -399,7 +459,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
                 </div>
               )}
 
-              {!readOnly && needsContinue && (
+              {!readOnly && !inputDisabled && needsContinue && (
                 <div className={`flex flex-col items-center gap-2 ${v.continueMargin} ${pad}`}>
                   <span className="text-xs text-[#9c9890] font-sans">Response was interrupted</span>
                   <button
@@ -414,7 +474,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
 
               {afterMessages && <div className={pad}>{afterMessages}</div>}
 
-              {!readOnly && error && (
+              {!readOnly && !inputDisabled && error && (
                 <div className={pad}>
                   <div className="mt-3 text-sm text-[#b33a2a] bg-[#b33a2a]/5 border border-[#b33a2a]/20 rounded px-4 py-3 flex items-center gap-3">
                     <span className="flex-1">{error.message}</span>
@@ -458,6 +518,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
               placeholder={placeholder}
               rows={1}
               autoFocus
+              disabled={inputDisabled}
               className={v.textarea}
             />
             {isLoading ? (
@@ -467,7 +528,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
             ) : (
               <button
                 type="submit"
-                disabled={!input.trim()}
+                disabled={!input.trim() || inputDisabled}
                 aria-label="Send message"
                 className={v.sendBtn}
               >

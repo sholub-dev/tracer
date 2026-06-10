@@ -13,7 +13,7 @@ import { resolveSubAgentModel } from "../../llm/resolve.js";
 export function registerChatRoutes(app: Hono, context: Context): void {
   app.post("/api/chat", async (c) => {
     const { id, message, activeProvider } = await c.req.json<{ id: string; message: UIMessage; activeProvider?: string }>();
-    const messages = loadSessionMessages(context.db, id, message);
+    const { messages, summary, summaryUpTo } = loadSessionMessages(context.db, id, message);
 
     // Generate AI title on the first message (fire-and-forget)
     if (messages.length === 1) {
@@ -39,6 +39,8 @@ export function registerChatRoutes(app: Hono, context: Context): void {
     const result = await runChatAgent({
       sessionId: id,
       messages,
+      summary,
+      summaryUpTo,
       context,
       collectTools: (writer) => collectChatTools(context.providers, context.db, writer, scopedProvider, mode),
       sessionTitle: (updatedMessages) => {
@@ -58,11 +60,13 @@ export function registerChatRoutes(app: Hono, context: Context): void {
   app.post("/api/dashboard-chat", async (c) => {
     const { id, message, dashboardId } = await c.req.json<{ id: string; message: UIMessage; dashboardId: string }>();
     const sessionId = dashboardSessionId(dashboardId);
-    const messages = loadSessionMessages(context.db, sessionId, message);
+    const { messages, summary, summaryUpTo } = loadSessionMessages(context.db, sessionId, message);
 
     const result = await runChatAgent({
       sessionId,
       messages,
+      summary,
+      summaryUpTo,
       context,
       collectTools: (writer) => collectDashboardTools(context.providers, context.db, writer, dashboardId),
       sessionTitle: () => "Dashboard Builder",
@@ -75,11 +79,13 @@ export function registerChatRoutes(app: Hono, context: Context): void {
   app.post("/api/monitor-chat", async (c) => {
     const { message } = await c.req.json<{ message: UIMessage }>();
     const sessionId = SESSION_PREFIX.MONITORS;
-    const messages = loadSessionMessages(context.db, sessionId, message);
+    const { messages, summary, summaryUpTo } = loadSessionMessages(context.db, sessionId, message);
 
     const result = await runChatAgent({
       sessionId,
       messages,
+      summary,
+      summaryUpTo,
       context,
       collectTools: (writer) => collectMonitorTools(context.providers, context.db, writer),
       sessionTitle: () => "Monitor Builder",

@@ -166,7 +166,7 @@ export function registerApiRoutes(app: Hono, context: Context): void {
       role: "user",
       parts: [{ type: "text", text: message }],
     };
-    const messages = loadSessionMessages(context.db, sessionId, userMessage);
+    const { messages, summary, summaryUpTo } = loadSessionMessages(context.db, sessionId, userMessage);
 
     // Generate an AI title on the first turn (fire-and-forget), like /api/chat.
     if (messages.length === 1) {
@@ -189,6 +189,8 @@ export function registerApiRoutes(app: Hono, context: Context): void {
     const result = await runChatAgent({
       sessionId,
       messages,
+      summary,
+      summaryUpTo,
       context,
       collectTools: (writer) => {
         const collected = collectChatTools(context.providers, context.db, writer, scopedProvider, mode);

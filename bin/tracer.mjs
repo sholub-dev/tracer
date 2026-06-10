@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const serverPath = resolve(__dirname, "../packages/server/dist/index.js");
+const repoRoot = resolve(__dirname, "..");
+const serverPath = resolve(repoRoot, "packages/server/dist/index.js");
 
 // Must match RESTART_EXIT_CODE in packages/server/src/updater.ts
 const RESTART_EXIT_CODE = 75;
@@ -75,6 +77,82 @@ const banner = `
 `;
 
 console.log(banner);
+
+ensureFreshBuild();
+
+/**
+ * Source checkouts (git clone / npm link) serve whatever was last built into
+ * packages/*\/dist, which silently goes stale after a pull or local commit —
+ * the version number updates but the running code doesn't. Detect that here
+ * and rebuild before starting the server. Published npm installs ship only
+ * prebuilt dist (no src/), so this is a no-op for them.
+ */
+function ensureFreshBuild() {
+  if (process.env.TRACER_SKIP_BUILD) return;
+  const isSourceCheckout = existsSync(join(repoRoot, "packages/server/src"));
+  if (!isSourceCheckout) return;
+
+  const distEntries = [
+    join(repoRoot, "packages/shared/dist"),
+    serverPath,
+    join(repoRoot, "packages/web/dist/index.html"),
+  ];
+  const missingDist = distEntries.some((p) => !existsSync(p));
+
+  // Compare the newest source/config mtime against the oldest build output:
+  // if anything was edited after the last full build, the dist is stale.
+  const sourceInputs = [
+    join(repoRoot, "package.json"),
+    join(repoRoot, "pnpm-lock.yaml"),
+    ...["shared", "server", "web"].flatMap((p) => [
+      join(repoRoot, `packages/${p}/src`),
+      join(repoRoot, `packages/${p}/package.json`),
+    ]),
+    join(repoRoot, "packages/web/index.html"),
+    join(repoRoot, "packages/web/vite.config.ts"),
+  ];
+  const stale = missingDist
+    || newestMtime(sourceInputs) > Math.min(...distEntries.map((p) => newestMtime([p])));
+  if (!stale) return;
+
+  console.log(missingDist
+    ? "No build found for this source checkout — building..."
+    : "Source has changed since the last build — rebuilding...");
+
+  const run = (args) => spawnSync("pnpm", args, {
+    cwd: repoRoot,
+    stdio: "inherit",
+    shell: process.platform === "win32", // pnpm is pnpm.cmd on Windows
+  }).status === 0;
+  const built = (run(["install", "--frozen-lockfile"]) || run(["install"])) && run(["build"]);
+
+  if (!built) {
+    if (missingDist) {
+      console.error("\nBuild failed and no previous build exists. Fix the build and retry, or run `pnpm build` manually.");
+      process.exit(1);
+    }
+    console.error("\nWARNING: rebuild failed — starting the PREVIOUS build, which does not include your latest changes.");
+    console.error("Run `pnpm build` manually to see the error.\n");
+  }
+}
+
+/** Newest mtime (ms) across files and directories (recursive, skipping build output). */
+function newestMtime(paths) {
+  let newest = 0;
+  for (const p of paths) {
+    let st;
+    try { st = statSync(p); } catch { continue; }
+    if (st.isDirectory()) {
+      for (const entry of readdirSync(p, { withFileTypes: true })) {
+        if (entry.name === "node_modules" || entry.name === "dist") continue;
+        newest = Math.max(newest, newestMtime([join(p, entry.name)]));
+      }
+    } else {
+      newest = Math.max(newest, st.mtimeMs);
+    }
+  }
+  return newest;
+}
 
 // Restart loop: if server exits with code 75, it means an update was applied
 while (true) {

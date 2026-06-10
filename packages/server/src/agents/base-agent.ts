@@ -1,6 +1,6 @@
 import { streamText, smoothStream, convertToModelMessages, stepCountIs, createUIMessageStream, type UIMessage, type ToolSet } from "ai";
 import { eq, sql } from "drizzle-orm";
-import { DEFAULT_SESSION_TITLE, unixNow, type AfterCompleteParams } from "@tracer-sh/shared";
+import { DEFAULT_SESSION_TITLE, unixNow, splitAtAnalysis, type AfterCompleteParams } from "@tracer-sh/shared";
 import { chatSessions } from "../db/schema.js";
 import { resolveModel, type ProviderOptions, type ResolvedModel } from "../llm/resolve.js";
 import { extractUsage, recordAgentRun } from "../llm/usage.js";
@@ -29,7 +29,11 @@ export function sanitizeMessages(messages: UIMessage[]): UIMessage[] {
   });
 }
 
-export function loadSessionMessages(db: Context["db"], sessionId: string, newMessage: UIMessage): UIMessage[] {
+export function loadSessionMessages(
+  db: Context["db"],
+  sessionId: string,
+  newMessage: UIMessage,
+): { messages: UIMessage[]; summary: string | null; summaryUpTo: number | null } {
   const existing = db.select().from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
   let previous: UIMessage[] = [];
   if (existing) {
@@ -39,12 +43,21 @@ export function loadSessionMessages(db: Context["db"], sessionId: string, newMes
       console.warn(`[chat] Corrupted session ${sessionId}, starting fresh`);
     }
   }
-  return [...sanitizeMessages(previous), newMessage];
+  return {
+    messages: [...sanitizeMessages(previous), newMessage],
+    summary: existing?.summary ?? null,
+    summaryUpTo: existing?.summaryUpTo ?? null,
+  };
 }
 
 export interface ChatAgentConfig {
   sessionId: string;
   messages: UIMessage[];
+  /** Compaction state from loadSessionMessages — when set and valid, the model
+   *  sees [summary in system prompt + messages after the boundary] instead of
+   *  the full history. Persistence always keeps the full history. */
+  summary?: string | null;
+  summaryUpTo?: number | null;
   context: Context;
   collectTools: (writer: StreamWriter) => {
     tools: Record<string, unknown> | undefined;
@@ -88,6 +101,7 @@ async function processLLMStream(
   model: Parameters<typeof streamText>[0]["model"],
   modelId: string,
   providerOptions: ProviderOptions,
+  compaction: { summary?: string | null; summaryUpTo?: number | null },
 ): Promise<void> {
   const writer: StreamWriter = {
     write: (part) => {
@@ -102,7 +116,43 @@ async function processLLMStream(
   const collected = collectTools(writer);
   const tools = collected.tools;
 
-  const modelMessages = await convertToModelMessages(messages, {
+  // Compaction: when the session has a summary, the model sees only
+  // [summary in system prompt + messages after the boundary]. The full
+  // history below (`messages`) still flows to originalMessages/persistence
+  // untouched — compaction never alters what is stored.
+  let modelInput = messages;
+  let summaryForPrompt: string | null = null;
+  if (compaction.summary && compaction.summaryUpTo && compaction.summaryUpTo < messages.length) {
+    const tail = messages.slice(compaction.summaryUpTo);
+    if (tail[0].role === "user") {
+      modelInput = tail;
+      summaryForPrompt = compaction.summary;
+    } else {
+      // Kept analysis boundary: the summary already covers its tool work, so
+      // only the analysis section rides along, opened by a synthetic user turn
+      // (the model conversation must start with a user message). Model input
+      // only — never persisted. If the boundary has no usable analysis
+      // section, this isn't a valid kept-analysis boundary — fall through to
+      // the stale-boundary warning below rather than re-send the whole turn
+      // the summary already covers.
+      const split = splitAtAnalysis(tail[0].parts);
+      if (split && split.analysis.length > 0) {
+        tail[0] = { ...tail[0], parts: split.analysis };
+        modelInput = [
+          { id: "", role: "user" as const, parts: [{ type: "text" as const, text: "(The conversation up to this point was compacted into the summary in your instructions.)" }] },
+          ...tail,
+        ];
+        summaryForPrompt = compaction.summary;
+      }
+    }
+  }
+  if (compaction.summary && !summaryForPrompt) {
+    // Stale or odd boundary (e.g. history edited): fall back to full history,
+    // but leave a trace — the UI still shows the summary as active.
+    console.warn(`[chat] Ignoring stale compaction boundary for ${sessionId} (summaryUpTo=${compaction.summaryUpTo}, messages=${messages.length})`);
+  }
+
+  const modelMessages = await convertToModelMessages(modelInput, {
     tools: tools as ToolSet | undefined,
     convertDataPart: () => undefined,
   });
@@ -123,6 +173,10 @@ When the user's question spans multiple providers, query each relevant provider 
   }
 
   systemPrompt += "\n\n" + getCurrentDateBlock(context.db);
+
+  if (summaryForPrompt) {
+    systemPrompt += `\n\n## Earlier conversation summary\nThe earlier part of this conversation was compacted to save context. The summary below replaces those messages and is authoritative: the work it describes is already done — do NOT redo it. Reuse its recorded results, identifiers, queries, and conclusions.\n\n<conversation_summary>\n${summaryForPrompt}\n</conversation_summary>`;
+  }
 
   const result = streamText({
     model,
@@ -259,7 +313,7 @@ When the user's question spans multiple providers, query each relevant provider 
   finalizeSession(sessionId, context, broadcaster);
 }
 
-export async function runChatAgent({ sessionId, messages, context, collectTools, sessionTitle, modelOverride }: ChatAgentConfig) {
+export async function runChatAgent({ sessionId, messages, summary, summaryUpTo, context, collectTools, sessionTitle, modelOverride }: ChatAgentConfig) {
   const resolved = modelOverride ?? resolveModel(context.db);
   if ("error" in resolved) return { error: resolved.error };
   const { model, modelId, providerOptions } = resolved;
@@ -296,6 +350,7 @@ export async function runChatAgent({ sessionId, messages, context, collectTools,
   processLLMStream(
     sessionId, messages, context, broadcaster, serverAbort,
     collectTools, sessionTitle, model, modelId, providerOptions,
+    { summary, summaryUpTo },
   ).catch((err) => {
     console.error(`[chat] Unhandled error in LLM processing for ${sessionId}:`, err);
     finalizeSession(sessionId, context, broadcaster);

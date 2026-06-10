@@ -1,7 +1,7 @@
 import { useState, useCallback, type RefObject } from "react";
 import { theme } from "../../lib/theme";
 import type { UIMessage } from "ai";
-import { ANALYSIS_MARKER } from "./MessageParts";
+import { ANALYSIS_MARKER } from "@tracer-sh/shared";
 
 /** Strip markdown syntax to produce clean plain text for pasting into Slack etc. */
 function stripMarkdown(text: string): string {

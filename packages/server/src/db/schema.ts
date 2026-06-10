@@ -38,6 +38,13 @@ export const chatSessions = sqliteTable("chat_sessions", {
   status: text("status").notNull().default("idle"),
   /** Null for normal sessions. "imported" for sessions re-hydrated from a dropped analysis PNG. */
   kind: text("kind"),
+  /** Compaction: LLM-generated (possibly user-edited) summary of the first summaryUpTo messages. */
+  summary: text("summary"),
+  /** Count of leading messages covered by the summary. Index-based because
+   *  assistant messages can carry empty ids; prefixes are stable here (messages
+   *  are only appended or suffix-truncated, never reordered). */
+  summaryUpTo: integer("summary_up_to"),
+  summaryCreatedAt: integer("summary_created_at"),
   createdAt: integer("created_at")
     .notNull()
     .$defaultFn(() => unixNow()),

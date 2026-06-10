@@ -28,6 +28,9 @@ export function runSetup(): void {
       messages TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'idle',
       kind TEXT,
+      summary TEXT,
+      summary_up_to INTEGER,
+      summary_created_at INTEGER,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
@@ -134,6 +137,11 @@ export function runSetup(): void {
     `ALTER TABLE sub_agent_runs ADD COLUMN session_id TEXT`,
     `ALTER TABLE tool_memories ADD COLUMN review_note TEXT`,
     `ALTER TABLE chat_sessions ADD COLUMN kind TEXT`,
+    `ALTER TABLE chat_sessions ADD COLUMN summary TEXT`,
+    `ALTER TABLE chat_sessions ADD COLUMN summary_up_to INTEGER`,
+    `ALTER TABLE chat_sessions ADD COLUMN summary_created_at INTEGER`,
+    // Drops the short-lived id-based boundary column (never shipped in a release).
+    `ALTER TABLE chat_sessions DROP COLUMN summary_up_to_id`,
   ]) {
     try { sqlite.exec(ddl); } catch { /* column already exists */ }
   }

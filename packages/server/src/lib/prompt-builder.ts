@@ -7,6 +7,7 @@
 import {
   buildRules,
   DETECTIVE_MINDSET,
+  EVIDENCE_GROUNDING,
   EXECUTION_DISCIPLINE,
   buildAnalysisSection,
 } from "./shared-prompts.js";
@@ -55,6 +56,8 @@ ${config.authStopRule}
 ${buildRules({ investigation: true, extraRules: config.extraRules })}
 
 ${DETECTIVE_MINDSET}
+
+${EVIDENCE_GROUNDING}
 
 ${config.insideOutDebugging}
 

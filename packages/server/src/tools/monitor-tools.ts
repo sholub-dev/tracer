@@ -7,6 +7,7 @@ import { unixNow } from "@tracer-sh/shared";
 import type { ChatToolWriter as StreamWriter } from "@tracer-sh/shared";
 import { monitors } from "../db/schema.js";
 import { collectBaseTools } from "./shared-tool-setup.js";
+import { EVIDENCE_GROUNDING } from "../lib/shared-prompts.js";
 import { validateCondition } from "../monitors/condition.js";
 import { requireTimeRangePlaceholders, executeValidationQuery } from "./query-validation.js";
 import { CONFIG } from "../config.js";
@@ -28,7 +29,9 @@ export function collectMonitorTools(
   db: Db,
   writer?: StreamWriter,
 ) {
-  const { tools, promptFragments, connectedProviders } = collectBaseTools(registry, db, writer);
+  // "unified" mode makes providers return role-less prompt fragments (domain
+  // knowledge, query syntax) instead of full direct-mode system prompts.
+  const { tools, promptFragments, connectedProviders } = collectBaseTools(registry, db, writer, "unified");
 
   const defaultProvider = connectedProviders[0];
 
@@ -234,7 +237,7 @@ The condition is a JS expression evaluated against the query \`result\` array. E
 ## Scope
 You are managing all monitors. The monitor list above shows all existing monitors.`;
 
-  const systemPrompt = [basePrompt, providerContext, monitorContext, ...promptFragments].join("\n\n");
+  const systemPrompt = [basePrompt, EVIDENCE_GROUNDING, providerContext, monitorContext, ...promptFragments].join("\n\n");
 
   return { tools, systemPrompt };
 }

@@ -35,6 +35,8 @@ You MUST save a memory for every query failure:
 - Wrong field names → "Don't use X, use Y for [purpose]"
 - Wrong event types → "Don't query X for [goal], use Y instead"
 
+**Corrections must be demonstrated, not guessed.** Only write "use Y instead" if Y was actually run in this session and succeeded. If no working alternative was demonstrated, save only the mistake ("Don't use X in [context]") — a wrong correction is worse than none, because memories override future instructions.
+
 ### From struggle patterns (evaluated)
 Review the full session timeline for patterns where the agent struggled — multiple attempts with variations before finding the correct approach. Look for:
 - Repeated EMPTY results with name/field/value variations followed by eventual success

@@ -16,11 +16,12 @@ export function collectChatTools(
   mode: ChatMode = DEFAULT_CHAT_MODE,
 ): ChatToolsResult {
   const { tools, promptFragments, systemPrompt, maxSteps, afterComplete, connectedProviders } =
-    collectBaseTools(registry, db, writer, mode, activeProvider);
+    collectBaseTools(registry, db, writer, mode, activeProvider, true);
 
   // Debug chat returns undefined tools when no providers are connected,
   // so server.ts can show a "no providers configured" fallback prompt.
-  if (connectedProviders.length === 0) {
+  // Keep tools if an always-on integration (e.g. Jira) contributed any.
+  if (connectedProviders.length === 0 && (!tools || Object.keys(tools).length === 0)) {
     return { tools: undefined, promptFragments: [] };
   }
 

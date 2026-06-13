@@ -1,6 +1,6 @@
 {
   "name": "tracer-sh",
-  "version": "0.2.7",
+  "version": "0.3.0",
   "type": "module",
   "description": "Local-first debugging & analysis platform",
   "license": "SEE LICENSE IN LICENSE",
@@ -28,11 +28,12 @@
     "prepublishOnly": "if [ -z \"${CI:-}\" ]; then echo 'ERROR: Do not publish manually. Use: pnpm release <version>' && exit 1; fi && pnpm build"
   },
   "dependencies": {
-    "better-sqlite3": "^12.6.2"
+    "@napi-rs/keyring": "^1.3.0",
+    "better-sqlite3-multiple-ciphers": "^12.6.2"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "better-sqlite3",
+      "better-sqlite3-multiple-ciphers",
       "esbuild"
     ],
     "overrides": {

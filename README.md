@@ -49,6 +49,15 @@ Everything runs on your machine. Your data stays local in a SQLite database.
 Tracer talks directly to your provider and LLM APIs using your own API keys —
 no intermediary servers, no data leaves your machine except API calls you control.
 
+The database is **encrypted at rest**. The key is generated on first run and kept in
+your OS keychain (macOS Keychain, Windows Credential Manager, or Linux Secret Service),
+so the file is readable only on the machine that created it — copying it elsewhere, or
+reading it as another user, gets you nothing. Existing installs are encrypted
+automatically the first time you run a version that supports it. Two things to know:
+**losing the keychain entry (e.g. an OS reinstall) makes the database unrecoverable**,
+and on a headless/CI host with no keychain you must supply the key yourself via
+`TRACER_DB_KEY` (a 64-character hex string).
+
 ## Install
 
 Requires [Node.js 20+](https://nodejs.org/).
@@ -94,13 +103,21 @@ To also remove your local database (settings, sessions, API keys):
 rm -rf ~/.tracer
 ```
 
+The database encryption key also lives in your OS keychain (service `tracer-sh`,
+account `db-key`). Remove it for a clean slate — on macOS:
+
+```bash
+security delete-generic-password -s tracer-sh -a db-key
+```
+
 ## Troubleshooting
 
 | Problem | Fix |
 |---------|-----|
-| `better-sqlite3` build fails | macOS: `xcode-select --install` / Linux: `sudo apt install build-essential python3` |
+| Native SQLite build fails | macOS: `xcode-select --install` / Linux: `sudo apt install build-essential python3` |
 | Port in use | `TRACER_PORT=3580 tracer-sh` |
 | No LLM responses | Add an API key in Settings |
+| Headless / CI: no keychain available | Set `TRACER_DB_KEY` to a 64-char hex key (`openssl rand -hex 32`) |
 
 ## Contributing
 

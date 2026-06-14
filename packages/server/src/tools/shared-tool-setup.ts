@@ -4,6 +4,7 @@ import type { ChatToolWriter as StreamWriter, AfterCompleteParams, ChatMode } fr
 import { toolMemories } from "../db/schema.js";
 import { buildUnifiedModePrompt } from "../lib/shared-prompts.js";
 import { injectMemories } from "../agents/chat/sub-agent.js";
+import { getJiraChatTools } from "../integrations/jira/tools.js";
 import { DEFAULTS } from "../config.js";
 
 export interface BaseToolSetup {
@@ -21,6 +22,7 @@ export function collectBaseTools(
   writer?: StreamWriter,
   mode?: ChatMode,
   activeProvider?: string,
+  includeIntegrations = false,
 ): BaseToolSetup {
   const memories = db.select().from(toolMemories).all();
   const tools: Record<string, unknown> = {};
@@ -60,11 +62,20 @@ export function collectBaseTools(
     }
   }
 
+  // Jira is a non-observability integration: when enabled (chat only — not the dashboard/monitor
+  // builders) its tools are always-on, independent of the active-provider filter above, so they're
+  // available alongside whatever provider is selected.
+  const jiraKit = includeIntegrations ? getJiraChatTools(db) : null;
+  if (jiraKit) {
+    Object.assign(tools, jiraKit.tools);
+    promptFragments.push(jiraKit.promptFragment);
+  }
+
   // System prompt assembly:
   // - unified: ONE coherent prompt — shared intro/discipline/analysis once + each provider's
   //   role-less fragment (begin_analysis already comes from the merged direct tools).
   // - direct: a single connected provider supplies its own complete system prompt.
-  const systemPrompt =
+  let systemPrompt =
     mode === "unified"
       ? (promptFragments.length > 0
           ? injectMemories(
@@ -78,6 +89,13 @@ export function collectBaseTools(
             )
           : undefined)
       : (systemPrompts.length > 0 ? systemPrompts.join("\n\n---\n\n") : undefined);
+
+  // In direct mode the model uses this systemPrompt and ignores promptFragments, so the Jira
+  // guidance must be appended here. (Unified already folded it via buildUnifiedModePrompt; the
+  // no-provider case falls back to base-agent's prompt + promptFragments, which includes it.)
+  if (mode !== "unified" && jiraKit && systemPrompt) {
+    systemPrompt += "\n\n" + jiraKit.promptFragment;
+  }
 
   // Chain afterComplete callbacks so all providers run their post-processing
   const afterComplete = afterCompleteCallbacks.length > 0

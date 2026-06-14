@@ -5,7 +5,7 @@ import { AVAILABLE_MODELS } from "../../lib/models";
 import { useAvailableModels } from "../../lib/hooks";
 
 /** The first available model is the default when no override is set. */
-const DEFAULT_SUB_AGENT_KEY = `${AVAILABLE_MODELS[1]?.provider ?? AVAILABLE_MODELS[0].provider}:${AVAILABLE_MODELS[1]?.modelId ?? AVAILABLE_MODELS[0].modelId}`;
+const DEFAULT_SUB_AGENT_KEY = `${AVAILABLE_MODELS[0].provider}:${AVAILABLE_MODELS[0].modelId}`;
 
 export function SubAgentModelSelector({ providerType }: { providerType: string }) {
   const utils = trpc.useUtils();

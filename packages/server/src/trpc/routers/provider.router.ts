@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+import { KNOWN_MODEL_IDS } from "@tracer-sh/shared";
 import { publicProcedure, router } from "../trpc.js";
 import { providerConfigs } from "../../db/schema.js";
+import { readProviderConfig } from "../../db/config-reader.js";
 import { getGcpAuth } from "../../providers/gcp/gcp-auth.js";
 
 const timeRangeInput = z.object({
@@ -181,6 +183,16 @@ export const providerRouter = router({
       return p.executeRawQuery(input.query);
     }),
 
+  // Shared gcloud ADC auth status — both the GCP data provider's project selector and the
+  // Vertex AI card poll this to surface a re-auth prompt (instead of an empty project list)
+  // when credentials are missing or expired. Never returns the token.
+  gcpAuthStatus: publicProcedure.query(async () => {
+    const auth = await getGcpAuth();
+    return auth.ok
+      ? { ok: true as const }
+      : { ok: false as const, code: auth.code, message: auth.message };
+  }),
+
   listGcpProjects: publicProcedure.query(async () => {
     try {
       const auth = await getGcpAuth();
@@ -222,6 +234,77 @@ export const providerRouter = router({
     } catch (err) {
       console.warn("[gcp] Failed to list projects:", err instanceof Error ? err.message : err);
       return [];
+    }
+  }),
+
+  // Discover the Gemini models available to the configured Vertex AI project. The
+  // publisher-models endpoint isn't project-scoped in the path, so the selected project is
+  // attributed via the X-Goog-User-Project header (for API-enablement + quota). Returns []
+  // when Vertex isn't configured; falls back to the app's known Gemini IDs when discovery
+  // fails, so a configured user never sees an empty dropdown.
+  listVertexModels: publicProcedure.query(async ({ ctx }) => {
+    const fallback = KNOWN_MODEL_IDS
+      .filter((id) => id.startsWith("gemini"))
+      .map((id) => ({ modelId: id, label: id }));
+
+    const config = readProviderConfig(ctx.db, "google-vertex");
+    const projectId = config?.projectId;
+    if (!projectId) return [];
+    const location = config.location || "global";
+
+    try {
+      const auth = await getGcpAuth();
+      if (!auth.ok) {
+        console.warn(`[vertex] listVertexModels: ${auth.code} — ${auth.message}`);
+        return fallback;
+      }
+      const host = location === "global"
+        ? "aiplatform.googleapis.com"
+        : `${location}-aiplatform.googleapis.com`;
+
+      const seen = new Set<string>();
+      const models: Array<{ modelId: string; label: string }> = [];
+      let pageToken: string | undefined;
+
+      // Paginate the full publisher catalog (Imagen/embeddings/etc. are filtered out below).
+      // Bound by pages fetched — the catalog is mostly non-Gemini, so counting kept models
+      // wouldn't cap the loop. 20 pages × 200 covers the entire Google publisher catalog.
+      for (let page = 0; page < 20; page++) {
+        const url = new URL(`https://${host}/v1beta1/publishers/google/models`);
+        url.searchParams.set("pageSize", "200");
+        if (pageToken) url.searchParams.set("pageToken", pageToken);
+
+        const res = await fetch(url, {
+          headers: {
+            Authorization: `Bearer ${auth.token}`,
+            "X-Goog-User-Project": projectId,
+          },
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!res.ok) {
+          console.warn(`[vertex] Failed to list models: ${res.status} ${res.statusText}`);
+          return models.length > 0 ? models : fallback;
+        }
+        const data = (await res.json()) as {
+          publisherModels?: Array<{ name?: string }>;
+          nextPageToken?: string;
+        };
+        for (const m of data.publisherModels ?? []) {
+          const id = m.name?.split("/").pop();
+          if (!id || !id.startsWith("gemini") || id.includes("embedding")) continue;
+          if (seen.has(id)) continue;
+          seen.add(id);
+          models.push({ modelId: id, label: id });
+        }
+        pageToken = data.nextPageToken;
+        if (!pageToken) break;
+      }
+
+      models.sort((a, b) => a.modelId.localeCompare(b.modelId));
+      return models.length > 0 ? models : fallback;
+    } catch (err) {
+      console.warn("[vertex] Failed to list models:", err instanceof Error ? err.message : err);
+      return fallback;
     }
   }),
 });

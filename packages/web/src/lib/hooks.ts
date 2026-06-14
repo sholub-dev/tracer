@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState, useEffect, useCallback, type RefObject } from "react";
 import { trpc } from "./trpc";
 import { AVAILABLE_MODELS } from "./models";
+import { WEB_CONFIG } from "./config";
 
 /**
  * Plain-div chat scroll — auto-follows streaming content via ResizeObserver.
@@ -127,25 +128,56 @@ export function useScrollFade(ref: RefObject<HTMLElement | null>) {
   return { showTopFade, showBottomFade };
 }
 
-/** Returns the set of LLM provider names that have an API key configured. */
+/**
+ * Polled gcloud ADC auth status, shared (react-query dedups the key) by the GCP provider's
+ * project selector and the Vertex card so an expired/missing session surfaces on its own.
+ */
+export function useGcpAuthStatus() {
+  return trpc.provider.gcpAuthStatus.useQuery(undefined, {
+    refetchInterval: WEB_CONFIG.sessionStaleTimeMs,
+    staleTime: WEB_CONFIG.sessionStaleTimeMs,
+  });
+}
+
+/** Returns the set of LLM provider names that are configured (API key, or Vertex project). */
 export function useConfiguredProviders(): Set<string> {
   const { data: anthropicKey } = trpc.settings.getApiKey.useQuery("anthropic");
   const { data: googleKey } = trpc.settings.getApiKey.useQuery("google");
+  const { data: vertexConfig } = trpc.settings.getVertexConfig.useQuery();
   return useMemo(() => {
     const s = new Set<string>();
     if (anthropicKey) s.add("anthropic");
     if (googleKey) s.add("google");
+    if (vertexConfig?.projectId) s.add("google-vertex");
     return s;
-  }, [anthropicKey, googleKey]);
+  }, [anthropicKey, googleKey, vertexConfig]);
 }
 
-/** Returns AVAILABLE_MODELS filtered to only configured providers (falls back to all). */
-export function useAvailableModels() {
+/**
+ * Selectable models filtered to configured providers (falls back to all). Vertex models
+ * are discovered dynamically from the configured project and merged with the static list.
+ * `isLoading` is true while that discovery is in flight, so callers can avoid acting on the
+ * interim list (e.g. resetting a saved Vertex selection that hasn't been discovered yet).
+ */
+export function useAvailableModels(): {
+  models: Array<{ provider: string; modelId: string }>;
+  isLoading: boolean;
+} {
   const configured = useConfiguredProviders();
-  return useMemo(() => {
-    const filtered = AVAILABLE_MODELS.filter((m) => configured.has(m.provider));
-    return filtered.length > 0 ? filtered : AVAILABLE_MODELS;
-  }, [configured]);
+  const vertexEnabled = configured.has("google-vertex");
+  const { data: vertexModels, isLoading: vertexLoading } = trpc.provider.listVertexModels.useQuery(
+    undefined,
+    { enabled: vertexEnabled },
+  );
+  const models = useMemo(() => {
+    const staticModels = AVAILABLE_MODELS.filter((m) => configured.has(m.provider));
+    const vertex = vertexEnabled
+      ? (vertexModels ?? []).map((m) => ({ provider: "google-vertex", modelId: m.modelId }))
+      : [];
+    const merged = [...staticModels, ...vertex];
+    return merged.length > 0 ? merged : AVAILABLE_MODELS;
+  }, [configured, vertexEnabled, vertexModels]);
+  return { models, isLoading: vertexEnabled && vertexLoading };
 }
 
 /** Calls callback when a click occurs outside the referenced element. */

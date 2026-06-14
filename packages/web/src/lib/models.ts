@@ -9,6 +9,46 @@ interface ModelInfo {
   cacheWriteMultiplier: number;  // fraction of inputPrice charged for cache writes
 }
 
+/** A provider + model pair, the unit of model selection across the UI. */
+export interface ModelRef {
+  provider: string;
+  modelId: string;
+}
+
+export const modelKey = (m: ModelRef): string => `${m.provider}:${m.modelId}`;
+
+/** Human labels for the LLM providers (the `provider` field of a ModelRef). */
+export const LLM_PROVIDER_LABELS: Record<string, string> = {
+  anthropic: "Anthropic",
+  google: "Google AI",
+  "google-vertex": "Vertex AI",
+};
+
+export function providerLabel(provider: string): string {
+  return LLM_PROVIDER_LABELS[provider] ?? provider;
+}
+
+const PROVIDER_ORDER = ["anthropic", "google", "google-vertex"];
+
+/** Group models by provider for grouped dropdowns, in a stable, known order. */
+export function groupModelsByProvider(
+  models: ModelRef[],
+): Array<{ provider: string; label: string; models: ModelRef[] }> {
+  const byProvider = new Map<string, ModelRef[]>();
+  for (const m of models) {
+    const arr = byProvider.get(m.provider);
+    if (arr) arr.push(m);
+    else byProvider.set(m.provider, [m]);
+  }
+  return [...byProvider.keys()]
+    .sort((a, b) => {
+      const ia = PROVIDER_ORDER.indexOf(a);
+      const ib = PROVIDER_ORDER.indexOf(b);
+      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+    })
+    .map((provider) => ({ provider, label: providerLabel(provider), models: byProvider.get(provider)! }));
+}
+
 export const AVAILABLE_MODELS: ModelInfo[] = [
   // Google — 75% discount on cache reads, cache writes at full input price
   { provider: "google",    modelId: "gemini-3.1-pro-preview",     inputPrice: 2.00,  outputPrice: 12.00, cacheReadMultiplier: 0.25, cacheWriteMultiplier: 1.0 },

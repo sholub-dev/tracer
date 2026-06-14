@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ApiKeyCard } from "./ApiKeyCard";
+import { VertexConfigCard } from "./VertexConfigCard";
 import { PricingTable } from "./PricingTable";
 import { useConfiguredProviders } from "../../lib/hooks";
 
@@ -12,6 +13,7 @@ export function AiModelsSection() {
       <div className="max-w-lg bg-white border border-[#d4d2cd] rounded divide-y divide-[#e8e6e1] overflow-hidden">
         <ApiKeyCard type="anthropic" label="Anthropic" />
         <ApiKeyCard type="google" label="Google AI" />
+        <VertexConfigCard />
       </div>
 
       <div className="bg-white border border-[#d4d2cd] rounded overflow-hidden">

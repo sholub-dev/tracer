@@ -45,9 +45,45 @@ Configure providers, LLM credentials, agent behavior, and memory. All data is st
 └─────────┘                             └──────────────────┘
 ```
 
-Everything runs on your machine. Your data stays local in a SQLite database.
-Tracer talks directly to your provider and LLM APIs using your own API keys —
-no intermediary servers, no data leaves your machine except API calls you control.
+Everything runs on your machine. Your data stays local in an encrypted SQLite
+database. Tracer talks directly to your provider and LLM APIs using your own API
+keys — no intermediary servers, no data leaves your machine except API calls you control.
+
+## Security
+
+Tracer is built **defense-in-depth**: your secrets — provider and LLM API keys,
+integration tokens, chat history, and agent memory — sit behind several independent
+layers, so no single failure exposes them.
+
+- **Local-only.** Nothing leaves your machine except the provider and LLM API calls you configure. No Tracer servers, no telemetry, no sync.
+- **Encrypted at rest.** The entire SQLite database is encrypted with SQLCipher (AES-256). On disk it is ciphertext — a stolen laptop, a copied `.db` file, or a backup is useless without the key.
+- **Machine-bound, user-scoped key.** A random 256-bit key is generated on first run and stored in your OS keychain (macOS Keychain, Windows Credential Manager, or Linux Secret Service). It never leaves the machine and is scoped to your OS user, so another user on the same box can't read the database either.
+- **Hardened on disk.** The data directory is created owner-only (`0700`); if no keychain is available, the fallback key file is written `0600`.
+
+**Automatic and transparent.** New installs are encrypted from the first run. An
+existing plaintext database is migrated on the first launch of this version — the
+encrypted copy is verified and atomically swapped in, and no plaintext is left behind.
+There's nothing to enable.
+
+**CI / headless.** Where no keychain exists, supply the key yourself with
+`TRACER_DB_KEY` — a 64-character hex string (e.g. `openssl rand -hex 32`).
+
+**What this protects — and what it doesn't.** Encryption at rest defends the file
+(theft, backups, copies) and blocks other users on the same machine. It does **not**
+defend against you, the logged-in user, running code as yourself: the app must hold the
+key at runtime to read its own data, so anyone controlling your user session can too. No
+local-first app escapes this — it's the honest boundary of on-device encryption.
+
+**Key loss means data loss.** Because the key lives only in your keychain, losing it (an
+OS reinstall or keychain reset) makes the database unrecoverable. For a safety net, back
+up the `tracer-sh` / `db-key` keychain value somewhere secure.
+
+**Verify it yourself.** The raw file should be unreadable without the key:
+
+```bash
+sqlite3 ~/.tracer/data/tracer.db '.tables'    # → "Error: file is not a database"
+head -c 16 ~/.tracer/data/tracer.db | od -c   # → random bytes, not "SQLite format 3"
+```
 
 ## Install
 
@@ -102,13 +138,21 @@ To also remove your local database (settings, sessions, API keys):
 rm -rf ~/.tracer
 ```
 
+The database encryption key also lives in your OS keychain (service `tracer-sh`,
+account `db-key`). Remove it for a clean slate — on macOS:
+
+```bash
+security delete-generic-password -s tracer-sh -a db-key
+```
+
 ## Troubleshooting
 
 | Problem | Fix |
 |---------|-----|
-| `better-sqlite3` build fails | macOS: `xcode-select --install` / Linux: `sudo apt install build-essential python3` |
+| Native SQLite build fails | macOS: `xcode-select --install` / Linux: `sudo apt install build-essential python3` |
 | Port in use | `TRACER_PORT=3580 tracer-sh` |
 | No LLM responses | Add an API key in Settings |
+| Headless / CI: no keychain available | Set `TRACER_DB_KEY` to a 64-char hex key (`openssl rand -hex 32`) |
 
 ## Contributing
 

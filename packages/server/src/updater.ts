@@ -142,7 +142,7 @@ export function checkForUpdateBackground(): void {
         ? "click the version in the sidebar to update from the app"
         : method === "npx"
           ? "re-run: npx tracer-sh@latest"
-          : "git pull && pnpm install && pnpm build";
+          : "git pull, then restart tracer-sh — the launcher rebuilds automatically";
       console.log(`Update available: v${current} → v${latest} (${hint})`);
     }
   }).catch(() => {

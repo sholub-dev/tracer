@@ -53,16 +53,24 @@ no intermediary servers, no data leaves your machine except API calls you contro
 
 Requires [Node.js 20+](https://nodejs.org/).
 
+**Run the latest, no install:**
+
 ```bash
-npx tracer-sh
+npx tracer-sh@latest
 ```
 
-Or install globally:
+`npx` is ephemeral — it runs the newest published version on every launch and isn't a pinned version.
+
+**Install a pinned copy:**
 
 ```bash
 npm install -g tracer-sh
 tracer-sh
 ```
+
+The first run gets the latest version; it then stays on that version until you explicitly update — either with **Update now** in the app (click the version in the sidebar) or by re-running the install.
+
+**Which should I pick?** Use the global install if you want a stable version that only changes when you choose; use `npx` to always grab the newest with zero install.
 
 Open `http://localhost:3579`, go to **Settings** to add your API keys and choose an LLM — done.
 

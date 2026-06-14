@@ -42,9 +42,15 @@ export function UpdateModal({ open, onClose }: UpdateModalProps) {
 
   const data = updateCheck.data;
   const canSelfUpdate = data?.canSelfUpdate === true;
-  // Match the command the server actually runs; `npm update -g` won't reliably
-  // upgrade a global package across versions.
-  const manualCommand = data?.method === "npx" ? "npx tracer-sh@latest" : "npm install -g tracer-sh@latest";
+  // Match the command that actually updates this install method: re-run npx for
+  // an ephemeral copy, pull+rebuild for a source checkout, otherwise re-install
+  // globally (`npm update -g` won't reliably upgrade across versions).
+  const manualCommand =
+    data?.method === "npx"
+      ? "npx tracer-sh@latest"
+      : data?.method === "dev"
+        ? "git pull && pnpm install && pnpm build"
+        : "npm install -g tracer-sh@latest";
 
   const perform = trpc.update.perform.useMutation({
     onSuccess: (res) => {
@@ -101,10 +107,11 @@ export function UpdateModal({ open, onClose }: UpdateModalProps) {
           <div className="text-sm text-[#666666] mb-4">
             <p>
               {data?.method === "npx"
-                ? "This instance runs via npx and can't update itself. Re-run:"
-                : "Run this command to update:"}
+                ? "This instance runs via npx, which always launches the latest version. Re-run it to update now — or install globally to pin a version you update on your own terms:"
+                : "This instance runs from a source checkout. Update it with:"}
             </p>
             <CommandBlock command={manualCommand} />
+            {data?.method === "npx" && <CommandBlock command="npm install -g tracer-sh" />}
           </div>
           <div className="flex justify-end">
             <button onClick={onClose} className={theme.secondaryBtn}>

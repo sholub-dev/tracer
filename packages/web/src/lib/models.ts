@@ -12,6 +12,7 @@ interface ModelInfo {
 export const AVAILABLE_MODELS: ModelInfo[] = [
   // Google — 75% discount on cache reads, cache writes at full input price
   { provider: "google",    modelId: "gemini-3.1-pro-preview",     inputPrice: 2.00,  outputPrice: 12.00, cacheReadMultiplier: 0.25, cacheWriteMultiplier: 1.0 },
+  { provider: "google",    modelId: "gemini-3.5-flash",           inputPrice: 1.50,  outputPrice: 9.00,  cacheReadMultiplier: 0.25, cacheWriteMultiplier: 1.0 },
   { provider: "google",    modelId: "gemini-3-flash-preview",     inputPrice: 0.50,  outputPrice: 3.00,  cacheReadMultiplier: 0.25, cacheWriteMultiplier: 1.0 },
   { provider: "google",    modelId: "gemini-3.1-flash-lite-preview", inputPrice: 0.25, outputPrice: 1.50, cacheReadMultiplier: 0.25, cacheWriteMultiplier: 1.0 },
   // Anthropic — 90% discount on cache reads, 25% surcharge on cache writes

@@ -33,7 +33,7 @@ export const CONFIG = {
   defaultUtilityModel: { provider: "google", modelId: "gemini-3.1-flash-lite-preview" } as ModelConfig,
 
   /** Models that support thinking/reasoning tokens. */
-  thinkingModels: new Set(["gemini-3.1-pro-preview", "gemini-3-flash-preview"]),
+  thinkingModels: new Set(["gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-3-flash-preview"]),
 
   // ── MCP timeouts ──
 

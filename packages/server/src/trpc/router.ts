@@ -8,9 +8,11 @@ import { dashboardsRouter } from "./routers/dashboards.router.js";
 import { monitorsRouter } from "./routers/monitors.router.js";
 import { monitorAlertsRouter } from "./routers/monitor-alerts.router.js";
 import { updateRouter } from "./routers/update.router.js";
+import { integrationsRouter } from "./routers/integrations.router.js";
 
 export const appRouter = router({
   provider: providerRouter,
+  integrations: integrationsRouter,
   settings: settingsRouter,
   memory: memoryRouter,
   sessions: sessionsRouter,

@@ -1,9 +1,13 @@
 name: Release
 
+# Publishes automatically when a version bump lands on master (e.g. merging
+# the PR opened by `pnpm release <version>`). Gated on the release tag not
+# existing yet, so pushes that don't change the version are no-ops.
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - master
+  workflow_dispatch:
 
 permissions:
   id-token: write
@@ -15,19 +19,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check whether this version needs a release
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${VERSION} already exists — nothing to release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Releasing v${VERSION}."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/setup-node@v4
+        if: steps.version.outputs.release == 'true'
         with:
           node-version: 24
 
       - uses: pnpm/action-setup@v4
+        if: steps.version.outputs.release == 'true'
 
       - name: Install dependencies
+        if: steps.version.outputs.release == 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Build
+        if: steps.version.outputs.release == 'true'
         run: pnpm build
 
       - name: Audit package for source leaks
+        if: steps.version.outputs.release == 'true'
         run: |
           PACK_OUTPUT=$(npm pack --dry-run 2>&1)
 
@@ -53,12 +75,15 @@ jobs:
           echo "$PACK_OUTPUT" | grep "npm notice"
 
       - name: Publish to npm
+        if: steps.version.outputs.release == 'true'
         run: npm publish --access public
 
       - name: Create GitHub Release
+        if: steps.version.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ github.ref_name }}" \
-            --title "${{ github.ref_name }}" \
+          gh release create "v${{ steps.version.outputs.version }}" \
+            --target "$GITHUB_SHA" \
+            --title "v${{ steps.version.outputs.version }}" \
             --generate-notes

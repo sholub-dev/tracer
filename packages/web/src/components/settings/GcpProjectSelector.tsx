@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { trpc } from "../../lib/trpc";
 import { WEB_CONFIG } from "../../lib/config";
 import { SearchableSelect } from "../ui/SearchableSelect";
+import { useGcpAuthStatus } from "../../lib/hooks";
 
 interface GcpProjectSelectorProps {
   existingConfig: Record<string, string>;
@@ -9,6 +10,7 @@ interface GcpProjectSelectorProps {
 
 export function GcpProjectSelector({ existingConfig }: GcpProjectSelectorProps) {
   const utils = trpc.useUtils();
+  const authStatus = useGcpAuthStatus();
   const { data: projects, isLoading } = trpc.provider.listGcpProjects.useQuery(undefined, {
     staleTime: WEB_CONFIG.updateCheckStaleTimeMs,
   });
@@ -29,6 +31,10 @@ export function GcpProjectSelector({ existingConfig }: GcpProjectSelectorProps) 
   );
 
   const currentProjectId = existingConfig.projectId ?? "";
+
+  // When gcloud auth is missing/expired the project list is empty and meaningless; hide the
+  // selector and let the card's connection error explain why (avoids a blank dropdown).
+  if (authStatus.data && !authStatus.data.ok) return null;
 
   function handleChange(value: string) {
     if (value === currentProjectId) return;

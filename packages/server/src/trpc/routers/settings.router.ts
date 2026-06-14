@@ -48,6 +48,48 @@ export const settingsRouter = router({
       return { success: true };
     }),
 
+  // Vertex AI is enabled with a GCP project + location (credentials come from gcloud ADC,
+  // not an API key). The config row's existence is the on/off state; projectId may be empty
+  // when enabled but a project hasn't been picked yet. projectId/location aren't secrets, so
+  // they're returned unmasked. Returns null when disabled.
+  getVertexConfig: publicProcedure.query(({ ctx }) => {
+    const config = readProviderConfig(ctx.db, "google-vertex");
+    if (!config) return null;
+    return { projectId: config.projectId ?? "", location: config.location || "global" };
+  }),
+
+  // Upsert with merge semantics: `saveVertexConfig({})` enables Vertex (creates the row with
+  // defaults), while passing a single field updates just that field. Used by the toggle and
+  // by the project/location pickers.
+  saveVertexConfig: publicProcedure
+    .input(
+      z.object({
+        projectId: z.string().optional(),
+        location: z.string().optional(),
+      }),
+    )
+    .mutation(({ ctx, input }) => {
+      const existing = readProviderConfig(ctx.db, "google-vertex") ?? {};
+      const configJson = JSON.stringify({
+        projectId: input.projectId ?? existing.projectId ?? "",
+        location: input.location ?? existing.location ?? "global",
+      });
+      ctx.db
+        .insert(providerConfigs)
+        .values({ type: "google-vertex", config: configJson })
+        .onConflictDoUpdate({
+          target: providerConfigs.type,
+          set: { config: configJson },
+        })
+        .run();
+      return { success: true };
+    }),
+
+  removeVertexConfig: publicProcedure.mutation(({ ctx }) => {
+    ctx.db.delete(providerConfigs).where(eq(providerConfigs.type, "google-vertex")).run();
+    return { success: true };
+  }),
+
   getChatModel: publicProcedure.query(({ ctx }) => {
     return readAppSetting<ModelConfig>(ctx.db, SETTINGS_KEYS.chatModel) ?? CONFIG.defaultChatModel;
   }),

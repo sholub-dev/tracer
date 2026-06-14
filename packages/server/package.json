@@ -22,6 +22,7 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.64",
     "@ai-sdk/google": "^3.0.53",
+    "@ai-sdk/google-vertex": "^4.0.145",
     "@ai-sdk/mcp": "^1.0.21",
     "@hono/node-server": "^1.19.13",
     "@hono/trpc-server": "^0.4.2",

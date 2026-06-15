@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { theme } from "../../lib/theme";
 import { Spinner } from "../ui/Spinner";
 import { Modal } from "../ui/Modal";
@@ -19,6 +20,8 @@ interface ProviderConfigModalProps {
   saveResult: { success: boolean; error?: string } | null;
   savePending: boolean;
   configured: boolean;
+  /** Optional guidance rendered under the title (e.g. required token scopes). */
+  note?: ReactNode;
   onSave: () => void;
   onClose: () => void;
   onRemove: () => void;
@@ -39,6 +42,7 @@ export function ProviderConfigModal({
   saveResult,
   savePending,
   configured,
+  note,
   onSave,
   onClose,
   onRemove,
@@ -57,6 +61,8 @@ export function ProviderConfigModal({
   return (
     <Modal open={open} onClose={onClose}>
       <div className={theme.dialogTitle + " text-base mb-4"}>Configure {label}</div>
+
+      {note && <div className="mb-4">{note}</div>}
 
       <div className="space-y-3">
         {configFields.map((field) => {

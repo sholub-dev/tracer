@@ -26,7 +26,7 @@ export function getJiraChatTools(
   const tools: Record<string, unknown> = {
     get_jira_issue: tool({
       description:
-        "Read a Jira issue's summary, description, and status by its issue key (e.g. PROJ-123).",
+        "Read a Jira issue's details by its issue key (e.g. PROJ-123): summary, description, status, type, priority, assignee, reporter, labels, components, fix versions, resolution, created/updated/due dates, and its comment thread.",
       inputSchema: z.object({
         issueKey: z.string().describe("Jira issue key, e.g. PROJ-123"),
       }),

@@ -41,11 +41,37 @@ const MAX_RESULT_CHARS = 4000;
 function renderToolPart(p: MessagePart, queries: QueryRecord[]): string {
   const tool = p.type.replace(/^tool-/, "");
   const queryParts = (p.output?.parts ?? []).filter((x) => typeof x?.query === "string");
-  const blocks: string[] = [];
 
+  // Always record the FULL raw rows for programmatic consumers (the `queries`
+  // array in the `--json` envelope). These never go into the prose below.
+  for (const qp of queryParts) {
+    queries.push({ tool, query: qp.query ?? p.input?.query ?? "", results: qp.results });
+  }
+
+  const queryText = queryParts
+    .map((qp) => qp.query ?? p.input?.query ?? "")
+    .filter((q): q is string => !!q)
+    .join("\n---\n");
+
+  // Prefer the provider's formatted summary — the same compact, already
+  // downsampled/aggregated view the model reasoned over. This keeps raw
+  // timeseries arrays OUT of the prose analysis (they bloat the output and get
+  // tail-clipped when piped through a shell), while the full rows stay in
+  // `queries` for anyone who passes `--json`.
+  if (p.output?.analysis) {
+    if (queryParts.length === 0 && p.input?.query) {
+      queries.push({ tool, query: p.input.query, results: p.output.analysis });
+    }
+    // Show the same query in the prose that we recorded in `queries`: prefer the
+    // per-part text, else fall back to the tool's top-level input query.
+    const displayQuery = queryText || p.input?.query || "";
+    return `Query (${tool}):${displayQuery ? `\n\`\`\`\n${displayQuery}\n\`\`\`` : ""}\nResult:\n${p.output.analysis}`;
+  }
+
+  // Fallback: no formatted summary available — emit capped raw JSON per part.
+  const blocks: string[] = [];
   for (const qp of queryParts) {
     const query = qp.query ?? p.input?.query ?? "";
-    queries.push({ tool, query, results: qp.results });
     let resultStr: string;
     try {
       resultStr = JSON.stringify(qp.results);
@@ -57,14 +83,6 @@ function renderToolPart(p: MessagePart, queries: QueryRecord[]): string {
     }
     blocks.push(`Query (${tool}):\n\`\`\`\n${query}\n\`\`\`\nResult:\n\`\`\`json\n${resultStr}\n\`\`\``);
   }
-
-  // Tool produced no query parts (e.g. a non-query tool) — fall back to its summary.
-  if (queryParts.length === 0 && p.output?.analysis) {
-    const query = p.input?.query;
-    if (query) queries.push({ tool, query, results: p.output.analysis });
-    blocks.push(`Query (${tool}):${query ? `\n\`\`\`\n${query}\n\`\`\`` : ""}\nResult:\n${p.output.analysis}`);
-  }
-
   return blocks.join("\n\n");
 }
 

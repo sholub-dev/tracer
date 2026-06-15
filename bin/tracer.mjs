@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
@@ -12,12 +12,66 @@ const serverPath = resolve(repoRoot, "packages/server/dist/index.js");
 // Must match RESTART_EXIT_CODE in packages/server/src/updater.ts
 const RESTART_EXIT_CODE = 75;
 
+const cmd = process.argv[2];
+
+// `tracer-sh --help` / `-h` / `help` — usage for every subcommand.
+if (cmd === "--help" || cmd === "-h" || cmd === "help") {
+  printHelp();
+  process.exit(0);
+}
+
+// `tracer-sh --version` / `-v` — print the installed version.
+if (cmd === "--version" || cmd === "-v" || cmd === "version") {
+  process.stdout.write(getVersion() + "\n");
+  process.exit(0);
+}
+
 // `tracer analyze "<message>" [--session <id>] [--provider <name>] [--json]`
 // Runs the investigation agent on the already-running local server and prints
 // the final analysis. Lets other local agents (e.g. Claude Code) drive Tracer.
-if (process.argv[2] === "analyze") {
+if (cmd === "analyze") {
   await runAnalyze(process.argv.slice(3));
   process.exit(0);
+}
+
+/** Read the package version (best-effort; "unknown" if package.json is unreadable). */
+function getVersion() {
+  try {
+    return JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).version ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+function printHelp() {
+  process.stdout.write(`Tracer ${getVersion()} — local-first AI observability agent
+
+Usage:
+  tracer-sh                                  Start the Tracer server (default http://127.0.0.1:3579)
+  tracer-sh analyze "<message>" [options]    Run a headless investigation on a running server
+  tracer-sh --help                           Show this help
+  tracer-sh --version                        Print the version
+
+analyze options:
+  -s, --session <id>     Resume an existing session by id (preserves full context)
+  -p, --provider <name>  Scope to one provider (newrelic, gcp, posthog); omit for unified mode
+      --json             Print the full JSON envelope:
+                         { sessionId, status, analysis, queries, usage, model }.
+                         The "queries" array holds the FULL raw rows and can be very
+                         large. Without --json, stdout is just the analysis prose and the
+                         line "session <id> · <model>" is written to stderr.
+
+Environment:
+  TRACER_PORT            Server port (default 3579)
+  TRACER_HOST            Bind/target host (default 127.0.0.1)
+  TRACER_SKIP_BUILD      Skip the source-checkout rebuild-on-launch check
+
+Examples:
+  tracer-sh
+  tracer-sh analyze "Why did checkout error rate spike after 14:00 UTC?"
+  tracer-sh analyze "Now break that down by service." --session <id>
+  tracer-sh analyze "Top 5 slowest GCP Cloud Run requests." --provider gcp
+`);
 }
 
 async function runAnalyze(args) {
@@ -28,7 +82,8 @@ async function runAnalyze(args) {
 
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a === "--json") asJson = true;
+    if (a === "--help" || a === "-h") { printHelp(); process.exit(0); }
+    else if (a === "--json") asJson = true;
     else if (a === "--session" || a === "-s") sessionId = args[++i];
     else if (a === "--provider" || a === "-p") provider = args[++i];
     else if (message === undefined) message = a;

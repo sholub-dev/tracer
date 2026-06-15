@@ -190,6 +190,10 @@ export const theme = {
       container: "border-l-2 border-[#7c3aed] pl-4 my-3",
       label: "text-[9px] uppercase tracking-[0.15em] text-[#7c3aed] font-sans font-semibold mb-2",
     },
+    jira: {
+      container: "border-l-2 border-[#0052cc] pl-4 my-3",
+      label: "text-[9px] uppercase tracking-[0.15em] text-[#0052cc] font-sans font-semibold mb-2",
+    },
   } as Record<string, { container: string; label: string }>,
   investigationTask: "text-xs text-[#9c9890] font-sans mb-2 italic",
   investigationThinking: "text-[#9c9890] py-2",

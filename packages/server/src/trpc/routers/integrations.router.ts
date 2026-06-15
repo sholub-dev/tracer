@@ -21,6 +21,10 @@ export const integrationsRouter = router({
     };
   }),
 
+  // Accepts a classic Atlassian API token (email + token). The token authenticates
+  // against the site host with the account's permissions; Tracer constrains what it
+  // can do at the code/tool layer (read one issue, post one comment). Validated with
+  // a /myself call before persisting.
   saveJira: publicProcedure
     .input(
       z.object({

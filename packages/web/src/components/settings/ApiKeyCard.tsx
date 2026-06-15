@@ -1,10 +1,20 @@
+import type { ReactNode } from "react";
 import { useState } from "react";
 import { theme, colors } from "../../lib/theme";
 import { Spinner } from "../ui/Spinner";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { trpc } from "../../lib/trpc";
 
-export function ApiKeyCard({ type, label }: { type: string; label: string }) {
+export function ApiKeyCard({
+  type,
+  label,
+  note,
+}: {
+  type: string;
+  label: string;
+  /** Optional guidance shown while editing (where to make the key, what it does). */
+  note?: ReactNode;
+}) {
   const utils = trpc.useUtils();
   const { data: existing, isLoading } =
     trpc.settings.getApiKey.useQuery(type);
@@ -58,6 +68,7 @@ export function ApiKeyCard({ type, label }: { type: string; label: string }) {
 
       {editing && (
         <div className="mt-3 pt-3 border-t border-[#e8e6e1] space-y-2">
+          {note && <div>{note}</div>}
           <input
             type={apiKey ? "password" : "text"}
             value={apiKey}

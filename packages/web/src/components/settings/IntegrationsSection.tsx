@@ -6,12 +6,52 @@ import { StatusIndicator } from "../ui/StatusIndicator";
 import { ToggleSwitch } from "../ui/ToggleSwitch";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { ProviderConfigModal } from "./ProviderConfigModal";
+import { NoteBox, NOTE_LINK } from "./NoteBox";
 
+// Classic Atlassian API token (id.atlassian.com -> "Create API token"). It uses the
+// account's Jira permissions; Tracer limits what it can do at the code/tool layer
+// (read an issue, post a comment) rather than via token scopes.
 const JIRA_FIELDS = [
   { key: "domain", label: "Domain (yourco → yourco.atlassian.net)", type: "text" },
   { key: "email", label: "Email", type: "text" },
   { key: "apiToken", label: "API Token", type: "password" },
 ];
+
+const JIRA_NOTE = (
+  <NoteBox>
+    <div>
+      Create a token (use the plain <span className="font-medium">Create API token</span>, not
+      "with scopes") at:
+      <br />
+      <a
+        href="https://id.atlassian.com/manage-profile/security/api-tokens"
+        target="_blank"
+        rel="noopener noreferrer"
+        className={NOTE_LINK}
+      >
+        https://id.atlassian.com/manage-profile/security/api-tokens
+      </a>
+    </div>
+    <div>
+      <div className="font-medium">What Tracer can do with it</div>
+      <ul className="list-disc ml-4 mt-1 space-y-0.5">
+        <li>
+          <span className="font-medium">Read an issue</span> — summary, description, status, type,
+          priority, assignee, reporter, labels, components, fix versions, resolution, dates, and
+          its comment thread
+        </li>
+        <li>
+          <span className="font-medium">Post a comment</span> — plain text, only when you ask
+        </li>
+      </ul>
+    </div>
+    <div className="opacity-80">
+      It cannot edit, transition, delete, bulk-read, or administer anything else. The token uses
+      its account's permissions, so for least privilege point it at a Jira account limited to the
+      projects Tracer should touch.
+    </div>
+  </NoteBox>
+);
 
 export function IntegrationsSection() {
   const utils = trpc.useUtils();
@@ -113,6 +153,7 @@ export function IntegrationsSection() {
           saveResult={saveResult}
           savePending={saveJira.isPending}
           configured={configured}
+          note={JIRA_NOTE}
           onSave={handleSave}
           onClose={closeModal}
           onRemove={() => setConfirmRemove(true)}

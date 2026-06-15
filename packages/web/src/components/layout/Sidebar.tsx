@@ -65,11 +65,17 @@ export function Sidebar({
   const activeStatusQuery = trpc.sessions.activeCount.useQuery();
   const utils = trpc.useUtils();
 
-  const hasActiveStreams = (activeStatusQuery.data?.streaming ?? 0) > 0;
+  // Refresh the active-count (which drives the nav "done" badge) every tick. While
+  // the session list is on screen, also refresh the list itself, so a session
+  // created or updated anywhere shows up without a manual refresh — including a
+  // headless `tracer-sh analyze` API session. The active-count deliberately
+  // excludes API/imported sessions, so a count change can't be used to detect
+  // them; polling the list directly does. `list` is lightweight (a few columns, no
+  // message bodies), and usePolling already pauses while the tab is hidden.
   usePolling(() => {
     utils.sessions.activeCount.invalidate();
     if (currentPage === "debug") utils.sessions.list.invalidate();
-  }, WEB_CONFIG.activeStreamPollingMs, hasActiveStreams);
+  }, WEB_CONFIG.activeStreamPollingMs, true);
 
   const shouldPollMonitors = trpc.monitors.shouldPoll.useQuery(undefined, {
     enabled: FEATURES.monitors,

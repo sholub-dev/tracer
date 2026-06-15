@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useState } from "react";
 import { Spinner } from "../ui/Spinner";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
@@ -5,8 +6,70 @@ import { trpc } from "../../lib/trpc";
 import { WEB_CONFIG } from "../../lib/config";
 import { ProviderCard } from "./ProviderCard";
 import { ProviderConfigModal } from "./ProviderConfigModal";
+import { NoteBox, NOTE_LINK } from "./NoteBox";
 
 type ConfigField = { key: string; label: string; type: string; required?: boolean };
+
+/** Per-provider guidance shown in the config dialog: where to make the key and what it lets Tracer do. */
+const PROVIDER_NOTES: Record<string, ReactNode> = {
+  newrelic: (
+    <NoteBox>
+      <div>
+        Create a <span className="font-medium">User key</span> at:
+        <br />
+        <a
+          href="https://one.newrelic.com/admin-portal/api-keys/home"
+          target="_blank"
+          rel="noopener noreferrer"
+          className={NOTE_LINK}
+        >
+          https://one.newrelic.com/admin-portal/api-keys/home
+        </a>
+        <br />
+        Your numeric Account ID is shown on the same page.
+      </div>
+      <div>
+        <div className="font-medium">What Tracer can do with it</div>
+        <ul className="list-disc ml-4 mt-1 space-y-0.5">
+          <li>
+            <span className="font-medium">Run read-only NRQL queries</span> against your account —
+            to inspect metrics, logs, traces, and errors while investigating.
+          </li>
+        </ul>
+      </div>
+      <div className="opacity-80">
+        It only reads via NRQL. It cannot write, modify, deploy, or delete anything. A New Relic
+        User key inherits your role, so for least privilege use a user scoped to read-only access.
+      </div>
+    </NoteBox>
+  ),
+  posthog: (
+    <NoteBox>
+      <div>
+        Create a <span className="font-medium">Personal API key</span> in your PostHog instance at:
+        <br />
+        <span className="font-mono">/settings/user-api-keys</span>
+        <br />
+        Grant it the single scope <span className="font-medium">Query → Read</span>. The Project ID
+        is in Settings → Project. Set Host only if you are not on US cloud (e.g.
+        <span className="font-mono"> eu.posthog.com</span> or a self-hosted URL).
+      </div>
+      <div>
+        <div className="font-medium">What Tracer can do with it</div>
+        <ul className="list-disc ml-4 mt-1 space-y-0.5">
+          <li>
+            <span className="font-medium">Run read-only HogQL queries</span> against the project —
+            to inspect events, persons, and analytics while investigating.
+          </li>
+        </ul>
+      </div>
+      <div className="opacity-80">
+        With only the <span className="font-medium">Query → Read</span> scope it cannot create,
+        modify, or delete anything in PostHog, and it reaches only the project you configure.
+      </div>
+    </NoteBox>
+  ),
+};
 
 function buildInitialValues(fields: ConfigField[], existingConfig?: Record<string, string>): Record<string, string> {
   const values: Record<string, string> = {};
@@ -151,6 +214,7 @@ export function DataProvidersSection() {
           saveResult={saveResult}
           savePending={saveConfig.isPending}
           configured={!!editingConfig}
+          note={PROVIDER_NOTES[editingProvider]}
           onSave={() => handleSave(editingProvider)}
           onClose={handleClose}
           onRemove={() => setConfirmRemoveProvider(editingProvider)}

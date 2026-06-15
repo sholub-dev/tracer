@@ -47,6 +47,8 @@ const SUB_AGENT_LABELS: Record<string, string> = {
   "tool-newrelic": "New Relic",
   "tool-hogql": "PostHog",
   "tool-posthog": "PostHog",
+  "tool-get_jira_issue": "Jira",
+  "tool-add_jira_comment": "Jira",
 };
 
 function getSubAgentLabel(toolType: string): string {
@@ -62,6 +64,8 @@ const SUB_AGENT_ACCENTS: Record<string, string> = {
   "tool-newrelic": "newrelic",
   "tool-hogql": "posthog",
   "tool-posthog": "posthog",
+  "tool-get_jira_issue": "jira",
+  "tool-add_jira_comment": "jira",
 };
 
 function getProviderAccent(toolType: string): { container: string; label: string } {
@@ -73,6 +77,141 @@ function getProviderAccent(toolType: string): { container: string; label: string
     }
   );
 }
+
+// ── Jira integration tool outputs ──
+
+interface JiraCommentView {
+  id: string | null;
+  author: string | null;
+  body: string | null;
+  created: string | null;
+}
+
+interface JiraIssueView {
+  key: string;
+  summary: string;
+  description: string | null;
+  status: string;
+  issueType: string | null;
+  priority: string | null;
+  assignee: string | null;
+  reporter: string | null;
+  labels: string[];
+  components: string[];
+  fixVersions: string[];
+  created: string | null;
+  updated: string | null;
+  dueDate: string | null;
+  resolution: string | null;
+  comments: JiraCommentView[];
+}
+
+function isJiraIssueOutput(o: unknown): o is { issue: JiraIssueView } {
+  return (
+    !!o && typeof o === "object" && "issue" in o &&
+    !!(o as { issue?: unknown }).issue && typeof (o as { issue: unknown }).issue === "object"
+  );
+}
+
+function isJiraCommentOutput(o: unknown): o is { posted: boolean; url: string } {
+  if (!o || typeof o !== "object") return false;
+  const r = o as { posted?: unknown; url?: unknown };
+  return r.posted === true && typeof r.url === "string";
+}
+
+/** ISO timestamp → just the date portion. */
+function jiraDate(s: string | null): string | null {
+  return s ? s.slice(0, 10) : null;
+}
+
+const JiraIssueCard = memo(function JiraIssueCard({
+  issue, container, labelClass, headerLabel,
+}: { issue: JiraIssueView; container: string; labelClass: string; headerLabel: string }) {
+  // Older persisted chats stored a slimmer issue shape, so every optional field
+  // (especially the arrays) must be treated as possibly missing.
+  const labels = issue.labels ?? [];
+  const components = issue.components ?? [];
+  const fixVersions = issue.fixVersions ?? [];
+  const comments = issue.comments ?? [];
+  const rows = ([
+    ["Type", issue.issueType],
+    ["Priority", issue.priority],
+    ["Assignee", issue.assignee],
+    ["Reporter", issue.reporter],
+    ["Resolution", issue.resolution],
+    ["Due", jiraDate(issue.dueDate)],
+    ["Created", jiraDate(issue.created)],
+    ["Updated", jiraDate(issue.updated)],
+    ["Components", components.length ? components.join(", ") : null],
+    ["Fix versions", fixVersions.length ? fixVersions.join(", ") : null],
+  ] as Array<[string, string | null]>).filter((r): r is [string, string] => !!r[1]);
+
+  return (
+    <div className={container}>
+      <div className={labelClass}>{headerLabel}</div>
+      <div className="font-mono text-xs text-[#0052cc] mb-1">{issue.key}</div>
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
+        <span className="font-medium text-sm">{issue.summary}</span>
+        <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-[#e6eefc] text-[#0052cc]">
+          {issue.status}
+        </span>
+      </div>
+      {rows.length > 0 && (
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs mb-2">
+          {rows.map(([k, v]) => (
+            <div key={k} className="flex gap-1">
+              <span className="opacity-50 min-w-[5.5rem]">{k}</span>
+              <span>{v}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {labels.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1 mb-2">
+          <span className="opacity-50 text-xs mr-1">Labels</span>
+          {labels.map((l) => (
+            <span key={l} className="text-[11px] px-1.5 py-0.5 rounded bg-[#f0eee9] text-[#555]">{l}</span>
+          ))}
+        </div>
+      )}
+      {issue.description && (
+        <div className="text-sm whitespace-pre-wrap text-[#333] border-t border-[#e5e3de] pt-2 mt-1">
+          {issue.description}
+        </div>
+      )}
+      {comments.length > 0 && (
+        <div className="border-t border-[#e5e3de] pt-2 mt-2 space-y-2">
+          <div className="opacity-50 text-xs">Comments ({comments.length})</div>
+          {comments.map((c, i) => (
+            <div key={c.id ?? i} className="text-xs">
+              <div className="flex gap-2 mb-0.5 opacity-70">
+                <span className="font-medium">{c.author ?? "Unknown"}</span>
+                {jiraDate(c.created) && <span>{jiraDate(c.created)}</span>}
+              </div>
+              {c.body && <div className="whitespace-pre-wrap text-[#333]">{c.body}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+});
+
+const JiraCommentCard = memo(function JiraCommentCard({
+  url, container, labelClass, headerLabel,
+}: { url: string; container: string; labelClass: string; headerLabel: string }) {
+  return (
+    <div className={container}>
+      <div className={labelClass}>{headerLabel}</div>
+      <div className="text-sm">
+        Comment posted.{" "}
+        <a href={url} target="_blank" rel="noopener noreferrer" className="underline text-[#0052cc]">
+          View in Jira
+        </a>
+      </div>
+    </div>
+  );
+});
 
 function isSubAgentOutput(output: unknown): output is SubAgentOutput {
   if (!output || typeof output !== "object" || Array.isArray(output)) return false;
@@ -235,6 +374,29 @@ export const ToolPartRenderer = memo(function ToolPartRenderer({ part, progressS
           <div className={accent.label}>{label}</div>
           <div className={theme.resultErrorMessage}>{output.error}</div>
         </div>
+      );
+    }
+
+    // Jira integration tools return plain result objects (not progress streams),
+    // so render them as readable cards instead of falling through to raw JSON.
+    if (part.type === "tool-get_jira_issue" && isComplete && isJiraIssueOutput(output)) {
+      return (
+        <JiraIssueCard
+          issue={output.issue}
+          container={accent.container}
+          labelClass={accent.label}
+          headerLabel={label}
+        />
+      );
+    }
+    if (part.type === "tool-add_jira_comment" && isComplete && isJiraCommentOutput(output)) {
+      return (
+        <JiraCommentCard
+          url={output.url}
+          container={accent.container}
+          labelClass={accent.label}
+          headerLabel={label}
+        />
       );
     }
 

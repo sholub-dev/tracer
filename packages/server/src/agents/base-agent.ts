@@ -10,10 +10,7 @@ import type { ChatToolWriter as StreamWriter } from "@tracer-sh/shared";
 import { getCurrentDateBlock } from "../lib/current-context.js";
 import { CONFIG } from "../config.js";
 
-/**
- * Appended to the system prompt only when the conversation carries an attached
- * image or file, so attachments are treated as evidence to mine rather than skim.
- */
+/** Appended to the system prompt only when an attachment is present. */
 const IMAGE_ANALYSIS_GUIDANCE = `## Working with attached images and files
 The user has attached one or more images or files. Treat each as primary evidence, not decoration:
 - Analyze every attachment carefully and in full — do not skim. Inspect fine detail, not just the gist.

@@ -180,12 +180,8 @@ export function useAvailableModels(): {
   return { models, isLoading: vertexEnabled && vertexLoading };
 }
 
-/**
- * File drag-and-drop onto an element. Returns `dragActive` (true while files are
- * dragged over) and `dropProps` to spread on the drop target. A depth counter
- * keeps `dragActive` stable as the cursor crosses child elements (enter/leave
- * bubble), so the highlight doesn't flicker. Pass `enabled = false` to disable.
- */
+/** File drag-and-drop. Spread `dropProps` on the target; `dragActive` is true while
+ *  files are over it (a depth counter avoids child-bubbling flicker). */
 export function useFileDrop(onFiles: (files: FileList) => void, enabled = true) {
   const [dragActive, setDragActive] = useState(false);
   const depth = useRef(0);

@@ -49,17 +49,12 @@ const VARIANT_CLASSES = {
   },
 } as const;
 
-// ponytail: attachments ride inline as data-URL file parts (AI SDK default) and
-// persist in the session's messages JSON. The 10MB/file cap keeps a single
-// message from bloating the DB row / re-sent context; raise it or move to a
-// server file store only if that ceiling actually bites.
 const MAX_ATTACH_BYTES = 10 * 1024 * 1024;
 const ATTACH_ACCEPT = "image/*,text/*,.md,.json,.csv,.log,application/pdf";
 
 type Attachment = { file: File; url: string | null };
 
-// Mirrors ATTACH_ACCEPT for drag/paste, which bypass the file picker's filter.
-// Empty type is allowed — many text files (.md/.log/.csv) report no MIME type.
+// Empty type allowed — many text files report no MIME type.
 const isAttachable = (type: string) =>
   type === "" ||
   type.startsWith("image/") ||
@@ -251,8 +246,6 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    // Thumbnail object URLs are minted once per file at add-time (not in a memo)
-    // so growing/shrinking the list never re-creates URLs for unchanged files.
     const addFiles = useCallback((incoming: FileList | File[]) => {
       const list = Array.from(incoming);
       const ok = list.filter((f) => isAttachable(f.type) && f.size <= MAX_ATTACH_BYTES);
@@ -420,10 +413,8 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
       setInput("");
       scrollToBottom({ animation: "instant" });
       if (attachments.length > 0) {
-        // Reassemble accumulated File[] into a FileList so the AI SDK encodes
-        // them as file parts (data URLs) on the outgoing user message. A
-        // file-only turn still carries an instruction so the model has direction
-        // and session-title generation (which keys on a text part) still fires.
+        // File-only turn keeps a default instruction so title generation, which
+        // keys on a text part, still fires.
         const dt = new DataTransfer();
         attachments.forEach((a) => dt.items.add(a.file));
         sendMessage({ text: text || "Please analyze the attached file(s).", files: dt.files });

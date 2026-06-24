@@ -108,12 +108,9 @@ function AnalysisSection({
   );
 }
 
-/** AI SDK file part — an attached image/document carried as a data URL. */
 type FilePartLike = { type: "file"; mediaType?: string; url: string; filename?: string };
 
-/** Renders an attachment: images inline as a thumbnail, other files as a chip.
- *  Clicking opens an in-app overlay — data: URLs can't be opened in a new tab
- *  (browsers block top-level data: navigation, which renders a blank page). */
+// Overlay rather than a link: browsers block top-level data: URL navigation.
 function FileAttachment({ part }: { part: FilePartLike }) {
   const [open, setOpen] = useState(false);
   const isImage = part.mediaType?.startsWith("image/");
@@ -142,8 +139,6 @@ function FileAttachment({ part }: { part: FilePartLike }) {
   );
 }
 
-/** Full-screen overlay previewing an attachment — image as <img>, everything
- *  else (PDF, text) in an <iframe>. Click outside or Esc to close. */
 function AttachmentOverlay({ part, onClose }: { part: FilePartLike; onClose: () => void }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };

@@ -32,7 +32,7 @@
     "ai": "^6.0.140",
     "better-sqlite3-multiple-ciphers": "^12.6.2",
     "drizzle-orm": "^0.45.2",
-    "hono": "^4.12.21",
+    "hono": "^4.12.25",
     "superjson": "^2.2.6",
     "zod": "^4.3.6"
   },

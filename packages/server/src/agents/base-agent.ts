@@ -11,6 +11,18 @@ import { getCurrentDateBlock } from "../lib/current-context.js";
 import { CONFIG } from "../config.js";
 
 /**
+ * Appended to the system prompt only when the conversation carries an attached
+ * image or file, so attachments are treated as evidence to mine rather than skim.
+ */
+const IMAGE_ANALYSIS_GUIDANCE = `## Working with attached images and files
+The user has attached one or more images or files. Treat each as primary evidence, not decoration:
+- Analyze every attachment carefully and in full — do not skim. Inspect fine detail, not just the gist.
+- Extract ALL information that could matter: exact error messages and stack traces, status/error codes, log lines, timestamps, numeric values with their units, axis labels and series values on charts/graphs, configuration keys, IDs, and any text visible in screenshots.
+- Transcribe values precisely and double-check each reading before relying on it — re-read the image to confirm digits, spelling, and signs rather than approximating.
+- Quote what is actually shown rather than paraphrasing loosely, and tie every conclusion back to specific details in the attachment.
+- If any part is blurry, cropped, truncated, or ambiguous, say so explicitly and ask — never guess at an unreadable value.`;
+
+/**
  * Sanitize messages loaded from the DB so incomplete tool parts (from aborted
  * runs) and stale streaming parts don't break `convertToModelMessages`.
  */
@@ -173,6 +185,10 @@ When the user's question spans multiple providers, query each relevant provider 
   }
 
   systemPrompt += "\n\n" + getCurrentDateBlock(context.db);
+
+  if (modelInput.some((m) => m.parts.some((p) => p.type === "file"))) {
+    systemPrompt += "\n\n" + IMAGE_ANALYSIS_GUIDANCE;
+  }
 
   if (summaryForPrompt) {
     systemPrompt += `\n\n## Earlier conversation summary\nThe earlier part of this conversation was compacted to save context. The summary below replaces those messages and is authoritative: the work it describes is already done — do NOT redo it. Reuse its recorded results, identifiers, queries, and conclusions.\n\n<conversation_summary>\n${summaryForPrompt}\n</conversation_summary>`;

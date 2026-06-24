@@ -14,7 +14,7 @@ import { DefaultChatTransport, type UIMessage } from "ai";
 import { analysisSectionParts } from "@tracer-sh/shared";
 import { theme } from "../../lib/theme";
 import { ProgressStore } from "../../lib/progress-store";
-import { useChatScroll } from "../../lib/hooks";
+import { useChatScroll, useFileDrop } from "../../lib/hooks";
 import { MessageParts, ThinkingDots, ScrollToBottomButton } from "./MessageParts";
 import { handleProgressData, normalizeClipboard } from "../../lib/chat-utils";
 import { CopyMessageButton } from "./CopyMessageButton";
@@ -48,6 +48,32 @@ const VARIANT_CLASSES = {
     continueMargin: "mt-3",
   },
 } as const;
+
+// ponytail: attachments ride inline as data-URL file parts (AI SDK default) and
+// persist in the session's messages JSON. The 10MB/file cap keeps a single
+// message from bloating the DB row / re-sent context; raise it or move to a
+// server file store only if that ceiling actually bites.
+const MAX_ATTACH_BYTES = 10 * 1024 * 1024;
+const ATTACH_ACCEPT = "image/*,text/*,.md,.json,.csv,.log,application/pdf";
+
+type Attachment = { file: File; url: string | null };
+
+// Mirrors ATTACH_ACCEPT for drag/paste, which bypass the file picker's filter.
+// Empty type is allowed — many text files (.md/.log/.csv) report no MIME type.
+const isAttachable = (type: string) =>
+  type === "" ||
+  type.startsWith("image/") ||
+  type.startsWith("text/") ||
+  type === "application/pdf" ||
+  type === "application/json";
+
+function AttachFileIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+    </svg>
+  );
+}
 
 // ── Types ──
 
@@ -217,10 +243,41 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
     ref,
   ) {
     const [input, setInput] = useState("");
+    const [attachments, setAttachments] = useState<Attachment[]>([]);
+    const [attachError, setAttachError] = useState<string | null>(null);
     const progressStore = useRef(new ProgressStore()).current;
     const v = VARIANT_CLASSES[variant];
     const pad = variant === "panel" ? "px-4" : "px-10";
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    // Thumbnail object URLs are minted once per file at add-time (not in a memo)
+    // so growing/shrinking the list never re-creates URLs for unchanged files.
+    const addFiles = useCallback((incoming: FileList | File[]) => {
+      const list = Array.from(incoming);
+      const ok = list.filter((f) => isAttachable(f.type) && f.size <= MAX_ATTACH_BYTES);
+      if (ok.length < list.length) {
+        setAttachError("Some files were skipped — unsupported type or over 10 MB.");
+        setTimeout(() => setAttachError(null), 3500);
+      }
+      if (ok.length) {
+        setAttachments((prev) => [...prev, ...ok.map((f) => ({ file: f, url: f.type.startsWith("image/") ? URL.createObjectURL(f) : null }))]);
+      }
+    }, []);
+
+    const removeAttachment = useCallback((idx: number) => {
+      setAttachments((prev) => {
+        if (prev[idx]?.url) URL.revokeObjectURL(prev[idx].url!);
+        return prev.filter((_, i) => i !== idx);
+      });
+    }, []);
+
+    // Revoke any still-pending thumbnail URLs on unmount.
+    const attachmentsRef = useRef(attachments);
+    attachmentsRef.current = attachments;
+    useEffect(() => () => { attachmentsRef.current.forEach((a) => a.url && URL.revokeObjectURL(a.url)); }, []);
+
+    const { dragActive, dropProps } = useFileDrop(addFiles, !readOnly && !inputDisabled);
 
     const { scrollRef, contentRef, isAtBottom, handleWheel, scrollToBottom, scrollToTop } = useChatScroll();
 
@@ -359,10 +416,22 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
     const handleSubmit = (e: React.FormEvent) => {
       e.preventDefault();
       const text = input.trim();
-      if (!text || isLoading || inputDisabled) return;
+      if ((!text && attachments.length === 0) || isLoading || inputDisabled) return;
       setInput("");
       scrollToBottom({ animation: "instant" });
-      sendMessage({ text });
+      if (attachments.length > 0) {
+        // Reassemble accumulated File[] into a FileList so the AI SDK encodes
+        // them as file parts (data URLs) on the outgoing user message. A
+        // file-only turn still carries an instruction so the model has direction
+        // and session-title generation (which keys on a text part) still fires.
+        const dt = new DataTransfer();
+        attachments.forEach((a) => dt.items.add(a.file));
+        sendMessage({ text: text || "Please analyze the attached file(s).", files: dt.files });
+        attachments.forEach((a) => a.url && URL.revokeObjectURL(a.url));
+        setAttachments([]);
+      } else {
+        sendMessage({ text });
+      }
       textareaRef.current?.focus();
     };
 
@@ -415,7 +484,12 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
     );
 
     return (
-      <div className={`flex flex-col h-full ${className ?? ""}`}>
+      <div className={`relative flex flex-col h-full ${className ?? ""}`} {...dropProps}>
+        {dragActive && (
+          <div className="absolute inset-0 z-40 pointer-events-none flex items-center justify-center bg-[#2b5ea7]/10 border-2 border-dashed border-[#2b5ea7] rounded">
+            <span className="text-sm font-medium text-[#2b5ea7] bg-white/90 px-4 py-2 rounded shadow-sm">Drop to attach</span>
+          </div>
+        )}
         {header}
 
         <div className="relative flex-1 min-h-0">
@@ -498,7 +572,52 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
         {beforeInput}
         {!readOnly && (
         <form onSubmit={handleSubmit} className={v.inputArea}>
+          {attachments.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-2">
+              {attachments.map((a, i) => (
+                <div key={i} className="relative group/att">
+                  {a.url ? (
+                    <img src={a.url} alt={a.file.name} className="h-14 w-14 object-cover rounded border border-[#d4d2cd]" />
+                  ) : (
+                    <div className="flex items-center gap-1.5 h-14 px-2.5 rounded border border-[#d4d2cd] bg-[#f5f4f0] text-xs text-[#444444] font-sans max-w-[180px]">
+                      <AttachFileIcon />
+                      <span className="truncate">{a.file.name}</span>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => removeAttachment(i)}
+                    aria-label={`Remove ${a.file.name}`}
+                    className="absolute -top-1.5 -right-1.5 w-4 h-4 flex items-center justify-center rounded-full bg-[#2c2c2c] text-white text-[10px] leading-none opacity-0 group-hover/att:opacity-100 transition-opacity"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {attachError && (
+            <div className="text-xs text-[#b33a2a] mb-2 font-sans">{attachError}</div>
+          )}
           <div className={variant === "full" ? "flex gap-3 items-start" : "flex gap-2"}>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept={ATTACH_ACCEPT}
+              className="hidden"
+              onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }}
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={inputDisabled}
+              aria-label="Attach files"
+              title="Attach files"
+              className="shrink-0 px-3 py-2.5 rounded text-[#666666] hover:text-[#2b5ea7] hover:bg-[#eaf0f8] transition-colors disabled:opacity-50"
+            >
+              <AttachFileIcon size={18} />
+            </button>
             <textarea
               ref={textareaRef}
               value={input}
@@ -515,6 +634,12 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
                   ta.style.height = "auto";
                 }
               }}
+              onPaste={(e) => {
+                if (e.clipboardData.files?.length) {
+                  e.preventDefault();
+                  addFiles(e.clipboardData.files);
+                }
+              }}
               placeholder={placeholder}
               rows={1}
               autoFocus
@@ -528,7 +653,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
             ) : (
               <button
                 type="submit"
-                disabled={!input.trim() || inputDisabled}
+                disabled={(!input.trim() && attachments.length === 0) || inputDisabled}
                 aria-label="Send message"
                 className={v.sendBtn}
               >

@@ -1,4 +1,4 @@
-import React, { useRef, useCallback, useState } from "react";
+import React, { useRef, useCallback, useEffect, useState } from "react";
 import { Streamdown } from "streamdown";
 import { ANALYSIS_MARKER, findAnalysisMarker } from "@tracer-sh/shared";
 import { ToolPartRenderer } from "./ToolPartRenderer";
@@ -108,6 +108,81 @@ function AnalysisSection({
   );
 }
 
+/** AI SDK file part — an attached image/document carried as a data URL. */
+type FilePartLike = { type: "file"; mediaType?: string; url: string; filename?: string };
+
+/** Renders an attachment: images inline as a thumbnail, other files as a chip.
+ *  Clicking opens an in-app overlay — data: URLs can't be opened in a new tab
+ *  (browsers block top-level data: navigation, which renders a blank page). */
+function FileAttachment({ part }: { part: FilePartLike }) {
+  const [open, setOpen] = useState(false);
+  const isImage = part.mediaType?.startsWith("image/");
+  return (
+    <>
+      {isImage ? (
+        <button type="button" onClick={() => setOpen(true)} className="block my-2 cursor-zoom-in" aria-label="Open image">
+          <img
+            src={part.url}
+            alt={part.filename ?? "attached image"}
+            className="max-h-64 max-w-full rounded border border-[#d4d2cd]"
+          />
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="inline-flex items-center gap-2 my-1 px-3 py-2 rounded border border-[#d4d2cd] bg-white text-sm text-[#444444] hover:border-[#2b5ea7] hover:text-[#2b5ea7] transition-colors font-sans"
+        >
+          <FileIcon />
+          <span className="truncate max-w-[240px]">{part.filename ?? part.mediaType ?? "file"}</span>
+        </button>
+      )}
+      {open && <AttachmentOverlay part={part} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+/** Full-screen overlay previewing an attachment — image as <img>, everything
+ *  else (PDF, text) in an <iframe>. Click outside or Esc to close. */
+function AttachmentOverlay({ part, onClose }: { part: FilePartLike; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const label = part.filename ?? part.mediaType ?? "attachment";
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-black/70" onClick={onClose}>
+      <div className="flex items-center justify-between gap-4 px-4 py-2.5 text-white text-sm font-sans">
+        <span className="truncate">{label}</span>
+        <div className="flex items-center gap-4 shrink-0">
+          <a href={part.url} download={part.filename ?? "attachment"} onClick={(e) => e.stopPropagation()} className="hover:underline">
+            Download
+          </a>
+          <button type="button" onClick={onClose} aria-label="Close" className="text-lg leading-none hover:text-[#9c9890]">×</button>
+        </div>
+      </div>
+      <div className="flex-1 min-h-0 p-4 flex items-center justify-center">
+        {part.mediaType?.startsWith("image/") ? (
+          <img src={part.url} alt={label} className="max-h-full max-w-full object-contain" onClick={(e) => e.stopPropagation()} />
+        ) : (
+          <iframe src={part.url} title={label} className="w-full h-full bg-white rounded" onClick={(e) => e.stopPropagation()} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FileIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+    </svg>
+  );
+}
+
 function DownloadIcon({ size = 14 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -140,6 +215,9 @@ export const MessageParts = React.memo(
             {text}
           </Streamdown>
         );
+      }
+      if (part.type === "file") {
+        return <FileAttachment key={i} part={part as FilePartLike} />;
       }
       return (
         <ToolPartRenderer

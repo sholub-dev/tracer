@@ -8,11 +8,10 @@ import { CopyMessageButton } from "../components/chat/CopyMessageButton";
 import { SessionSummaryBlock } from "../components/chat/SessionSummaryBlock";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { ProviderToggle } from "../components/ui/ProviderToggle";
-import { DEFAULT_SESSION_TITLE, ImportedAnalysisSchema, SESSION_KIND, UNIFIED_SCOPE, analysisSectionParts, compactionUpTo, isAnalysisMessage } from "@tracer-sh/shared";
+import { DEFAULT_SESSION_TITLE, SESSION_KIND, UNIFIED_SCOPE, analysisSectionParts, compactionUpTo, isAnalysisMessage } from "@tracer-sh/shared";
 import { SessionTitle } from "../components/debug/SessionTitle";
 import { CostDisplay, computeCostBreakdown, type CostBreakdown } from "../components/debug/CostDisplay";
 import { EditMessageForm } from "../components/debug/EditMessageForm";
-import { decodePngPayload } from "../lib/png-steg";
 
 interface DebugProps {
   sessionId: string | null;
@@ -25,101 +24,6 @@ export function Debug({ sessionId, onSessionChange }: DebugProps) {
   useEffect(() => {
     if (!sessionId) onSessionChange(resolvedId);
   }, [sessionId, resolvedId, onSessionChange]);
-
-  // ── Drag-and-drop import ─────────────────────────────────────────────
-  const [dragCounter, setDragCounter] = useState(0);
-  const [dropError, setDropError] = useState<string | null>(null);
-  const importMutation = trpc.sessions.importAnalysis.useMutation();
-  const dropUtils = trpc.useUtils();
-
-  const handleDrop = useCallback(async (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragCounter(0);
-    const files = e.dataTransfer.files;
-    if (!files || files.length !== 1 || files[0].type !== "image/png") {
-      setDropError("Only single PNG files are supported.");
-      return;
-    }
-    const file = files[0];
-    if (file.size > 10 * 1024 * 1024) {
-      setDropError("PNG is too large (>10 MB).");
-      return;
-    }
-    try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      let payload: Uint8Array | null;
-      try {
-        payload = await decodePngPayload(bytes);
-      } catch {
-        setDropError("Not a valid PNG file.");
-        return;
-      }
-      if (!payload) {
-        setDropError("No analysis data found in this image.");
-        return;
-      }
-      let parsed;
-      try {
-        parsed = ImportedAnalysisSchema.parse(JSON.parse(new TextDecoder().decode(payload)));
-      } catch {
-        setDropError("Analysis data is malformed or from an incompatible version.");
-        return;
-      }
-      const { id } = await importMutation.mutateAsync(parsed);
-      dropUtils.sessions.list.setData(undefined, (prev) => {
-        const row = {
-          id,
-          title: parsed.sourceTitle.slice(0, 80) || DEFAULT_SESSION_TITLE,
-          status: "idle" as const,
-          kind: SESSION_KIND.IMPORTED as string | null,
-          updatedAt: Math.floor(Date.now() / 1000),
-          titlePending: false,
-        };
-        return prev ? [row, ...prev] : [row];
-      });
-      setDropError(null);
-      onSessionChange(id);
-    } catch {
-      setDropError("Couldn't import analysis.");
-    }
-  }, [importMutation, dropUtils, onSessionChange]);
-
-  const dropHandlers = {
-    onDragEnter: (e: React.DragEvent) => {
-      if (!Array.from(e.dataTransfer.types).includes("Files")) return;
-      e.preventDefault();
-      setDragCounter((c) => c + 1);
-    },
-    onDragOver: (e: React.DragEvent) => {
-      if (!Array.from(e.dataTransfer.types).includes("Files")) return;
-      e.preventDefault();
-    },
-    onDragLeave: () => setDragCounter((c) => Math.max(0, c - 1)),
-    onDrop: handleDrop,
-  };
-
-  const dropOverlay = dragCounter > 0 ? (
-    <div
-      className="absolute inset-0 z-40 pointer-events-none flex items-center justify-center bg-[#2b5ea7]/10 border-2 border-dashed border-[#2b5ea7] rounded"
-    >
-      <span className="text-sm font-medium text-[#2b5ea7] bg-white/90 px-4 py-2 rounded shadow-sm">
-        Drop PNG to import analysis
-      </span>
-    </div>
-  ) : null;
-
-  const dropBanner = dropError ? (
-    <TopBanner tone="error">
-      <span>{dropError}</span>
-      <button
-        type="button"
-        onClick={() => setDropError(null)}
-        className="text-xs underline shrink-0"
-      >
-        dismiss
-      </button>
-    </TopBanner>
-  ) : null;
 
   // Default everyone into the cross-provider "ALL" (unified) scope; a stored preference
   // (set when the user picks a specific provider) overrides it and carries across sessions.
@@ -248,13 +152,7 @@ export function Debug({ sessionId, onSessionChange }: DebugProps) {
     );
   }
 
-  return (
-    <div className="relative h-full" {...dropHandlers}>
-      {body}
-      {dropBanner}
-      {dropOverlay}
-    </div>
-  );
+  return <div className="relative h-full">{body}</div>;
 }
 
 // ── Read-only view for imported sessions ─────────────────────────────────────

@@ -180,6 +180,31 @@ export function useAvailableModels(): {
   return { models, isLoading: vertexEnabled && vertexLoading };
 }
 
+/**
+ * File drag-and-drop onto an element. Returns `dragActive` (true while files are
+ * dragged over) and `dropProps` to spread on the drop target. A depth counter
+ * keeps `dragActive` stable as the cursor crosses child elements (enter/leave
+ * bubble), so the highlight doesn't flicker. Pass `enabled = false` to disable.
+ */
+export function useFileDrop(onFiles: (files: FileList) => void, enabled = true) {
+  const [dragActive, setDragActive] = useState(false);
+  const depth = useRef(0);
+  const onFilesRef = useRef(onFiles);
+  onFilesRef.current = onFiles;
+
+  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
+  const dropProps = enabled
+    ? {
+        onDragEnter: (e: React.DragEvent) => { if (!hasFiles(e)) return; e.preventDefault(); depth.current += 1; setDragActive(true); },
+        onDragOver: (e: React.DragEvent) => { if (!hasFiles(e)) return; e.preventDefault(); },
+        onDragLeave: () => { depth.current = Math.max(0, depth.current - 1); if (depth.current === 0) setDragActive(false); },
+        onDrop: (e: React.DragEvent) => { e.preventDefault(); depth.current = 0; setDragActive(false); if (e.dataTransfer.files?.length) onFilesRef.current(e.dataTransfer.files); },
+      }
+    : {};
+
+  return { dragActive: enabled && dragActive, dropProps };
+}
+
 /** Calls callback when a click occurs outside the referenced element. */
 export function useClickOutside<T extends HTMLElement>(
   ref: RefObject<T | null>,

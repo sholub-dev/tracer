@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
-import { FEATURES, SESSION_KIND } from "@tracer-sh/shared";
-import { usePolling } from "../../lib/hooks";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { DEFAULT_SESSION_TITLE, FEATURES, ImportedAnalysisSchema, SESSION_KIND } from "@tracer-sh/shared";
+import { useFileDrop, usePolling } from "../../lib/hooks";
 import { theme } from "../../lib/theme";
 import { trpc } from "../../lib/trpc";
 import { WEB_CONFIG } from "../../lib/config";
+import { decodePngPayload } from "../../lib/png-steg";
 import { ScrollableList } from "./ScrollableList";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { UpdateModal } from "./UpdateModal";
@@ -134,6 +135,46 @@ export function Sidebar({
     e.stopPropagation();
     setConfirmTarget({ type: "dashboard", id });
   };
+
+  // ── Import analysis from a Tracer "Download as image" PNG ────────────────
+  const [importError, setImportError] = useState<string | null>(null);
+  const importMutation = trpc.sessions.importAnalysis.useMutation();
+
+  const importPng = useCallback(async (file: File) => {
+    if (file.type !== "image/png") { setImportError("Only PNG files are supported."); return; }
+    if (file.size > 10 * 1024 * 1024) { setImportError("PNG is too large (>10 MB)."); return; }
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let payload: Uint8Array | null;
+      try { payload = await decodePngPayload(bytes); }
+      catch { setImportError("Not a valid PNG file."); return; }
+      if (!payload) { setImportError("No analysis data found in this image."); return; }
+      let parsed;
+      try { parsed = ImportedAnalysisSchema.parse(JSON.parse(new TextDecoder().decode(payload))); }
+      catch { setImportError("Analysis data is malformed or from an incompatible version."); return; }
+      const { id } = await importMutation.mutateAsync(parsed);
+      utils.sessions.list.setData(undefined, (prev) => {
+        const row = {
+          id,
+          title: parsed.sourceTitle.slice(0, 80) || DEFAULT_SESSION_TITLE,
+          status: "idle" as const,
+          kind: SESSION_KIND.IMPORTED as string | null,
+          updatedAt: Math.floor(Date.now() / 1000),
+          titlePending: false,
+        };
+        return prev ? [row, ...prev] : [row];
+      });
+      setImportError(null);
+      if (currentPage !== "debug") onNavigate("debug");
+      onSelectSession(id);
+    } catch { setImportError("Couldn't import analysis."); }
+  }, [importMutation, utils, onSelectSession, onNavigate, currentPage]);
+
+  const onImportFiles = useCallback((files: FileList) => {
+    if (files.length > 1) { setImportError("Drop a single PNG to import."); return; }
+    importPng(files[0]);
+  }, [importPng]);
+  const { dragActive: importDragActive, dropProps: importDropProps } = useFileDrop(onImportFiles);
 
   const handleConfirmDelete = () => {
     if (!confirmTarget) return;
@@ -303,6 +344,30 @@ export function Sidebar({
                         </div>
                         <ScrollableList>{apiSessions.map(renderRow)}</ScrollableList>
                       </>
+                    )}
+                    <label
+                      className={`mt-3 mx-2 flex items-center justify-center gap-1.5 px-3 py-2 text-[11px] rounded border border-dashed cursor-pointer transition-colors ${
+                        importDragActive
+                          ? "border-[#2b5ea7] bg-[#eaf0f8] text-[#2b5ea7]"
+                          : "border-[#d4d2cd] text-[#9c9890] hover:text-[#2b5ea7] hover:border-[#2b5ea7]"
+                      }`}
+                      {...importDropProps}
+                    >
+                      <input
+                        type="file"
+                        accept="image/png"
+                        className="hidden"
+                        onChange={(e) => { const f = e.target.files?.[0]; if (f) importPng(f); e.target.value = ""; }}
+                      />
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                        <polyline points="17 8 12 3 7 8" />
+                        <line x1="12" y1="3" x2="12" y2="15" />
+                      </svg>
+                      Import analysis image
+                    </label>
+                    {importError && (
+                      <div className="mx-2 mt-1 text-[10px] text-[#b33a2a]">{importError}</div>
                     )}
                   </div>
                 );

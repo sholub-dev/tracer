@@ -8,12 +8,14 @@ import { CONFIG } from "./config.js";
 export const RESTART_EXIT_CODE = CONFIG.restartExitCode;
 
 /**
- * How this instance of tracer-sh is running, which determines whether we can
- * upgrade it in place:
+ * How this instance of tracer-sh is running, which determines how we upgrade it:
  * - `global`: installed via `npm install -g tracer-sh`. Re-running the install
  *   overwrites the package files and the launcher re-spawns the new server.
- * - `npx`: run via `npx tracer-sh` from npm's ephemeral cache. We can't update
- *   the running copy in place; the user must re-run npx to get the new version.
+ * - `npx`: run via `npx tracer-sh` from npm's cache. Bare `npx tracer-sh` reuses
+ *   that cache WITHOUT checking the registry, so it never updates on its own —
+ *   but the cache dir is a regular npm prefix we can upgrade in place with
+ *   `npm install --prefix`, after which both the running copy and future bare
+ *   npx runs use the new version.
  * - `dev`: running from a source checkout (workspace repo / npm link). Self-update
  *   is disabled — the developer manages the version.
  */
@@ -27,6 +29,8 @@ interface UpdateStatus {
 }
 
 let cachedStatus: UpdateStatus | null = null;
+let lastCheckAtMs = 0;
+let checkInFlight = false;
 
 interface PackageInfo {
   /** Directory of the resolved `tracer-sh` package, or null if it can't be found. */
@@ -78,7 +82,7 @@ function readCurrentVersion(): string {
  * - `.../node_modules/tracer-sh`             → a real (global) install
  * - anything else (the source repo)          → dev
  */
-function detectInstallMethod(root: string | null): InstallMethod {
+export function detectInstallMethod(root: string | null): InstallMethod {
   if (!root) return "dev";
   if (root.includes(`${sep}_npx${sep}`)) return "npx";
   if (root.includes(`${sep}node_modules${sep}tracer-sh`)) return "global";
@@ -89,8 +93,9 @@ export function getInstallMethod(): InstallMethod {
   return detectInstallMethod(resolvePackage().root);
 }
 
-function isNewerVersion(latest: string, current: string): boolean {
-  const parse = (v: string) => v.replace(/^v/, "").split(".").map(Number);
+export function isNewerVersion(latest: string, current: string): boolean {
+  // parseInt tolerates prerelease suffixes ("4-rc.1" → 4); NaN would compare false forever.
+  const parse = (v: string) => v.replace(/^v/, "").split(".").map((n) => Number.parseInt(n, 10) || 0);
   const [la, lb, lc] = parse(latest);
   const [ca, cb, cc] = parse(current);
   if (la !== ca) return la > ca;
@@ -108,8 +113,15 @@ function fetchLatestNpmVersion(): Promise<string | null> {
   });
 }
 
-/** Returns the cached update status, or a safe default if the background check hasn't completed. */
+/**
+ * Returns the cached update status (or a safe default before the first check
+ * completes). Long-running servers would otherwise never learn about releases
+ * published after startup, so a stale cache re-triggers the background check.
+ */
 export function getUpdateStatus(): UpdateStatus {
+  if (Date.now() - lastCheckAtMs > CONFIG.updateCheckTtlMs) {
+    checkForUpdateBackground();
+  }
   if (cachedStatus) return cachedStatus;
   return {
     available: false,
@@ -121,12 +133,17 @@ export function getUpdateStatus(): UpdateStatus {
 
 /** Fire-and-forget background update check. Populates cachedStatus for tRPC queries. */
 export function checkForUpdateBackground(): void {
+  if (checkInFlight) return;
+  checkInFlight = true;
+  lastCheckAtMs = Date.now();
+
   const current = readCurrentVersion();
   const method = getInstallMethod();
   const unavailable = (): UpdateStatus => ({ available: false, currentVersion: current, latestVersion: null, method });
 
   if (current === "unknown") {
     cachedStatus = unavailable();
+    checkInFlight = false;
     return;
   }
 
@@ -138,15 +155,15 @@ export function checkForUpdateBackground(): void {
     const available = isNewerVersion(latest, current);
     cachedStatus = { available, currentVersion: current, latestVersion: latest, method };
     if (available) {
-      const hint = method === "global"
-        ? "click the version in the sidebar to update from the app"
-        : method === "npx"
-          ? "re-run: npx tracer-sh@latest"
-          : "git pull, then restart tracer-sh — the launcher rebuilds automatically";
+      const hint = method === "dev"
+        ? "git pull, then restart tracer-sh — the launcher rebuilds automatically"
+        : "click the version in the sidebar to update from the app";
       console.log(`Update available: v${current} → v${latest} (${hint})`);
     }
   }).catch(() => {
     cachedStatus = unavailable();
+  }).finally(() => {
+    checkInFlight = false;
   });
 }
 
@@ -157,29 +174,38 @@ export interface SelfUpdateResult {
   error?: string;
 }
 
+/** The npm prefix dir of an npx cache install: `.../_npx/<hash>` for a package root `.../_npx/<hash>/node_modules/tracer-sh`. */
+function npxPrefixDir(root: string): string {
+  return dirname(dirname(root));
+}
+
 /**
- * Upgrade a global install in place via `npm install -g tracer-sh@latest`. On
- * success the caller should request a restart so the launcher (bin/tracer.mjs)
- * re-spawns the freshly installed server. For npx/dev installs this is a no-op
- * that returns an explanatory error.
+ * Upgrade this install in place, then let the caller request a restart so the
+ * launcher (bin/tracer.mjs) re-spawns the freshly installed server:
+ * - global → `npm install -g tracer-sh@latest`
+ * - npx    → `npm install --prefix <npx cache dir> tracer-sh@latest`; the same
+ *   files bare `npx tracer-sh` resolves to, so future runs also get the update.
+ * - dev    → refused; the developer manages the checkout.
  */
 export function performSelfUpdate(): Promise<SelfUpdateResult> {
-  const method = getInstallMethod();
-  if (method !== "global") {
+  const { root } = resolvePackage();
+  const method = detectInstallMethod(root);
+  if (method === "dev" || !root) {
     return Promise.resolve({
       ok: false,
       method,
-      error: method === "npx"
-        ? "Running via npx, which can't be updated in place. Re-run `npx tracer-sh@latest` to get the latest version."
-        : "Running from a local source checkout, so in-app update is disabled.",
+      error: "Running from a local source checkout, so in-app update is disabled.",
     });
   }
+  const install = method === "global"
+    ? "npm install -g tracer-sh@latest"
+    : `npm install --prefix "${npxPrefixDir(root)}" tracer-sh@latest`;
   return new Promise((resolve) => {
     exec(
       // Quiet flags keep output small (a verbose install can otherwise overflow
       // the stdout buffer and look like a failure); maxBuffer adds headroom for
       // native rebuild logs so a successful install is never misreported.
-      "npm install -g tracer-sh@latest --no-fund --no-audit --loglevel=error",
+      `${install} --no-fund --no-audit --loglevel=error`,
       { encoding: "utf-8", timeout: CONFIG.npmInstallTimeoutMs, maxBuffer: CONFIG.npmInstallMaxBufferBytes },
       (err, _stdout, stderr) => {
         if (err) {

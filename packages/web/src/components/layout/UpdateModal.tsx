@@ -105,13 +105,8 @@ export function UpdateModal({ open, onClose }: UpdateModalProps) {
       ) : (
         <>
           <div className="text-sm text-[#666666] mb-4">
-            <p>
-              {data?.method === "npx"
-                ? "This instance runs via npx, which always launches the latest version. Re-run it to update now — or install globally to pin a version you update on your own terms:"
-                : "This instance runs from a source checkout. Update it with:"}
-            </p>
+            <p>This instance runs from a source checkout. Update it with:</p>
             <CommandBlock command={manualCommand} />
-            {data?.method === "npx" && <CommandBlock command="npm install -g tracer-sh" />}
           </div>
           <div className="flex justify-end">
             <button onClick={onClose} className={theme.secondaryBtn}>

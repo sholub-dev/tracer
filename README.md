@@ -81,9 +81,11 @@ npm install -g tracer-sh
 tracer-sh
 ```
 
-The global install stays on its version until you explicitly update — with
-**Update now** in the app (click the version in the sidebar) or by re-running
-the install. `npx` always runs the newest published version.
+Either way, Tracer stays on its installed version until you explicitly update:
+click the version in the sidebar and hit **Update now**, or re-run the install
+command. Note that bare `npx tracer-sh` reuses npm's cached copy and does NOT
+check for new releases — use the in-app update or `npx tracer-sh@latest` to get
+the newest version.
 
 Open `http://localhost:3579`, go to **Settings** to add your API keys and
 choose an LLM — done.

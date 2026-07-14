@@ -8,6 +8,7 @@ import { StreamBroadcaster } from "../lib/stream-broadcaster.js";
 import type { Context } from "../trpc/context.js";
 import type { ChatToolWriter as StreamWriter } from "@tracer-sh/shared";
 import { getCurrentDateBlock } from "../lib/current-context.js";
+import { EVIDENCE_GROUNDING } from "../lib/shared-prompts.js";
 import { CONFIG } from "../config.js";
 
 /** Appended to the system prompt only when an attachment is present. */
@@ -177,7 +178,7 @@ If a tool call fails, retry with a corrected approach. If you fail the same tool
 When the user's question spans multiple providers, query each relevant provider and synthesize findings across the results.`;
     const fragments = collected.promptFragments ?? [];
     systemPrompt = fragments.length > 0
-      ? `${basePrompt}\n\n${fragments.join("\n\n")}`
+      ? `${basePrompt}\n\n${EVIDENCE_GROUNDING}\n\n${fragments.join("\n\n")}`
       : `${basePrompt}\n\nNo observability providers are currently configured. If the user asks about observability data, let them know they can connect providers in the Settings page.`;
   }
 

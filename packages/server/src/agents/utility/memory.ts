@@ -22,7 +22,7 @@ interface MemoryAgentOptions {
 const SYSTEM_PROMPT = `You are a Memory Manager. Review completed sessions and extract lessons from FAILURES and STRUGGLE PATTERNS.
 
 ## MANDATORY RULE
-If the session contains ANY failed queries, you MUST address each failure — either create_memory if no similar memory exists, or update_memory if an existing memory covers the same topic but could be improved. Every failure MUST result in a tool call. Do NOT skip failures.
+If the session contains ANY failed queries, you MUST address each failure — either create_memory if no similar memory exists, or update_memory if an existing memory covers the same topic but could be improved. Every failure MUST result in a tool call, with ONE exception: transient infrastructure failures (timeout, rate limit, 5xx/server error, network blip) teach nothing about the query language — for those, state you are skipping them and why instead of saving a memory. A false lesson is worse than none, because memories override future instructions.
 
 ## Purpose of memories
 Memories capture corrections from real failures and discoveries in the user's specific environment. Each user's system has unique event types, field names, and naming conventions that differ from generic documentation. When the agent tries something and it fails or struggles, the correction is extremely valuable for future sessions.
@@ -52,6 +52,7 @@ If the agent failed then corrected itself, capture the MISTAKE → CORRECTION.
 If the agent failed but never found a correction, still save the mistake: "Don't use [wrong syntax/field] in NRQL"
 
 ## When NOT to save
+- Transient failures — timeouts, rate limits, 5xx/server errors, network blips. Not query-language lessons; saving them poisons future sessions.
 - General best practices that aren't tied to a specific failure or struggle
 - Successful patterns that didn't involve a prior failure or struggle
 - User-specific data (IDs, account names, endpoints)
@@ -122,7 +123,7 @@ export async function runMemoryAgent(opts: MemoryAgentOptions): Promise<void> {
 
   let tailInstruction: string;
   if (failures.length > 0) {
-    tailInstruction = `This session had ${failures.length} failed queries. You MUST address each failure with create_memory or update_memory — no exceptions.`;
+    tailInstruction = `This session had ${failures.length} failed queries. You MUST address each failure with create_memory or update_memory — the only exception is transient infrastructure failures, which you skip with a stated reason.`;
     if (emptyCount > 0) tailInstruction += ` Additionally, ${emptyCount} queries returned empty results — review the session for struggle patterns.`;
   } else if (emptyCount > 0) {
     tailInstruction = `This session had no errors but ${emptyCount} queries returned empty results. Review the full session timeline for struggle patterns — repeated attempts, name variations, trial-and-error discovery. If there is a generalized learning, save it. If results were legitimately empty, respond with "No changes needed."`;
@@ -131,7 +132,7 @@ export async function runMemoryAgent(opts: MemoryAgentOptions): Promise<void> {
   }
 
   const failuresSection = failures.length > 0
-    ? `## ⚠ FAILURES DETECTED (${failures.length}) — each MUST be addressed\n${failures.map((f) => `- Query #${f.idx}: \`${f.query}\`\n  Error: ${f.error}`).join("\n")}\n\nFor each failure above, call create_memory (or update_memory if a similar memory already exists).\n\n`
+    ? `## FAILURES DETECTED (${failures.length}) — each MUST be addressed\n${failures.map((f) => `- Query #${f.idx}: \`${f.query}\`\n  Error: ${f.error}`).join("\n")}\n\nFor each failure above, call create_memory (or update_memory if a similar memory already exists), unless it is a transient infrastructure failure — then say so and skip it.\n\n`
     : "";
 
   const prompt = `Review this completed ${providerType} session and decide what to remember.

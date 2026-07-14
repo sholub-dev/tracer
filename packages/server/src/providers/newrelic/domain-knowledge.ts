@@ -160,14 +160,14 @@ _Flag if:_ Count is more than 20% lower than the baseline.
 ---
 
 ### Reporting Format
-After completing all applicable checks, report results as a table:
+After completing all applicable checks, report results as a table. (This verdict summary is the ONE permitted markdown table — each check's underlying data must still be shown via tool calls.)
 
 | Check | Current | Baseline (1w ago) | Delta | Status |
 |-------|---------|-------------------|-------|--------|
-| Response Time P99 | ... | ... | +X% | ✅ Pass / ⚠️ Flagged |
-| Transaction Error Rate | ... | ... | +X% | ✅ Pass / ⚠️ Flagged |
-| External Services Errors | ... | ... | ... | ✅ Pass / ⚠️ Flagged / — N/A |
-| Success Transactions | ... | ... | -X% | ✅ Pass / ⚠️ Flagged |
+| Response Time P99 | ... | ... | +X% | Pass / FLAGGED |
+| Transaction Error Rate | ... | ... | +X% | Pass / FLAGGED |
+| External Services Errors | ... | ... | ... | Pass / FLAGGED / N/A |
+| Success Transactions | ... | ... | -X% | Pass / FLAGGED |
 
 End with an overall verdict on its own line:
 - \`Service appears healthy.\` — all checks pass

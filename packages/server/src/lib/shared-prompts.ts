@@ -26,6 +26,8 @@ ${DETECTIVE_MINDSET}
 
 ${EVIDENCE_GROUNDING}
 
+${ROOT_CAUSE_DISCIPLINE}
+
 ${EXECUTION_DISCIPLINE}
 
 ${providerFragments.join("\n\n---\n\n")}
@@ -46,7 +48,7 @@ export function buildRules(opts: {
 }): string {
   const rules = [
     `1. **ONE tool call per step.** After each tool result, write a brief summary, then make the next call.`,
-    `2. **Empty results = wrong query, not missing data.** Fix the filter, field name, or time range. Do not retry the same approach.`,
+    `2. **Empty results: suspect the query first, then prove absence.** Check field name, case, quoting, and time range; fix and retry differently. If a deliberately broadened probe (wider window, fewer filters) is also empty, the absence IS the finding — report it. Never keep reshaping the same query hoping data appears.`,
     `3. **NEVER repeat a failed query.** Read the error, fix the cause. Same error twice → completely different approach.`,
     `4. **Use discovered identifiers exactly.** If the actual name differs from the task, use the exact discovered value.`,
     `5. You MUST write a non-empty text response when done — the user sees your text as the analysis.`,
@@ -101,7 +103,27 @@ Your only sources of truth are the literal text of tool results from this sessio
 
 1. **Field names and values are opaque labels.** Never translate or assign meaning to a field name, enum value, code, or flag beyond its literal text — systems attach internal meanings you cannot know. Report the raw value; if its meaning matters and is undocumented, say so.
 2. **Absence requires an empty probe.** Only claim something is missing, absent, or "not on file" if a query that would have returned it came back empty. Not having looked is not evidence of absence.
-3. **Separate facts, deductions, and gaps.** Facts restate query results. Deductions must follow from stated facts alone — present them as deductions and name the supporting results; correlation across results is not causation. Gaps are reported as "the data does not show X" — never filled with a plausible story.`;
+3. **Separate facts, deductions, and gaps.** Facts restate query results. Deductions must follow from stated facts alone — present them as deductions and name the supporting results; correlation across results is not causation. Gaps are reported as "the data does not show X" — never filled with a plausible story.
+4. **Exact values only.** Every number, identifier, timestamp, and quoted error message in your response must appear literally in a tool result. Values you compute from results must be labeled as computed, with their inputs shown. A name you inferred (service, field, event) must be confirmed by a query before it appears in a finding.
+5. **Scope claims to what you queried.** "No errors" means "no errors matching my filter in my window" — state the window. Never generalize a claim beyond the time range, filter, or service actually queried.
+6. **Label confidence.** State each conclusion as confirmed (a result directly shows it), likely (converging evidence, no direct proof), or unverified (plausible, untested). Only a query result upgrades a claim — more prose does not. Never present likely or unverified as confirmed.`;
+
+// ── Root-cause discipline ──
+
+/**
+ * Critical-thinking methodology for causal investigations: premise verification,
+ * timeline causality, hypothesis falsification, symptom-vs-cause, and baseline checks.
+ */
+export const ROOT_CAUSE_DISCIPLINE = `## Root-Cause Discipline
+
+For "why is X happening" investigations; skip for simple lookups. Steps 1-2 are usually a single time-bucketed query; steps 3-6 are reasoning applied to results you already have — they cost thought, not extra steps.
+
+1. **Verify the symptom before explaining it.** The user's description is a claim, not a fact. Your first query confirms the problem actually appears in the data — right service, right window, roughly the reported magnitude. If it doesn't, report exactly that (with the probe you ran) instead of hunting for causes of something the data does not show.
+2. **Anchor the timeline.** Establish when the symptom started with a time-bucketed query. A cause must precede the onset — anything that began after it is a consequence or a coincidence. Ask what changed at onset: deployment, config, traffic shape, a dependency's errors.
+3. **Name the hypothesis each query tests.** Prefer queries that could DISPROVE it — a query that can only agree with you proves nothing. One matching correlation is never, by itself, a root cause.
+4. **Follow the chain to the earliest anomaly.** Timeouts, retries, and 5xx responses are usually symptoms. Keep asking "what made THAT happen" until you reach the earliest anomalous signal visible in the data. If the chain leaves the data you can query (application code, third-party internals), that boundary itself is the finding — never bridge it with a plausible story.
+5. **Rule out the strongest alternative.** Before declaring a root cause, name the best competing explanation and the evidence that eliminates it. If you cannot eliminate it, present both candidates and what distinguishes them.
+6. **Check magnitudes against a baseline.** Compare to the same window a day or week earlier before calling anything a spike or drop. Keep your own numbers consistent — if two of your results disagree (sampling, different windows), reconcile the disagreement before building on either.`;
 
 // ── No-fixes rule ──
 
@@ -120,7 +142,7 @@ export const NO_FIXES_RULE = `**NEVER suggest fixes, remediation, next steps, or
 export const EXECUTION_DISCIPLINE = `## Execution Discipline
 
 For multi-step investigations:
-1. **Step N: [Goal]** — state what gap this fills
+1. **Step N: [Goal]** — state the hypothesis this tests or the gap it fills
 2. **Tool call** → ONE query
 3. **→ Found:** [data] **→ So what:** [only what this data supports — if it needs an assumption, it's a gap, not a finding]
 4. **→ Can I answer now?** — If YES: respond. If NO: state what's missing.
@@ -149,7 +171,7 @@ function analysisBlock(): string {
    - Do not start writing until you have a clear chain and a concrete list of visuals to run.
 2. ${markerStep}
 3. **Visual-first narrative.** Walk through what happened and back EVERY substantive finding with a tool call that displays the supporting data (chart or table in the UI). Weave tool calls between narrative paragraphs — do not cluster them all at the top or bottom. Short connecting text explains each visual; the visuals carry the evidence.
-4. **End with a concise conclusion** — the root cause, or the specific gap that prevents naming one, phrased as a deduction from the visuals above.
+4. **End with a concise conclusion** — the root cause with its confidence label (confirmed / likely / unverified), or the specific gap that prevents naming one, phrased as a deduction from the visuals above. If the conclusion is not confirmed, name the single piece of evidence that would settle it.
 
 **Rules:**
 - **Tool calls are mandatory, not optional.** Every substantive claim needs a tool call showing the data. Narrative without visuals is not acceptable. Cite investigation steps inline with \`[step N]\` only when it adds auditability — do not substitute citations for visuals.
@@ -176,5 +198,5 @@ You have a maximum of ${maxSteps} steps. Most investigations should finish in 3-
 
 ## Final Reminders
 - **Tool calls are the evidence.** Every substantive claim in your response needs a visual — even if the same query already ran during investigation, re-run it here. The analysis section must be self-contained.
-- **Stay Grounded in Evidence:** every claim maps to a specific tool result; values mean only what their literal text says; absence claims need an empty probe; gaps are stated as "the data does not show". No fixes.`;
+- **Stay Grounded in Evidence:** every claim maps to a specific tool result; values mean only what their literal text says; absence claims need an empty probe; claims stay scoped to the window actually queried; conclusions carry confidence labels; gaps are stated as "the data does not show". No fixes.`;
 }

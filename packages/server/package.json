@@ -16,7 +16,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsup",
     "start": "node dist/index.js",
-    "test": "tsx --test src/**/*.test.ts",
+    "test": "tsx --test $(find src -name '*.test.ts')",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

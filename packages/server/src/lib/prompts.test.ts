@@ -21,8 +21,15 @@ test("every agent prompt contains the evidence-grounding section exactly once", 
 });
 
 test("grounding rules cover meaning, absence, and fact/deduction separation", () => {
-  for (const phrase of ["opaque labels", "Absence requires an empty probe", "facts, deductions, and gaps"]) {
+  for (const phrase of ["opaque labels", "Absence requires an empty probe", "facts, deductions, and gaps", "Exact values only", "Scope claims to what you queried", "Label confidence"]) {
     assert.ok(EVIDENCE_GROUNDING.includes(phrase), `missing grounding rule: ${phrase}`);
+  }
+});
+
+test("every agent prompt contains the root-cause discipline section exactly once", () => {
+  for (const [name, prompt] of allPrompts) {
+    const count = prompt.split("## Root-Cause Discipline").length - 1;
+    assert.equal(count, 1, `${name}: expected exactly one root-cause section, found ${count}`);
   }
 });
 
@@ -35,7 +42,7 @@ test("final reminders reference sections that actually exist", () => {
 });
 
 test("unified prompt sections appear in the intended order", () => {
-  const order = ["## Rules", "## Mindset", "## Grounded in Evidence", "## Execution Discipline", "# FakeProvider", "## Response Format", "## Final Reminders"];
+  const order = ["## Rules", "## Mindset", "## Grounded in Evidence", "## Root-Cause Discipline", "## Execution Discipline", "# FakeProvider", "## Response Format", "## Final Reminders"];
   let last = -1;
   for (const heading of order) {
     const idx = unified.indexOf(heading);

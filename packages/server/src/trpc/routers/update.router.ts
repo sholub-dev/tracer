@@ -9,8 +9,8 @@ export const updateRouter = router({
       currentVersion: status.currentVersion,
       latestVersion: status.latestVersion,
       method: status.method,
-      // Only a global install can be upgraded in place from the app.
-      canSelfUpdate: status.method === "global",
+      // Global and npx installs upgrade in place; only source checkouts can't.
+      canSelfUpdate: status.method !== "dev",
     };
   }),
 

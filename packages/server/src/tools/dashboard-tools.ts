@@ -217,10 +217,10 @@ If a tool call fails, retry with a corrected approach. If you fail the same tool
 
 ## Chart Type Selection
 - "auto" — let the frontend auto-detect based on query shape
-- "timeseries" — for TIMESERIES queries (line charts)
-- "table" — for FACET queries without TIMESERIES
+- "timeseries" — for time-bucketed queries (NRQL TIMESERIES, HogQL GROUP BY time bucket) — line charts
+- "table" — for grouped/top-N results without a time axis (NRQL FACET, SQL GROUP BY)
 - "scalar" — for single-value aggregations
-- "histogram" — for histogram() queries
+- "histogram" — for distribution queries (e.g. NRQL histogram())
 
 ## Widget Sizing
 The dashboard uses a ${CONFIG.gridColumns}×${CONFIG.gridColumns} grid (${CONFIG.gridColumns} columns, ${CONFIG.gridColumns} rows fill the viewport). Both axes are responsive to screen size.

@@ -8,6 +8,7 @@ import {
   buildRules,
   DETECTIVE_MINDSET,
   EVIDENCE_GROUNDING,
+  ROOT_CAUSE_DISCIPLINE,
   EXECUTION_DISCIPLINE,
   buildAnalysisSection,
 } from "./shared-prompts.js";
@@ -58,6 +59,8 @@ ${buildRules({ investigation: true, extraRules: config.extraRules })}
 ${DETECTIVE_MINDSET}
 
 ${EVIDENCE_GROUNDING}
+
+${ROOT_CAUSE_DISCIPLINE}
 
 ${config.insideOutDebugging}
 

@@ -35,7 +35,7 @@ Only after reviewing all memories, perform any needed updates or deletes.
 - **Default to KEEP.** Only delete when you are 100% certain the memory is harmful or an exact duplicate.
 - Merge duplicates: UPDATE the better one, DELETE the other.
 - Rewrite vague notes to be specific and actionable (max 15 words).
-- Delete memories that teach bad NRQL syntax (e.g. using GROUP BY, DISTINCT, or other SQL that doesn't exist in NRQL).`;
+- Delete memories that teach syntax invalid for THIS provider's query language — judge against the provider domain knowledge in the prompt, never against another provider's dialect (e.g. GROUP BY is invalid NRQL but valid HogQL).`;
 
 export async function runMemoryOptimizer(
   db: Db,

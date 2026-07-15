@@ -72,6 +72,8 @@ export const CONFIG = {
   /** Buffer cap for `npm install -g` output; well above the 1MB default so a noisy
    *  but successful install (native rebuild logs) isn't misreported as a failure. */
   npmInstallMaxBufferBytes: 16 * 1024 * 1024,
+  /** Re-run the background version check when the cached result is older than this. */
+  updateCheckTtlMs: 6 * 60 * 60 * 1000,
 
   // ── Dashboard defaults ──
 

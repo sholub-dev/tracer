@@ -228,6 +228,9 @@ The condition is a JS expression evaluated against the query \`result\` array. E
 - \`result[0].average > 2\` — alert when average exceeds 2 seconds
 - \`result[0].errorRate > 0.05\` — alert when error rate exceeds 5%
 
+## Threshold Grounding
+Never invent a threshold. Unless the user gave an explicit number, run the monitor's query over recent data FIRST and pick the threshold relative to the observed values. When proposing a condition, state the observed baseline it is based on (e.g. "normal is 5-10/min, alerting above 50"). A threshold chosen without looking at the data either never fires or fires constantly.
+
 ## Frequency Recommendations
 - 30s — critical real-time checks
 - 60s — standard monitoring (default)

@@ -31,6 +31,7 @@ interface UpdateStatus {
 let cachedStatus: UpdateStatus | null = null;
 let lastCheckAtMs = 0;
 let checkInFlight = false;
+let installInFlight = false;
 
 interface PackageInfo {
   /** Directory of the resolved `tracer-sh` package, or null if it can't be found. */
@@ -119,7 +120,9 @@ function fetchLatestNpmVersion(): Promise<string | null> {
  * published after startup, so a stale cache re-triggers the background check.
  */
 export function getUpdateStatus(): UpdateStatus {
-  if (Date.now() - lastCheckAtMs > CONFIG.updateCheckTtlMs) {
+  // Never start an `npm view` while an install runs — concurrent npm processes
+  // on the shared cache are a known source of truncated-download failures.
+  if (!installInFlight && Date.now() - lastCheckAtMs > CONFIG.updateCheckTtlMs) {
     checkForUpdateBackground();
   }
   if (cachedStatus) return cachedStatus;
@@ -179,6 +182,47 @@ function npxPrefixDir(root: string): string {
   return dirname(dirname(root));
 }
 
+function runNpmInstall(install: string): Promise<{ ok: boolean; error?: string }> {
+  return new Promise((resolve) => {
+    exec(
+      // Quiet flags keep output small (a verbose install can otherwise overflow
+      // the stdout buffer and look like a failure); maxBuffer adds headroom for
+      // native rebuild logs so a successful install is never misreported.
+      `${install} --no-fund --no-audit --loglevel=error --fetch-retries=5`,
+      { encoding: "utf-8", timeout: CONFIG.npmInstallTimeoutMs, maxBuffer: CONFIG.npmInstallMaxBufferBytes },
+      (err, _stdout, stderr) => {
+        if (err) {
+          resolve({ ok: false, error: (stderr || "").trim() || err.message });
+          return;
+        }
+        resolve({ ok: true });
+      },
+    );
+  });
+}
+
+const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * Run an install attempt up to `attempts` times. npm does not retry truncated
+ * tarball downloads ("Content-Length header ... exceeds response Body"), so a
+ * single flaky moment would otherwise fail the whole update.
+ */
+export async function withRetries(
+  run: () => Promise<{ ok: boolean; error?: string }>,
+  attempts: number,
+  delayMs: number,
+): Promise<{ ok: boolean; error?: string }> {
+  let last: { ok: boolean; error?: string } = { ok: false };
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    last = await run();
+    if (last.ok) return last;
+    console.warn(`[updater] install attempt ${attempt}/${attempts} failed: ${last.error}`);
+    if (attempt < attempts) await delay(delayMs);
+  }
+  return last;
+}
+
 /**
  * Upgrade this install in place, then let the caller request a restart so the
  * launcher (bin/tracer.mjs) re-spawns the freshly installed server:
@@ -187,35 +231,31 @@ function npxPrefixDir(root: string): string {
  *   files bare `npx tracer-sh` resolves to, so future runs also get the update.
  * - dev    → refused; the developer manages the checkout.
  */
-export function performSelfUpdate(): Promise<SelfUpdateResult> {
+export async function performSelfUpdate(): Promise<SelfUpdateResult> {
   const { root } = resolvePackage();
   const method = detectInstallMethod(root);
   if (method === "dev" || !root) {
-    return Promise.resolve({
+    return {
       ok: false,
       method,
       error: "Running from a local source checkout, so in-app update is disabled.",
-    });
+    };
   }
   const install = method === "global"
     ? "npm install -g tracer-sh@latest"
     : `npm install --prefix "${npxPrefixDir(root)}" tracer-sh@latest`;
-  return new Promise((resolve) => {
-    exec(
-      // Quiet flags keep output small (a verbose install can otherwise overflow
-      // the stdout buffer and look like a failure); maxBuffer adds headroom for
-      // native rebuild logs so a successful install is never misreported.
-      `${install} --no-fund --no-audit --loglevel=error`,
-      { encoding: "utf-8", timeout: CONFIG.npmInstallTimeoutMs, maxBuffer: CONFIG.npmInstallMaxBufferBytes },
-      (err, _stdout, stderr) => {
-        if (err) {
-          resolve({ ok: false, method, error: (stderr || "").trim() || err.message });
-          return;
-        }
-        resolve({ ok: true, method });
-      },
+
+  installInFlight = true;
+  try {
+    const result = await withRetries(
+      () => runNpmInstall(install),
+      CONFIG.npmInstallAttempts,
+      CONFIG.npmInstallRetryDelayMs,
     );
-  });
+    return { ok: result.ok, method, ...(result.ok ? {} : { error: result.error }) };
+  } finally {
+    installInFlight = false;
+  }
 }
 
 let restartHandler: (() => void) | null = null;

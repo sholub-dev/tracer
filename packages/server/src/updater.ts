@@ -192,7 +192,10 @@ function runNpmInstall(install: string): Promise<{ ok: boolean; error?: string }
       { encoding: "utf-8", timeout: CONFIG.npmInstallTimeoutMs, maxBuffer: CONFIG.npmInstallMaxBufferBytes },
       (err, _stdout, stderr) => {
         if (err) {
-          resolve({ ok: false, error: (stderr || "").trim() || err.message });
+          // Keep the tail — npm prints the actual error last, and full stderr
+          // can run to megabytes across retries.
+          const full = (stderr || "").trim() || err.message;
+          resolve({ ok: false, error: full.length > 2000 ? `…${full.slice(-2000)}` : full });
           return;
         }
         resolve({ ok: true });
@@ -203,10 +206,15 @@ function runNpmInstall(install: string): Promise<{ ok: boolean; error?: string }
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+/** Errors retrying cannot fix: permissions, disk space, bad package spec. Everything else is worth retrying. */
+export const PERMANENT_NPM_ERROR = /EACCES|EPERM|ENOSPC|E404|ETARGET/;
+
 /**
  * Run an install attempt up to `attempts` times. npm does not retry truncated
  * tarball downloads ("Content-Length header ... exceeds response Body"), so a
- * single flaky moment would otherwise fail the whole update.
+ * single flaky moment would otherwise fail the whole update. Retry-by-default,
+ * with a denylist for permanent errors — an allowlist of transient phrasings
+ * would silently stop retrying whenever npm rewords an error.
  */
 export async function withRetries(
   run: () => Promise<{ ok: boolean; error?: string }>,
@@ -218,6 +226,7 @@ export async function withRetries(
     last = await run();
     if (last.ok) return last;
     console.warn(`[updater] install attempt ${attempt}/${attempts} failed: ${last.error}`);
+    if (PERMANENT_NPM_ERROR.test(last.error ?? "")) return last;
     if (attempt < attempts) await delay(delayMs);
   }
   return last;
@@ -241,6 +250,11 @@ export async function performSelfUpdate(): Promise<SelfUpdateResult> {
       error: "Running from a local source checkout, so in-app update is disabled.",
     };
   }
+  // Serialize installs: a second click or tab must not start a concurrent npm
+  // process on the shared cache — the very failure mode the retries fight.
+  if (installInFlight) {
+    return { ok: false, method, error: "An update is already in progress." };
+  }
   const install = method === "global"
     ? "npm install -g tracer-sh@latest"
     : `npm install --prefix "${npxPrefixDir(root)}" tracer-sh@latest`;
@@ -252,7 +266,7 @@ export async function performSelfUpdate(): Promise<SelfUpdateResult> {
       CONFIG.npmInstallAttempts,
       CONFIG.npmInstallRetryDelayMs,
     );
-    return { ok: result.ok, method, ...(result.ok ? {} : { error: result.error }) };
+    return { ...result, method };
   } finally {
     installInFlight = false;
   }

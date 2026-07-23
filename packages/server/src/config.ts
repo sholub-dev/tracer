@@ -72,6 +72,10 @@ export const CONFIG = {
   /** Buffer cap for `npm install -g` output; well above the 1MB default so a noisy
    *  but successful install (native rebuild logs) isn't misreported as a failure. */
   npmInstallMaxBufferBytes: 16 * 1024 * 1024,
+  /** Transient download truncation (e.g. "Content-Length header ... exceeds response Body")
+   *  is not retried inside npm, so the whole install is retried instead. */
+  npmInstallAttempts: 3,
+  npmInstallRetryDelayMs: 3_000,
   /** Re-run the background version check when the cached result is older than this. */
   updateCheckTtlMs: 6 * 60 * 60 * 1000,
 

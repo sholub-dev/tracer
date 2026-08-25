@@ -54,9 +54,7 @@ export function Sidebar({
   onSelectDashboard,
   onNewDashboard,
 }: SidebarProps) {
-  const sessionsQuery = trpc.sessions.list.useQuery(undefined, {
-    staleTime: WEB_CONFIG.sessionStaleTimeMs,
-  });
+  const sessionsQuery = trpc.sessions.list.useQuery();
   const dashboardsQuery = trpc.dashboards.list.useQuery(undefined, {
     enabled: FEATURES.dashboards && currentPage === "dashboard",
   });

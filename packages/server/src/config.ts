@@ -28,9 +28,8 @@ export const CONFIG = {
 
   // ── LLM defaults ──
 
+  /** Single model default — chat, provider agents, and utility agents (titles, memory). */
   defaultChatModel: { provider: "google", modelId: "gemini-3.7-flash" } as ModelConfig,
-  defaultSubAgentModel: { provider: "google", modelId: "gemini-3.7-flash" } as ModelConfig,
-  defaultUtilityModel: { provider: "google", modelId: "gemini-3.1-flash-lite-preview" } as ModelConfig,
 
   /** Models that support thinking/reasoning tokens. */
   thinkingModels: new Set<string>(["gemini-3.7-flash", "gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-3-flash-preview"] satisfies KnownModelId[]),
@@ -105,8 +104,3 @@ export const SETTINGS_KEYS = {
   thinkingBudgetGoogle: "thinking_budget_google",
   thinkingBudgetAnthropic: "thinking_budget_anthropic",
 } as const;
-
-/** Build the per-provider sub-agent model settings key. */
-export function subAgentModelKey(providerType: string): string {
-  return `sub_agent_model:${providerType}`;
-}

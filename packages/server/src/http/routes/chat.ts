@@ -8,7 +8,6 @@ import { collectChatTools } from "../../tools/chat-tools.js";
 import { collectDashboardTools } from "../../tools/dashboard-tools.js";
 import { collectMonitorTools } from "../../tools/monitor-tools.js";
 import { generateSessionTitle } from "../../agents/utility/title.js";
-import { resolveSubAgentModel } from "../../llm/resolve.js";
 
 export function registerChatRoutes(app: Hono, context: Context): void {
   app.post("/api/chat", async (c) => {
@@ -24,17 +23,11 @@ export function registerChatRoutes(app: Hono, context: Context): void {
     }
 
     // The chat toggle is the single source of truth for session scope: the unified sentinel
-    // means "one agent with every connected provider's tools" (no filter); any other value
-    // scopes to one provider (direct mode).
-    const isUnified = activeProvider === UNIFIED_SCOPE;
+    // (or an omitted field) means "one agent with every connected provider's tools" (no
+    // filter); any other value scopes to one provider (direct mode).
+    const isUnified = !activeProvider || activeProvider === UNIFIED_SCOPE;
     const mode: ChatMode = isUnified ? "unified" : "direct";
     const scopedProvider = isUnified ? undefined : activeProvider;
-
-    // Direct mode on a single provider uses that provider's sub-agent model; unified mode uses
-    // the default (top-tier) chat model.
-    const modelOverride = mode === "direct" && scopedProvider
-      ? resolveSubAgentModel(context.db, scopedProvider)
-      : undefined;
 
     const result = await runChatAgent({
       sessionId: id,
@@ -50,7 +43,6 @@ export function registerChatRoutes(app: Hono, context: Context): void {
           ? (textPart as { text: string }).text.slice(0, 60)
           : DEFAULT_SESSION_TITLE;
       },
-      modelOverride: modelOverride && !("error" in modelOverride) ? modelOverride : undefined,
     });
 
     if ("error" in result) return c.json({ error: result.error }, 400);

@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { publicProcedure, router } from "../trpc.js";
-import { providerConfigs, appSettings } from "../../db/schema.js";
+import { providerConfigs } from "../../db/schema.js";
 import { readProviderConfig, readAppSetting, readAppSettings, writeAppSetting } from "../../db/config-reader.js";
-import { CONFIG, DEFAULTS, SETTINGS_KEYS, subAgentModelKey, type ModelConfig } from "../../config.js";
+import { CONFIG, DEFAULTS, SETTINGS_KEYS, type ModelConfig } from "../../config.js";
 
 export const settingsRouter = router({
   getApiKey: publicProcedure
@@ -103,32 +103,6 @@ export const settingsRouter = router({
     )
     .mutation(({ ctx, input }) => {
       writeAppSetting(ctx.db, SETTINGS_KEYS.chatModel, { provider: input.provider, modelId: input.modelId });
-      return { success: true };
-    }),
-
-  getSubAgentModel: publicProcedure
-    .input(z.string().describe("Provider type, e.g. 'newrelic'"))
-    .query(({ ctx, input }) => {
-      return readAppSetting<ModelConfig>(ctx.db, subAgentModelKey(input)) ?? null;
-    }),
-
-  saveSubAgentModel: publicProcedure
-    .input(
-      z.object({
-        providerType: z.string().min(1),
-        model: z.object({
-          provider: z.string().min(1),
-          modelId: z.string().min(1),
-        }).nullable(),
-      }),
-    )
-    .mutation(({ ctx, input }) => {
-      const key = subAgentModelKey(input.providerType);
-      if (input.model === null) {
-        ctx.db.delete(appSettings).where(eq(appSettings.key, key)).run();
-      } else {
-        writeAppSetting(ctx.db, key, { provider: input.model.provider, modelId: input.model.modelId });
-      }
       return { success: true };
     }),
 

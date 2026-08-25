@@ -72,8 +72,9 @@ export function Debug({ sessionId, onSessionChange }: DebugProps) {
   const costBreakdown = useMemo(() => {
     const d = costQuery.data;
     if (!d?.agents?.length) return null;
-    return computeCostBreakdown(d.agents);
-  }, [costQuery.data]);
+    const updatedAt = sessionQuery.data?.updatedAt;
+    return computeCostBreakdown(d.agents, updatedAt ? updatedAt * 1000 : undefined);
+  }, [costQuery.data, sessionQuery.data?.updatedAt]);
 
   // Wait for session data to load when resuming
   let body: React.ReactNode;

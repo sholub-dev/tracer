@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { theme } from "../../lib/theme";
 import { trpc } from "../../lib/trpc";
-import { UnifiedChatModelSelector } from "./UnifiedChatModelSelector";
+import { ChatModelSelector } from "./ChatModelSelector";
 
 const TIMEZONES = [
   "Pacific/Auckland",
@@ -92,13 +92,13 @@ export function AgentConfigSection() {
 
   return (
     <div className="max-w-lg space-y-3">
-      {/* Unified mode model — saves immediately, separate from the batched config below. */}
+      {/* Model — saves immediately, separate from the batched config below. */}
       <div className={theme.settingsCard}>
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium">Unified mode model</span>
-          <span className="text-xs opacity-40">used when chat scope is “ALL”</span>
+          <span className="text-sm font-medium">Model</span>
+          <span className="text-xs opacity-40">used for chat, provider agents, and titles</span>
         </div>
-        <UnifiedChatModelSelector />
+        <ChatModelSelector />
       </div>
 
       <div className={theme.settingsCard}>

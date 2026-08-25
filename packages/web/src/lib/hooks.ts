@@ -135,7 +135,6 @@ export function useScrollFade(ref: RefObject<HTMLElement | null>) {
 export function useGcpAuthStatus() {
   return trpc.provider.gcpAuthStatus.useQuery(undefined, {
     refetchInterval: WEB_CONFIG.sessionStaleTimeMs,
-    staleTime: WEB_CONFIG.sessionStaleTimeMs,
   });
 }
 

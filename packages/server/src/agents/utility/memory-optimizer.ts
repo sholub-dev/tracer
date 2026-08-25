@@ -3,7 +3,7 @@ import { tool, generateText, stepCountIs } from "ai";
 import { eq } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { toolMemories } from "../../db/schema.js";
-import { resolveUtilityModel } from "../../llm/resolve.js";
+import { resolveModel } from "../../llm/resolve.js";
 import { makeMemoryExecute } from "../../tools/memory-executor.js";
 import { createUpdateMemoryTool, createDeleteMemoryTool } from "../../tools/memory-tools.js";
 import { getDomainKnowledge } from "./memory-domain-knowledge.js";
@@ -53,7 +53,7 @@ export async function runMemoryOptimizer(
     return { success: true, stats: emptyStats };
   }
 
-  const resolved = resolveUtilityModel(db);
+  const resolved = resolveModel(db);
   if ("error" in resolved) {
     return { success: false, error: resolved.error, stats: emptyStats };
   }

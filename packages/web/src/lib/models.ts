@@ -11,9 +11,9 @@ interface ModelInfo {
   priceAfter?: { date: string; inputPrice: number; outputPrice: number };
 }
 
-/** Current prices for a model, honoring any scheduled price change. */
-export function effectivePrices(m: ModelInfo): { inputPrice: number; outputPrice: number } {
-  if (m.priceAfter && Date.now() >= Date.parse(m.priceAfter.date)) return m.priceAfter;
+/** Prices in effect at `atMs` (default now), honoring any scheduled price change. */
+export function effectivePrices(m: ModelInfo, atMs = Date.now()): { inputPrice: number; outputPrice: number } {
+  if (m.priceAfter && atMs >= Date.parse(m.priceAfter.date)) return m.priceAfter;
   return m;
 }
 
@@ -83,11 +83,12 @@ export function computeCost(
   outputTokens: number,
   cachedInputTokens = 0,
   cacheWriteTokens = 0,
+  atMs?: number,
 ): number {
   if (!model) return 0;
   const m = pricingLookup[model];
   if (!m) return 0;
-  const { inputPrice, outputPrice } = effectivePrices(m);
+  const { inputPrice, outputPrice } = effectivePrices(m, atMs);
   const nonCachedInput = inputTokens - cachedInputTokens;
   return (
     nonCachedInput * inputPrice +

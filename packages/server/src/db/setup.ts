@@ -149,6 +149,13 @@ export function runSetup(): void {
   // Index on session_id must be created after the ALTER TABLE migration above
   sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_sub_agent_runs_session ON sub_agent_runs(session_id)`);
 
+  // 0.3.7: one model setting for everything — clear old per-provider overrides and
+  // reset any saved chat model once, so every install starts on the new default.
+  const marked = sqlite.prepare(`INSERT OR IGNORE INTO app_settings (key, value) VALUES ('model_reset_0_3_7', 'true')`).run();
+  if (marked.changes) {
+    sqlite.exec(`DELETE FROM app_settings WHERE key = 'chat_model' OR key LIKE 'sub_agent_model:%'`);
+  }
+
   // Migration: add FK constraints to existing tables that lack them.
   // SQLite doesn't support ALTER TABLE ADD FOREIGN KEY, so we recreate tables.
   migrateForeignKeys();

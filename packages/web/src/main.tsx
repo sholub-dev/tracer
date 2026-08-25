@@ -4,11 +4,22 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink } from "@trpc/client";
 import superjson from "superjson";
 import { trpc } from "./lib/trpc";
+import { WEB_CONFIG } from "./lib/config";
 import { App } from "./App";
 import "./index.css";
 
 function Root() {
-  const [queryClient] = useState(() => new QueryClient());
+  // No focus refetch: it re-runs every active query at once (full session
+  // bodies, provider queries) and can swap the chat view mid-stream.
+  const [queryClient] = useState(() => new QueryClient({
+    defaultOptions: {
+      queries: {
+        refetchOnWindowFocus: false,
+        retry: 1,
+        staleTime: WEB_CONFIG.sessionStaleTimeMs,
+      },
+    },
+  }));
   const [trpcClient] = useState(() =>
     trpc.createClient({
       links: [

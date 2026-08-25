@@ -27,9 +27,7 @@ interface ProviderToggleProps {
 }
 
 export function ProviderToggle({ activeProvider, onToggle }: ProviderToggleProps) {
-  const { data, isLoading } = trpc.provider.ping.useQuery(undefined, {
-    staleTime: WEB_CONFIG.sessionStaleTimeMs,
-  });
+  const { data, isLoading } = trpc.provider.ping.useQuery();
 
   const { data: configs } = trpc.provider.getConfigs.useQuery(undefined, {
     staleTime: WEB_CONFIG.monitorPollingMs,

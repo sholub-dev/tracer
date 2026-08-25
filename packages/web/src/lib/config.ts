@@ -6,6 +6,7 @@
 export const WEB_CONFIG = {
   // ── Polling intervals ──
 
+  /** Also the global react-query staleTime default (main.tsx). */
   sessionStaleTimeMs: 30_000,
   activeStreamPollingMs: 5_000,
   monitorPollingMs: 60_000,
@@ -33,7 +34,8 @@ export const WEB_CONFIG = {
 
   // ── Chat ──
 
-  chatThrottleMs: 50,
+  /** Streaming re-render cadence; 100ms reads as live while halving render work vs 50ms. */
+  chatThrottleMs: 100,
 
   // ── SSE ──
 

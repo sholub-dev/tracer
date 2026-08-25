@@ -28,12 +28,12 @@ export const CONFIG = {
 
   // ── LLM defaults ──
 
-  defaultChatModel: { provider: "google", modelId: "gemini-3.1-pro-preview" } as ModelConfig,
-  defaultSubAgentModel: { provider: "google", modelId: "gemini-3.1-pro-preview" } as ModelConfig,
+  defaultChatModel: { provider: "google", modelId: "gemini-3.7-flash" } as ModelConfig,
+  defaultSubAgentModel: { provider: "google", modelId: "gemini-3.7-flash" } as ModelConfig,
   defaultUtilityModel: { provider: "google", modelId: "gemini-3.1-flash-lite-preview" } as ModelConfig,
 
   /** Models that support thinking/reasoning tokens. */
-  thinkingModels: new Set(["gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-3-flash-preview"]),
+  thinkingModels: new Set<string>(["gemini-3.7-flash", "gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-3-flash-preview"] satisfies KnownModelId[]),
 
   // ── MCP timeouts ──
 

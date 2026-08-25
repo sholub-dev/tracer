@@ -1,5 +1,5 @@
 import { theme, colors } from "../../lib/theme";
-import { AVAILABLE_MODELS } from "../../lib/models";
+import { AVAILABLE_MODELS, effectivePrices } from "../../lib/models";
 
 export function PricingTable({ configuredProviders }: { configuredProviders: Set<string> }) {
   return (
@@ -16,15 +16,16 @@ export function PricingTable({ configuredProviders }: { configuredProviders: Set
         <tbody className="divide-y divide-[#e8e6e1]">
           {AVAILABLE_MODELS.map((m) => {
             const active = configuredProviders.has(m.provider);
+            const { inputPrice, outputPrice } = effectivePrices(m);
             return (
               <tr key={m.modelId} style={active ? { color: colors.success } : { color: colors.inkFaint }}>
                 <td className="px-4 py-2 font-mono text-xs">{m.modelId}</td>
                 <td className="px-4 py-2 capitalize">{m.provider}</td>
                 <td className="px-4 py-2 text-right font-mono text-xs">
-                  ${m.inputPrice.toFixed(2)}
+                  ${inputPrice.toFixed(2)}
                 </td>
                 <td className="px-4 py-2 text-right font-mono text-xs">
-                  ${m.outputPrice.toFixed(2)}
+                  ${outputPrice.toFixed(2)}
                 </td>
               </tr>
             );

@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useState, type ReactNode } from "react";
 import { Streamdown } from "streamdown";
 import { theme } from "../../lib/theme";
 import { TimeseriesChart, HistogramChart, type Threshold } from "./ChartView";
@@ -22,6 +22,30 @@ function CellValue({ value, colKey }: { value: unknown; colKey: string }) {
   return <CellText value={formatValue(value, colKey)} />;
 }
 
+/** Cap rendered rows — a multi-thousand-row result stalls the frame and janks scrolling. */
+const ROW_CAP = 100;
+
+function CappedRows<T>({ items, colSpan, render }: { items: readonly T[]; colSpan: number; render: (item: T, i: number) => ReactNode }) {
+  // Track which items were expanded, so new data in the same slot re-caps.
+  const [expandedFor, setExpandedFor] = useState<readonly T[] | null>(null);
+  const showAll = expandedFor === items;
+  const visible = showAll ? items : items.slice(0, ROW_CAP);
+  return (
+    <>
+      {visible.map(render)}
+      {!showAll && items.length > ROW_CAP && (
+        <tr>
+          <td colSpan={colSpan} className={theme.tableCell}>
+            <button type="button" onClick={() => setExpandedFor(items)} className="text-xs underline text-[#2b5ea7]">
+              Show all {items.length} rows
+            </button>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
 function DataTable({ columns, rows }: { columns: Column[]; rows: Record<string, unknown>[] }) {
   return (
     <div className={`${theme.tableContainer} my-2`}>
@@ -34,15 +58,19 @@ function DataTable({ columns, rows }: { columns: Column[]; rows: Record<string, 
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, i) => (
-            <tr key={i} className={theme.tableRow}>
-              {columns.map((col) => (
-                <td key={col.key} className={theme.tableCell}>
-                  <CellValue value={col.get(row)} colKey={col.key} />
-                </td>
-              ))}
-            </tr>
-          ))}
+          <CappedRows
+            items={rows}
+            colSpan={columns.length}
+            render={(row, i) => (
+              <tr key={i} className={theme.tableRow}>
+                {columns.map((col) => (
+                  <td key={col.key} className={theme.tableCell}>
+                    <CellValue value={col.get(row)} colKey={col.key} />
+                  </td>
+                ))}
+              </tr>
+            )}
+          />
         </tbody>
       </table>
     </div>
@@ -87,13 +115,17 @@ export default memo(function ResultView({ data, containerSize, threshold, chartT
             </tr>
           </thead>
           <tbody>
-            {data.map((item: unknown, i: number) => (
-              <tr key={i} className={theme.tableRow}>
-                <td className={theme.tableCell}>
-                  <CellText value={formatValue(item)} />
-                </td>
-              </tr>
-            ))}
+            <CappedRows
+              items={data}
+              colSpan={1}
+              render={(item, i) => (
+                <tr key={i} className={theme.tableRow}>
+                  <td className={theme.tableCell}>
+                    <CellText value={formatValue(item)} />
+                  </td>
+                </tr>
+              )}
+            />
           </tbody>
         </table>
       </div>
@@ -140,11 +172,15 @@ export default memo(function ResultView({ data, containerSize, threshold, chartT
                 </tr>
               </thead>
               <tbody>
-                {val.map((item, i) => (
-                  <tr key={i} className={theme.tableRow}>
-                    <td className={theme.resultListItem}>{String(item)}</td>
-                  </tr>
-                ))}
+                <CappedRows
+                  items={val}
+                  colSpan={1}
+                  render={(item, i) => (
+                    <tr key={i} className={theme.tableRow}>
+                      <td className={theme.resultListItem}>{String(item)}</td>
+                    </tr>
+                  )}
+                />
               </tbody>
             </table>
           </div>
@@ -210,20 +246,24 @@ export default memo(function ResultView({ data, containerSize, threshold, chartT
             </tr>
           </thead>
           <tbody>
-            {[...grouped.values()].map((group, i) => (
-              <tr key={i} className={theme.tableRow}>
-                <td className={theme.tableCell}>
-                  <CellValue value={group.label} colKey={facetLabel} />
-                </td>
-                {valueKeys.map((k) =>
-                  periods.map((p) => (
-                    <td key={`${k}-${p}`} className={theme.tableCell}>
-                      <CellValue value={group.byPeriod.get(p)?.[k]} colKey={k} />
-                    </td>
-                  )),
-                )}
-              </tr>
-            ))}
+            <CappedRows
+              items={[...grouped.values()]}
+              colSpan={1 + valueKeys.length * periods.length}
+              render={(group, i) => (
+                <tr key={i} className={theme.tableRow}>
+                  <td className={theme.tableCell}>
+                    <CellValue value={group.label} colKey={facetLabel} />
+                  </td>
+                  {valueKeys.map((k) =>
+                    periods.map((p) => (
+                      <td key={`${k}-${p}`} className={theme.tableCell}>
+                        <CellValue value={group.byPeriod.get(p)?.[k]} colKey={k} />
+                      </td>
+                    )),
+                  )}
+                </tr>
+              )}
+            />
           </tbody>
         </table>
       </div>

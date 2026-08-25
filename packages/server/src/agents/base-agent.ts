@@ -2,7 +2,7 @@ import { streamText, smoothStream, convertToModelMessages, stepCountIs, createUI
 import { eq, sql } from "drizzle-orm";
 import { DEFAULT_SESSION_TITLE, unixNow, splitAtAnalysis, type AfterCompleteParams } from "@tracer-sh/shared";
 import { chatSessions } from "../db/schema.js";
-import { resolveModel, type ProviderOptions, type ResolvedModel } from "../llm/resolve.js";
+import { resolveModel, type ProviderOptions } from "../llm/resolve.js";
 import { extractUsage, recordAgentRun } from "../llm/usage.js";
 import { StreamBroadcaster } from "../lib/stream-broadcaster.js";
 import type { Context } from "../trpc/context.js";
@@ -77,8 +77,6 @@ export interface ChatAgentConfig {
     afterComplete?: (params: AfterCompleteParams) => void;
   };
   sessionTitle: (messages: UIMessage[]) => string;
-  /** Override the default chat model (e.g. use sub-agent model in direct mode). */
-  modelOverride?: ResolvedModel;
 }
 
 /**
@@ -327,8 +325,8 @@ When the user's question spans multiple providers, query each relevant provider 
   finalizeSession(sessionId, context, broadcaster);
 }
 
-export async function runChatAgent({ sessionId, messages, summary, summaryUpTo, context, collectTools, sessionTitle, modelOverride }: ChatAgentConfig) {
-  const resolved = modelOverride ?? resolveModel(context.db);
+export async function runChatAgent({ sessionId, messages, summary, summaryUpTo, context, collectTools, sessionTitle }: ChatAgentConfig) {
+  const resolved = resolveModel(context.db);
   if ("error" in resolved) return { error: resolved.error };
   const { model, modelId, providerOptions } = resolved;
 

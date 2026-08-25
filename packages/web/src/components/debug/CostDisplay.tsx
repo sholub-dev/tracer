@@ -19,18 +19,20 @@ export interface CostBreakdown {
   totalCached: number;
 }
 
-/** Convert server-side agent token breakdown into client-side cost breakdown. */
-export function computeCostBreakdown(agents: Array<{ label: string; model: string | null; input: number; output: number; cached: number; cacheWrite: number; reasoning: number }>): CostBreakdown {
+/** Convert server-side agent token breakdown into client-side cost breakdown.
+ *  `atMs` prices the runs at when they happened, so a scheduled price change
+ *  doesn't retroactively change displayed historical costs. */
+export function computeCostBreakdown(agents: Array<{ label: string; model: string | null; input: number; output: number; cached: number; cacheWrite: number; reasoning: number }>, atMs?: number): CostBreakdown {
   const costed: AgentCost[] = agents.map((a) => ({
     label: a.label,
     model: a.model,
-    cost: computeCost(a.model, a.input, a.output, a.cached, a.cacheWrite),
+    cost: computeCost(a.model, a.input, a.output, a.cached, a.cacheWrite, atMs),
   }));
   let totalInput = 0, totalOutput = 0, totalCached = 0;
   for (const a of agents) { totalInput += a.input; totalOutput += a.output; totalCached += a.cached; }
   const totalCost = costed.reduce((sum, a) => sum + a.cost, 0);
   // Cost without cache discount — for showing savings
-  const totalCostWithoutCache = agents.reduce((sum, a) => sum + computeCost(a.model, a.input, a.output, 0, 0), 0);
+  const totalCostWithoutCache = agents.reduce((sum, a) => sum + computeCost(a.model, a.input, a.output, 0, 0, atMs), 0);
   return {
     agents: costed,
     totalCost,

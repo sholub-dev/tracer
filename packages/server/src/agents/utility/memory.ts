@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { tool, generateText, stepCountIs } from "ai";
 import type { Db } from "../../db/client.js";
-import { resolveUtilityModel } from "../../llm/resolve.js";
+import { resolveModel } from "../../llm/resolve.js";
 import { extractUsage, recordAgentRun } from "../../llm/usage.js";
 import { makeMemoryExecute } from "../../tools/memory-executor.js";
 import { createUpdateMemoryTool, createDeleteMemoryTool } from "../../tools/memory-tools.js";
@@ -75,7 +75,7 @@ export async function runMemoryAgent(opts: MemoryAgentOptions): Promise<void> {
     collectedQueries, sessionId,
   } = opts;
 
-  const resolved = resolveUtilityModel(db);
+  const resolved = resolveModel(db);
   if ("error" in resolved) {
     return;
   }

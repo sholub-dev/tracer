@@ -14,7 +14,6 @@ import { chatSessions } from "../../db/schema.js";
 import { loadSessionMessages, runChatAgent } from "../../agents/base-agent.js";
 import { collectChatTools } from "../../tools/chat-tools.js";
 import { generateSessionTitle } from "../../agents/utility/title.js";
-import { resolveSubAgentModel } from "../../llm/resolve.js";
 
 interface MessagePart {
   type: string;
@@ -196,9 +195,6 @@ export function registerApiRoutes(app: Hono, context: Context): void {
     const isUnified = !body.provider || body.provider === UNIFIED_SCOPE;
     const mode: ChatMode = isUnified ? "unified" : "direct";
     const scopedProvider = isUnified ? undefined : body.provider;
-    const modelOverride = mode === "direct" && scopedProvider
-      ? resolveSubAgentModel(context.db, scopedProvider)
-      : undefined;
 
     // Resolved by the wrapped afterComplete below, which fires after the final
     // messages have been persisted to the DB.
@@ -226,7 +222,6 @@ export function registerApiRoutes(app: Hono, context: Context): void {
         const textPart = firstUserMsg?.parts.find((p) => p.type === "text");
         return textPart ? (textPart as { text: string }).text.slice(0, 60) : DEFAULT_SESSION_TITLE;
       },
-      modelOverride: modelOverride && !("error" in modelOverride) ? modelOverride : undefined,
     });
 
     if ("error" in result) {

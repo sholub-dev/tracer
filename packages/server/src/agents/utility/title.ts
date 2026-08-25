@@ -2,12 +2,12 @@ import { generateText } from "ai";
 import { eq } from "drizzle-orm";
 import { unixNow } from "@tracer-sh/shared";
 import { chatSessions } from "../../db/schema.js";
-import { resolveUtilityModel } from "../../llm/resolve.js";
+import { resolveModel } from "../../llm/resolve.js";
 import { extractUsage, recordAgentRun } from "../../llm/usage.js";
 import type { Db } from "../../db/client.js";
 
 export function generateSessionTitle(db: Db, sessionId: string, userMessage: string): Promise<string | null> {
-  const resolved = resolveUtilityModel(db);
+  const resolved = resolveModel(db);
   if ("error" in resolved) {
     console.warn("[title] Cannot generate title:", resolved.error);
     return Promise.resolve(null);

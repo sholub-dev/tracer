@@ -2,11 +2,8 @@ import { trpc } from "../../lib/trpc";
 import { useAvailableModels } from "../../lib/hooks";
 import { ModelSelect } from "./ModelSelect";
 
-/**
- * Model used by the cross-provider "ALL" / Unified chat scope (`chat_model` setting). Direct
- * (single-provider) mode uses each provider's own SubAgentModelSelector instead.
- */
-export function UnifiedChatModelSelector() {
+/** The single model setting (`chat_model`) — drives chat, provider agents, and title generation. */
+export function ChatModelSelector() {
   const utils = trpc.useUtils();
   const { data: chatModel, isLoading } = trpc.settings.getChatModel.useQuery();
   const save = trpc.settings.saveChatModel.useMutation({

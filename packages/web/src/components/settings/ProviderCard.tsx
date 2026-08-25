@@ -1,6 +1,5 @@
 import { theme } from "../../lib/theme";
 import { StatusIndicator } from "../ui/StatusIndicator";
-import { SubAgentModelSelector } from "./SubAgentModelSelector";
 import { GcpProjectSelector } from "./GcpProjectSelector";
 import { ToggleSwitch } from "../ui/ToggleSwitch";
 
@@ -51,7 +50,6 @@ export function ProviderCard({ type, label, connected, configured, onConfigure, 
           Edit
         </button>
       </div>
-      {active && <SubAgentModelSelector providerType={type} />}
       {active && type === "gcp" && existingConfig && (
         <GcpProjectSelector existingConfig={existingConfig} />
       )}

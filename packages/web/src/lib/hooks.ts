@@ -175,7 +175,7 @@ export function useAvailableModels(): {
       ? (vertexModels ?? []).map((m) => ({ provider: "google-vertex", modelId: m.modelId }))
       : [];
     const merged = [...staticModels, ...vertex];
-    return merged.length > 0 ? merged : AVAILABLE_MODELS;
+    return merged.length > 0 ? merged : [...AVAILABLE_MODELS];
   }, [configured, vertexEnabled, vertexModels]);
   return { models, isLoading: vertexEnabled && vertexLoading };
 }

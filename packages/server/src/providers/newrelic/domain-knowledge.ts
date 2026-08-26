@@ -173,7 +173,7 @@ End with an overall verdict on its own line:
 - \`Service appears healthy.\` — all checks pass
 - \`X check(s) flagged: [list check names].\` — one or more checks flagged
 
-**If 2 or more checks are flagged, relate them before reporting.** Plot the flagged metrics over the same window (TIMESERIES) and compare onsets. A shared onset means ONE incident showing up in several checks — report it as one incident, lead with the earliest anomalous signal, and list the flagged checks as its symptoms.
+**If 2 or more checks are flagged, plot them over the same window (TIMESERIES) and compare onsets before reporting.** A shared onset likely means ONE incident across several checks.
 
 If a check could not be evaluated (no baseline data available, service has no external calls, etc.), mark it as **N/A** with a brief note. Never silently skip a check.`;
 

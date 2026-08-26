@@ -13,32 +13,24 @@ const allPrompts: Array<[string, string]> = [
   ["posthog direct", posthogDirect],
 ];
 
-test("every agent prompt contains the evidence-grounding section exactly once", () => {
+test("every agent prompt contains each shared discipline section exactly once", () => {
+  const headings = [
+    "## Grounded in Evidence",
+    "## Root-Cause Discipline",
+    "## Synthesis: Count Incidents, Not Symptoms",
+    "## Writing Style (Simplified Technical English)",
+  ];
   for (const [name, prompt] of allPrompts) {
-    const count = prompt.split("## Grounded in Evidence").length - 1;
-    assert.equal(count, 1, `${name}: expected exactly one grounding section, found ${count}`);
+    for (const heading of headings) {
+      const count = prompt.split(heading).length - 1;
+      assert.equal(count, 1, `${name}: expected exactly one "${heading}", found ${count}`);
+    }
   }
 });
 
 test("grounding rules cover meaning, absence, and fact/deduction separation", () => {
   for (const phrase of ["opaque labels", "Absence requires an empty probe", "facts, deductions, and gaps", "Exact values only", "Scope claims to what you queried", "Label confidence"]) {
     assert.ok(EVIDENCE_GROUNDING.includes(phrase), `missing grounding rule: ${phrase}`);
-  }
-});
-
-test("every agent prompt contains the root-cause discipline section exactly once", () => {
-  for (const [name, prompt] of allPrompts) {
-    const count = prompt.split("## Root-Cause Discipline").length - 1;
-    assert.equal(count, 1, `${name}: expected exactly one root-cause section, found ${count}`);
-  }
-});
-
-test("every agent prompt contains synthesis and writing-style sections exactly once", () => {
-  for (const [name, prompt] of allPrompts) {
-    for (const heading of ["## Synthesis: Count Incidents, Not Symptoms", "## Writing Style (Simplified Technical English)"]) {
-      const count = prompt.split(heading).length - 1;
-      assert.equal(count, 1, `${name}: expected exactly one "${heading}", found ${count}`);
-    }
   }
 });
 

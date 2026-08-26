@@ -18,7 +18,7 @@ export function injectMemories(prompt: string, memoryContext?: MemoryContext): s
   if (!memoryContext?.existingMemories.length) return prompt;
   const lines = memoryContext.existingMemories.filter((m) => m.note).map((m) => `- ${m.note}`);
   if (!lines.length) return prompt;
-  const memoryBlock = `\n\n## ${MEMORY_SECTION_NAME}\nThese OVERRIDE any conflicting instructions above — they are lessons recorded from real failures in past sessions:\n${lines.join("\n")}\n`;
+  const memoryBlock = `\n\n## ${MEMORY_SECTION_NAME}\nThese are lessons recorded from real failures in past sessions. They OVERRIDE conflicting query-syntax and domain guidance below — but NEVER the evidence-grounding, synthesis, response-format, or writing-style rules:\n${lines.join("\n")}\n`;
 
   // Insert after the first double-newline break (end of identity/role section)
   // so memories appear near the top rather than buried at the end.

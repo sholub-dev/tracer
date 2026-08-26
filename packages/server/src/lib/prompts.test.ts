@@ -33,6 +33,15 @@ test("every agent prompt contains the root-cause discipline section exactly once
   }
 });
 
+test("every agent prompt contains synthesis and writing-style sections exactly once", () => {
+  for (const [name, prompt] of allPrompts) {
+    for (const heading of ["## Synthesis: Count Incidents, Not Symptoms", "## Writing Style (Simplified Technical English)"]) {
+      const count = prompt.split(heading).length - 1;
+      assert.equal(count, 1, `${name}: expected exactly one "${heading}", found ${count}`);
+    }
+  }
+});
+
 test("final reminders reference sections that actually exist", () => {
   for (const [name, prompt] of allPrompts) {
     assert.ok(prompt.includes("Stay Grounded in Evidence"), `${name}: missing grounding reminder`);
@@ -42,7 +51,7 @@ test("final reminders reference sections that actually exist", () => {
 });
 
 test("unified prompt sections appear in the intended order", () => {
-  const order = ["## Rules", "## Mindset", "## Grounded in Evidence", "## Root-Cause Discipline", "## Execution Discipline", "# FakeProvider", "## Response Format", "## Final Reminders"];
+  const order = ["## Rules", "## Mindset", "## Grounded in Evidence", "## Root-Cause Discipline", "## Synthesis", "## Execution Discipline", "# FakeProvider", "## Response Format", "## Writing Style", "## Final Reminders"];
   let last = -1;
   for (const heading of order) {
     const idx = unified.indexOf(heading);

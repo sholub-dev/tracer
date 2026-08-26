@@ -7,7 +7,7 @@ import { unixNow } from "@tracer-sh/shared";
 import type { ChatToolWriter as StreamWriter } from "@tracer-sh/shared";
 import { monitors } from "../db/schema.js";
 import { collectBaseTools } from "./shared-tool-setup.js";
-import { EVIDENCE_GROUNDING } from "../lib/shared-prompts.js";
+import { EVIDENCE_GROUNDING, PLAIN_LANGUAGE } from "../lib/shared-prompts.js";
 import { validateCondition } from "../monitors/condition.js";
 import { requireTimeRangePlaceholders, executeValidationQuery } from "./query-validation.js";
 import { CONFIG } from "../config.js";
@@ -240,7 +240,7 @@ Never invent a threshold. Unless the user gave an explicit number, run the monit
 ## Scope
 You are managing all monitors. The monitor list above shows all existing monitors.`;
 
-  const systemPrompt = [basePrompt, EVIDENCE_GROUNDING, providerContext, monitorContext, ...promptFragments].join("\n\n");
+  const systemPrompt = [basePrompt, EVIDENCE_GROUNDING, PLAIN_LANGUAGE, providerContext, monitorContext, ...promptFragments].join("\n\n");
 
   return { tools, systemPrompt };
 }

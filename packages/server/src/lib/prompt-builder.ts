@@ -9,6 +9,7 @@ import {
   DETECTIVE_MINDSET,
   EVIDENCE_GROUNDING,
   ROOT_CAUSE_DISCIPLINE,
+  SYNTHESIS_DISCIPLINE,
   EXECUTION_DISCIPLINE,
   buildAnalysisSection,
 } from "./shared-prompts.js";
@@ -61,6 +62,8 @@ ${DETECTIVE_MINDSET}
 ${EVIDENCE_GROUNDING}
 
 ${ROOT_CAUSE_DISCIPLINE}
+
+${SYNTHESIS_DISCIPLINE}
 
 ${config.insideOutDebugging}
 

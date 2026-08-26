@@ -7,7 +7,7 @@ import { unixNow } from "@tracer-sh/shared";
 import type { ChatToolWriter as StreamWriter } from "@tracer-sh/shared";
 import { dashboardWidgets, dashboards } from "../db/schema.js";
 import { collectBaseTools } from "./shared-tool-setup.js";
-import { EVIDENCE_GROUNDING } from "../lib/shared-prompts.js";
+import { EVIDENCE_GROUNDING, PLAIN_LANGUAGE } from "../lib/shared-prompts.js";
 import { requireTimeRangePlaceholders, executeValidationQuery } from "./query-validation.js";
 import { CONFIG } from "../config.js";
 
@@ -242,7 +242,7 @@ The global date picker already shows the active time range, so titles should des
 ## Scope
 You are managing widgets for the current dashboard only. The widget list above shows only this dashboard's widgets.`;
 
-  const systemPrompt = [basePrompt, EVIDENCE_GROUNDING, providerContext, widgetContext, ...promptFragments].join("\n\n");
+  const systemPrompt = [basePrompt, EVIDENCE_GROUNDING, PLAIN_LANGUAGE, providerContext, widgetContext, ...promptFragments].join("\n\n");
 
   return { tools, systemPrompt };
 }

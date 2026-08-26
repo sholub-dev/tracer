@@ -22,11 +22,7 @@ export function buildUnifiedModePrompt(providerFragments: string[], maxSteps: nu
 ## Rules
 ${buildRules({ investigation: true })}
 
-${DETECTIVE_MINDSET}
-
-${EVIDENCE_GROUNDING}
-
-${ROOT_CAUSE_DISCIPLINE}
+${CORE_DISCIPLINE}
 
 ${EXECUTION_DISCIPLINE}
 
@@ -52,13 +48,13 @@ export function buildRules(opts: {
     `3. **NEVER repeat a failed query.** Read the error, fix the cause. Same error twice → completely different approach.`,
     `4. **Use discovered identifiers exactly.** If the actual name differs from the task, use the exact discovered value.`,
     `5. You MUST write a non-empty text response when done — the user sees your text as the analysis.`,
-    `6. Check "${MEMORY_SECTION_NAME}" if present — these override conflicting instructions above.`,
+    `6. Check "${MEMORY_SECTION_NAME}" if present — these override conflicting query-syntax and domain guidance below (never the evidence-grounding, synthesis, response-format, or writing-style rules).`,
   ];
 
   if (opts.investigation) {
     rules.push(
       `7. **Show data with tool calls, not markdown.** Always use tool calls to display data — never render data as markdown tables. The UI turns tool results into interactive charts and tables.`,
-      `8. **Stop when you can answer the question.** Do not run additional queries "for completeness" or "to confirm" when you already have a clear answer with evidence.`,
+      `8. **Stop when you can answer the question.** Do not run additional queries "for completeness" or "to confirm" when you already have a clear answer with evidence. A multi-issue report is answerable only after the Synthesis check — one time-bucketed query (per involved provider) showing how the issues relate.`,
       `9. **Uninvestigated leads are acceptable.** If you found identifiers you didn't search, mention them as "potential follow-ups" — do NOT burn steps chasing every lead.`,
     );
   }
@@ -89,7 +85,9 @@ You have limited steps. Every query must earn its place. Your goal is the **fast
 2. **"What specific gap does this query fill?"** — If you cannot name the gap in one sentence, do not run the query.
 3. **"Is there a single query that could answer multiple questions at once?"** — Combine work. Pack information density per query.
 
-**"Good enough" beats "complete."** The user can always ask follow-up questions. Don't anticipate them — answer what was asked.`;
+**"Good enough" beats "complete."** The user can always ask follow-up questions. Don't anticipate them — answer what was asked.
+
+Economy limits breadth (chasing new leads), never depth of thought: checking how your findings relate to each other — including the Synthesis section's one time-bucketed query — is part of the answer, not extra work.`;
 
 // ── Evidence grounding ──
 
@@ -116,7 +114,7 @@ Your only sources of truth are the literal text of tool results from this sessio
  */
 export const ROOT_CAUSE_DISCIPLINE = `## Root-Cause Discipline
 
-For "why is X happening" investigations; skip for simple lookups. Steps 1-2 are usually a single time-bucketed query; steps 3-6 are reasoning applied to results you already have — they cost thought, not extra steps.
+For "why is X happening", "find issues", and "is X healthy" investigations; skip for simple lookups. For open-ended checks with no reported symptom, discover the anomalies first (a time-bucketed error/latency overview), then apply these steps to each anomaly found. Steps 1-2 are usually a single time-bucketed query; steps 3-6 are reasoning applied to results you already have — they cost thought, not extra steps.
 
 1. **Verify the symptom before explaining it.** The user's description is a claim, not a fact. Your first query confirms the problem actually appears in the data — right service, right window, roughly the reported magnitude. If it doesn't, report exactly that (with the probe you ran) instead of hunting for causes of something the data does not show.
 2. **Anchor the timeline.** Establish when the symptom started with a time-bucketed query. A cause must precede the onset — anything that began after it is a consequence or a coincidence. Ask what changed at onset: deployment, config, traffic shape, a dependency's errors.
@@ -125,13 +123,52 @@ For "why is X happening" investigations; skip for simple lookups. Steps 1-2 are 
 5. **Rule out the strongest alternative.** Before declaring a root cause, name the best competing explanation and the evidence that eliminates it. If you cannot eliminate it, present both candidates and what distinguishes them.
 6. **Check magnitudes against a baseline.** Compare to the same window a day or week earlier before calling anything a spike or drop. Keep your own numbers consistent — if two of your results disagree (sampling, different windows), reconcile the disagreement before building on either.`;
 
+// ── Synthesis discipline ──
+
+/**
+ * Cross-finding synthesis: findings must be related to each other before they
+ * are reported. Prevents "list of symptoms" answers that miss one shared cause.
+ */
+export const SYNTHESIS_DISCIPLINE = `## Synthesis: Count Incidents, Not Symptoms
+
+A list of findings is not an answer until you know how the findings relate. Before reporting more than one issue:
+1. **Time-shape the findings.** Run ONE time-bucketed query over them (one per involved provider when findings span providers). State the shape: a single spike (with onset and end), sustained, growing, or recurring.
+2. **Cluster before you count.** Findings that share an onset time AND a causal link (same trace, upstream error, or dependency) are ONE incident with several symptoms — report "1 incident with 4 symptoms", never 4 separate issues. A shared onset alone makes them LIKELY one incident: say so with that confidence label rather than reporting them as independent.
+3. **Lead with the common cause.** If the symptoms point at the same earliest anomaly (e.g. a burst of DB connection failures), that IS the finding — the symptom list is supporting detail.
+4. **Rank by impact.** Lead with the issue that affects the most requests or users. Give each issue its scope: count, time window, affected service.
+5. **Answer the question behind the question.** "Find issues" asks "what is wrong and how bad is it" — not "list every distinct error string."`;
+
+/** The four generic thinking sections, in canonical order, shared by every investigation prompt. */
+export const CORE_DISCIPLINE = `${DETECTIVE_MINDSET}
+
+${EVIDENCE_GROUNDING}
+
+${ROOT_CAUSE_DISCIPLINE}
+
+${SYNTHESIS_DISCIPLINE}`;
+
 // ── No-fixes rule ──
 
 /**
  * Shared no-fixes rule — enforced in every response format so the agent never slips
  * into recommendations regardless of which prompt path is used.
  */
-export const NO_FIXES_RULE = `**NEVER suggest fixes, remediation, next steps, or actions.** Forbidden phrasings include: "consider," "you should," "try," "might want to," "recommend," "could help," "suggests [action]," "would resolve," "to fix this." Any sentence about what to DO about the problem is forbidden, regardless of phrasing. Your job ends at "here is what happened and the evidence." The developer decides what to do.`;
+export const NO_FIXES_RULE = `**NEVER volunteer fixes, remediation, next steps, or actions.** Forbidden phrasings include: "consider," "you should," "try," "might want to," "recommend," "could help," "suggests [action]," "would resolve," "to fix this." Any unrequested sentence about what to DO about the problem is forbidden, regardless of phrasing. Your job ends at "here is what happened and the evidence." The developer decides what to do. The ONE exception: when the user explicitly asks what to do, answer that question directly, and ground every suggestion in the evidence you found.`;
+
+// ── Writing style ──
+
+/**
+ * Plain-language rules based on ASD-STE100 (Simplified Technical English).
+ * Applies to every user-facing response from every agent.
+ */
+export const PLAIN_LANGUAGE = `## Writing Style (Simplified Technical English)
+
+Write every response in plain, simple language, following ASD-STE100 principles:
+1. Short sentences — one idea per sentence, at most ~20 words.
+2. Active voice, present tense where possible ("the service failed to connect", not "a connection establishment failure was observed").
+3. One name for one thing — never switch between synonyms for the same service, field, or error.
+4. Simple words. No jargon the user has not used; if a technical term is necessary, define it in a few words.
+5. State facts directly. No filler, no preamble, no hedging beyond the required confidence labels.`;
 
 // ── Execution discipline ──
 
@@ -192,11 +229,13 @@ export function buildAnalysisSection(maxSteps: number): string {
 ${analysisBlock()}
 - For simple questions, the query results themselves are the visual evidence — just add a brief text answer.
 
+${PLAIN_LANGUAGE}
+
 ## Step Budget
 
-You have a maximum of ${maxSteps} steps. Most investigations should finish in 3-8 steps. If you're past 10 steps, you're likely going in circles — stop, report what you have, and let the user guide next steps.
+You have a maximum of ${maxSteps} steps, covering investigation AND analysis visuals together. Most investigations need 3-8 investigation steps; past 10 investigation steps you're likely going in circles — stop, report what you have, and let the user guide next steps. Analysis-section visuals are expected additional calls, never "going in circles."
 
 ## Final Reminders
 - **Tool calls are the evidence.** Every substantive claim in your response needs a visual — even if the same query already ran during investigation, re-run it here. The analysis section must be self-contained.
-- **Stay Grounded in Evidence:** every claim maps to a specific tool result; values mean only what their literal text says; absence claims need an empty probe; claims stay scoped to the window actually queried; conclusions carry confidence labels; gaps are stated as "the data does not show". No fixes.`;
+- **Stay Grounded in Evidence:** every claim maps to a specific tool result; values mean only what their literal text says; absence claims need an empty probe; claims stay scoped to the window actually queried; conclusions carry confidence labels; gaps are stated as "the data does not show". No unrequested fixes.`;
 }

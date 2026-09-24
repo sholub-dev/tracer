@@ -6,7 +6,7 @@ import type { ProviderRegistry } from "../providers/registry.js";
 import type { ChatToolWriter as StreamWriter } from "@tracer-sh/shared";
 import { monitors } from "../db/schema.js";
 import { collectBaseTools } from "./shared-tool-setup.js";
-import { EVIDENCE_GROUNDING } from "../lib/shared-prompts.js";
+import { EVIDENCE_GROUNDING, PLAIN_LANGUAGE } from "../lib/shared-prompts.js";
 import { MONITOR_PROVIDERS, normalizeDraft, validateMonitor } from "../monitors/validate.js";
 import { CONFIG } from "../config.js";
 
@@ -108,6 +108,7 @@ Seconds, at least ${CONFIG.monitorMinFrequencySeconds}. Default to 300 (5 min). 
   const systemPrompt = [
     basePrompt,
     EVIDENCE_GROUNDING,
+    PLAIN_LANGUAGE,
     providerContext,
     getMonitorContext(db),
     ...(editingContext ? [editingContext] : []),

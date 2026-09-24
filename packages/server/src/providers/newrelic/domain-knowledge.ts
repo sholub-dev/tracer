@@ -173,6 +173,8 @@ End with an overall verdict on its own line:
 - \`Service appears healthy.\` — all checks pass
 - \`X check(s) flagged: [list check names].\` — one or more checks flagged
 
+**If 2 or more checks are flagged, plot them over the same window (TIMESERIES) and compare onsets before reporting.** A shared onset likely means ONE incident across several checks.
+
 If a check could not be evaluated (no baseline data available, service has no external calls, etc.), mark it as **N/A** with a brief note. Never silently skip a check.`;
 
 const NR_QUERY_DEFAULTS = `## Query Defaults

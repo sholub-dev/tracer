@@ -1,6 +1,6 @@
 {
   "name": "tracer-sh",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "type": "module",
   "description": "Local-first debugging & analysis platform",
   "license": "SEE LICENSE IN LICENSE",

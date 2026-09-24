@@ -4,9 +4,10 @@ import "react-grid-layout/css/styles.css";
 import { theme } from "../lib/theme";
 import { trpc } from "../lib/trpc";
 import { WEB_CONFIG } from "../lib/config";
+import { usePersistedState } from "../lib/hooks";
 import { WidgetCard } from "../components/dashboard/WidgetCard";
 import { DashboardChatPanel } from "../components/dashboard/DashboardChatPanel";
-import { DEFAULT_SINCE } from "../lib/nrql-utils";
+import { DEFAULT_SINCE, TIME_RANGE_PRESETS } from "../lib/nrql-utils";
 import { TimeRangePicker } from "../components/ui/TimeRangePicker";
 
 const GridLayout = WidthProvider(ReactGridLayout);
@@ -102,7 +103,8 @@ function DashboardContent({ dashboardId, title, initialChatOpen = true }: {
   dashboardId: string; title: string; initialChatOpen?: boolean;
 }) {
   const [chatOpen, setChatOpen] = useState(initialChatOpen);
-  const [since, setSince] = useState(DEFAULT_SINCE);
+  const [storedSince, setSince] = usePersistedState<string>(`tracer:dashboardSince:${dashboardId}`, DEFAULT_SINCE);
+  const since = TIME_RANGE_PRESETS.some((p) => p.since === storedSince) ? storedSince : DEFAULT_SINCE;
   const widgetsQuery = trpc.widgets.list.useQuery({ dashboardId });
   const moveMutation = trpc.widgets.move.useMutation();
   const widgets = widgetsQuery.data ?? [];

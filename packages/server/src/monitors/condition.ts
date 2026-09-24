@@ -1,24 +1,13 @@
+import { parseCondition, type Condition, type ConditionOp } from "@tracer-sh/shared";
 import { isNumericValue } from "../providers/posthog/posthog-formatter.js";
 
-export type ConditionOp = ">" | ">=" | "<" | "<=" | "==" | "!=";
-
-export interface Condition {
-  op: ConditionOp;
-  threshold: number;
-}
+export { parseCondition, type Condition, type ConditionOp };
 
 export interface Group {
   key: string;
   count: number;
 }
 
-const CONDITION_RE = /^\s*(>=|<=|==|!=|>|<)\s*(-?\d+(?:\.\d+)?)\s*$/;
-
-export function parseCondition(str: string): Condition | null {
-  const m = CONDITION_RE.exec(str);
-  if (!m) return null;
-  return { op: m[1] as ConditionOp, threshold: Number(m[2]) };
-}
 
 export function evaluateCondition(condition: Condition, value: number): boolean {
   switch (condition.op) {

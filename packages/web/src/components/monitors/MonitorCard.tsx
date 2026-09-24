@@ -162,6 +162,7 @@ export const MonitorCard = memo(function MonitorCard({
         monitorId={monitor.id}
         provider={monitor.provider}
         query={monitor.query}
+        condition={monitor.condition}
         chartQuery={monitor.chartQuery}
         lastRunAt={monitor.lastRunAt}
         since={since}

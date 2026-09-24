@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { SESSION_PREFIX } from "@tracer-sh/shared";
-import { usePolling } from "../lib/hooks";
+import { usePersistedState, usePolling } from "../lib/hooks";
 import { theme } from "../lib/theme";
 import { trpc } from "../lib/trpc";
 import { MonitorChatPanel } from "../components/monitors/MonitorChatPanel";
@@ -24,6 +24,7 @@ const RANGE_PRESETS = [
   { label: "30d", since: "30 days ago" },
   { label: "90d", since: "90 days ago" },
 ] as const;
+const DEFAULT_RANGE = RANGE_PRESETS[0].since;
 
 type CardWidth = 50 | 75 | 100;
 const WIDTHS: CardWidth[] = [50, 75, 100];
@@ -33,7 +34,8 @@ const toWidth = (w: number | null | undefined): CardWidth => (w === 75 || w === 
 
 export function Monitors({ builderSessionId, onNavigate: navigate, onOpenBuilder, onCloseBuilder }: MonitorsProps) {
   const [editing, setEditing] = useState<Editing | null>(null);
-  const [since, setSince] = useState<string>("24 hours ago");
+  const [storedSince, setSince] = usePersistedState<string>("tracer:monitorsSince", DEFAULT_RANGE);
+  const since = RANGE_PRESETS.some((p) => p.since === storedSince) ? storedSince : DEFAULT_RANGE;
   const utils = trpc.useUtils();
   const listQuery = trpc.monitors.list.useQuery();
   const monitors = listQuery.data ?? [];

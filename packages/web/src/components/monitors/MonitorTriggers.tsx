@@ -73,13 +73,14 @@ interface MonitorTriggersProps {
   monitorId: string;
   provider: string;
   query: string;
+  condition: string;
   chartQuery: string | null;
   lastRunAt: number | null;
   since: string;
   onNavigate: (sessionId: string) => void;
 }
 
-export const MonitorTriggers = memo(function MonitorTriggers({ monitorId, provider, query: monitorQuery, chartQuery: monitorChartQuery, lastRunAt, since, onNavigate }: MonitorTriggersProps) {
+export const MonitorTriggers = memo(function MonitorTriggers({ monitorId, provider, query: monitorQuery, condition, chartQuery: monitorChartQuery, lastRunAt, since, onNavigate }: MonitorTriggersProps) {
   const [showAll, setShowAll] = useState(false);
   const [open, setOpen] = useState(false);
   const sinceSeconds = sinceToSeconds(since);
@@ -111,7 +112,7 @@ export const MonitorTriggers = memo(function MonitorTriggers({ monitorId, provid
 
   return (
     <>
-      <MonitorChart provider={provider} query={monitorQuery} chartQuery={monitorChartQuery} lastRunAt={lastRunAt} since={since} />
+      <MonitorChart provider={provider} query={monitorQuery} condition={condition} chartQuery={monitorChartQuery} lastRunAt={lastRunAt} since={since} />
 
       <div className="relative border-t border-[#e8e6e1]">
         {/* Opens upward over the chart so the card (and its row) keeps its height. */}

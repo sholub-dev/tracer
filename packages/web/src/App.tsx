@@ -24,8 +24,6 @@ interface RouteState {
   page: Page;
   sessionId: string | null;
   dashboardId: string | null;
-  monitorId: string | null;
-  monitorSessionId: string | null;
   builderSessionId: string | null;
 }
 
@@ -35,9 +33,7 @@ function getRouteFromPath(): RouteState {
   const sessionId = page === "debug" && segments[1] ? segments[1] : null;
   const dashboardId = page === "dashboard" && segments[1] ? segments[1] : null;
   const builderSessionId = page === "monitors" && segments[1] === "chat" && segments[2] ? segments[2] : null;
-  const monitorId = page === "monitors" && segments[1] && segments[1] !== "chat" ? segments[1] : null;
-  const monitorSessionId = monitorId && segments[2] ? segments[2] : null;
-  return { page, sessionId, dashboardId, monitorId, monitorSessionId, builderSessionId };
+  return { page, sessionId, dashboardId, builderSessionId };
 }
 
 // Stable reference for useSyncExternalStore — must return the same object for
@@ -71,8 +67,6 @@ export function App() {
     page: currentPage,
     sessionId: currentSessionId,
     dashboardId: currentDashboardId,
-    monitorId: currentMonitorId,
-    monitorSessionId: currentMonitorSessionId,
     builderSessionId: currentBuilderSessionId,
   } = useSyncExternalStore(subscribe, getRouteSnapshot);
 
@@ -96,8 +90,8 @@ export function App() {
     pushPath(`/dashboard/${crypto.randomUUID()}`);
   }, []);
 
-  const navigateMonitors = useCallback((monitorId?: string, sessionId?: string) => {
-    pushPath(["/monitors", monitorId, monitorId && sessionId].filter(Boolean).join("/"));
+  const closeBuilderChat = useCallback(() => {
+    pushPath("/monitors");
   }, []);
 
   const openBuilderChat = useCallback((sessionId: string) => {
@@ -116,8 +110,6 @@ export function App() {
           currentDashboardId={currentDashboardId}
           onSelectDashboard={selectDashboard}
           onNewDashboard={newDashboard}
-          currentMonitorSessionId={currentMonitorSessionId}
-          onSelectMonitorSession={navigateMonitors}
           currentBuilderSessionId={currentBuilderSessionId}
           onSelectBuilderChat={openBuilderChat}
         />
@@ -140,11 +132,10 @@ export function App() {
         )}
         {Monitors && currentPage === "monitors" && (
           <Monitors
-            monitorId={currentMonitorId ?? undefined}
-            sessionId={currentMonitorSessionId ?? undefined}
             builderSessionId={currentBuilderSessionId ?? undefined}
-            onNavigate={navigateMonitors}
+            onNavigate={selectSession}
             onOpenBuilder={openBuilderChat}
+            onCloseBuilder={closeBuilderChat}
           />
         )}
         {currentPage === "settings" && <Settings />}

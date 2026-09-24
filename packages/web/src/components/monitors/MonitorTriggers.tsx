@@ -27,12 +27,11 @@ function describeFired(t: Trigger): { short: string; full: string } {
 
 interface TriggerRowProps {
   trigger: Trigger;
-  monitorId: string;
   repeatLabels: Map<string, string>;
-  onNavigate: (monitorId?: string, sessionId?: string) => void;
+  onNavigate: (sessionId: string) => void;
 }
 
-const TriggerRow = memo(function TriggerRow({ trigger: t, monitorId, repeatLabels, onNavigate }: TriggerRowProps) {
+const TriggerRow = memo(function TriggerRow({ trigger: t, repeatLabels, onNavigate }: TriggerRowProps) {
   const fired = describeFired(t);
   const repeatOf = t.status === "repeat" ? t.groups.find((g) => g.repeat && g.sessionId)?.sessionId ?? null : null;
   const sessionId = t.sessionId;
@@ -40,8 +39,8 @@ const TriggerRow = memo(function TriggerRow({ trigger: t, monitorId, repeatLabel
     <div
       role={sessionId ? "button" : undefined}
       tabIndex={sessionId ? 0 : undefined}
-      onClick={sessionId ? () => onNavigate(monitorId, sessionId) : undefined}
-      onKeyDown={sessionId ? (e) => { if (e.key === "Enter" && e.target === e.currentTarget) onNavigate(monitorId, sessionId); } : undefined}
+      onClick={sessionId ? () => onNavigate(sessionId) : undefined}
+      onKeyDown={sessionId ? (e) => { if (e.key === "Enter" && e.target === e.currentTarget) onNavigate(sessionId); } : undefined}
       className={`px-5 py-2 border-t border-[#f0eee9] text-xs font-sans flex items-center gap-3 whitespace-nowrap ${
         sessionId ? "cursor-pointer hover:bg-[#f5f4f0]/60" : ""
       }`}
@@ -52,16 +51,14 @@ const TriggerRow = memo(function TriggerRow({ trigger: t, monitorId, repeatLabel
       {repeatOf ? (
         <button
           type="button"
-          onClick={(e) => { e.stopPropagation(); onNavigate(monitorId, repeatOf); }}
+          onClick={(e) => { e.stopPropagation(); onNavigate(repeatOf); }}
           className="shrink-0 text-[#2b5ea7] hover:text-[#234d8a]"
         >
           Repeat of {repeatLabels.get(repeatOf) ?? "earlier run"}
         </button>
-      ) : (
+      ) : t.status !== "investigating" && (
         <span className="shrink-0">
-          <Badge variant={t.status === "investigating" ? "info" : "default"}>
-            {t.status === "muted" ? "Alert off" : t.status === "repeat" ? "Repeat" : "Investigating"}
-          </Badge>
+          <Badge variant="default">{t.status === "muted" ? "Alert off" : "Repeat"}</Badge>
         </span>
       )}
       <span
@@ -79,7 +76,7 @@ interface MonitorTriggersProps {
   chartQuery: string | null;
   lastRunAt: number | null;
   since: string;
-  onNavigate: (monitorId?: string, sessionId?: string) => void;
+  onNavigate: (sessionId: string) => void;
 }
 
 export const MonitorTriggers = memo(function MonitorTriggers({ monitorId, provider, query: monitorQuery, chartQuery: monitorChartQuery, lastRunAt, since, onNavigate }: MonitorTriggersProps) {
@@ -121,7 +118,7 @@ export const MonitorTriggers = memo(function MonitorTriggers({ monitorId, provid
         {expanded && (
           <div className="absolute inset-x-0 bottom-full z-20 max-h-[260px] overflow-y-auto bg-white border-t border-[#e8e6e1] shadow-[0_-4px_8px_rgba(0,0,0,0.04)]">
             {(showAll ? triggers : triggers.slice(0, TRIGGERS_PREVIEW)).map((t) => (
-              <TriggerRow key={t.id} trigger={t} monitorId={monitorId} repeatLabels={repeatLabels} onNavigate={onNavigate} />
+              <TriggerRow key={t.id} trigger={t} repeatLabels={repeatLabels} onNavigate={onNavigate} />
             ))}
           </div>
         )}

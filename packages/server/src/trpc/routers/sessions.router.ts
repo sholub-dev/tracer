@@ -41,7 +41,6 @@ export const sessionsRouter = router({
       .where(and(
         notLike(chatSessions.id, `${SESSION_PREFIX.DASHBOARD}%`),
         notLike(chatSessions.id, `${SESSION_PREFIX.MONITORS}%`),
-        or(isNull(chatSessions.kind), ne(chatSessions.kind, SESSION_KIND.MONITOR)),
       ))
       .orderBy(desc(chatSessions.updatedAt))
       .all()
@@ -126,7 +125,6 @@ export const sessionsRouter = router({
           and(
             ne(chatSessions.kind, SESSION_KIND.IMPORTED),
             ne(chatSessions.kind, SESSION_KIND.API),
-            ne(chatSessions.kind, SESSION_KIND.MONITOR),
           ),
         ),
         or(

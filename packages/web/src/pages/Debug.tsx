@@ -49,18 +49,7 @@ export function Debug({ sessionId, onSessionChange }: DebugProps) {
     if (!sessionId) return;
     const listData = utils.sessions.list.getData();
     const session = listData?.find((s) => s.id === sessionId);
-    if (!session) {
-      // Monitor sessions are excluded from sessions.list
-      if (sessionStatus !== "done") return;
-      markViewed.mutate({ id: sessionId }, {
-        onSuccess: () => {
-          utils.monitors.unreadCount.invalidate();
-          utils.monitors.list.invalidate();
-        },
-      });
-      return;
-    }
-    if (session.status === "idle" || session.status === "streaming") return;
+    if (!session || session.status === "idle" || session.status === "streaming") return;
 
     // Optimistically clear the per-session indicator in the list cache
     utils.sessions.list.setData(undefined, (prev) =>

@@ -203,6 +203,23 @@ export function useFileDrop(onFiles: (files: FileList) => void, enabled = true) 
   return { dragActive: enabled && dragActive, dropProps };
 }
 
+/** useState backed by localStorage (JSON); falls back to `initial` when storage is unavailable or unreadable. */
+export function usePersistedState<T>(key: string, initial: T): [T, (value: T) => void] {
+  const [value, setValueRaw] = useState<T>(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw === null ? initial : (JSON.parse(raw) as T);
+    } catch {
+      return initial;
+    }
+  });
+  const setValue = useCallback((next: T) => {
+    try { localStorage.setItem(key, JSON.stringify(next)); } catch { /* storage unavailable */ }
+    setValueRaw(next);
+  }, [key]);
+  return [value, setValue];
+}
+
 /** Calls callback when a click occurs outside the referenced element. */
 export function useClickOutside<T extends HTMLElement>(
   ref: RefObject<T | null>,

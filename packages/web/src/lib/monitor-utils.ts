@@ -1,3 +1,12 @@
+import { parseCondition } from "@tracer-sh/shared";
+import type { Threshold } from "../components/charts/ChartView";
+
+/** Chart line for a condition like "> 50"; none for == and != */
+export function parseThreshold(condition: string): Threshold | undefined {
+  const c = parseCondition(condition);
+  return c && c.op !== "==" && c.op !== "!=" ? { operator: c.op, value: c.threshold } : undefined;
+}
+
 /** Convert "X hours/minutes ago" to seconds */
 export function sinceToSeconds(since: string): number {
   const m = since.match(/([\d.]+)\s*(minute|hour|day)/i);

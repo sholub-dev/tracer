@@ -110,13 +110,14 @@ function RechartsLineChart({ width, height, series, formatX, threshold }: LineCh
         formatter={(val, name) => [formatYAxis(val as number), name]}
       />
       {threshold && (
-        <ReferenceLine y={threshold.value} stroke="#b33a2a" strokeWidth={1.5} strokeDasharray="6 4" />
+        <ReferenceLine y={threshold.value} ifOverflow="extendDomain" stroke="#b33a2a" strokeWidth={1.5} strokeDasharray="6 4" />
       )}
+      {/* recharts fills a missing y1 to the top edge and a missing y2 to the bottom edge */}
       {thresholdAbove && (
-        <ReferenceArea y1={threshold!.value} fill="rgba(179, 58, 42, 0.12)" />
+        <ReferenceArea y2={threshold!.value} fill="rgba(179, 58, 42, 0.12)" />
       )}
       {thresholdBelow && (
-        <ReferenceArea y2={threshold!.value} fill="rgba(179, 58, 42, 0.12)" />
+        <ReferenceArea y1={threshold!.value} fill="rgba(179, 58, 42, 0.12)" />
       )}
       {series.map((s) => (
         <Line

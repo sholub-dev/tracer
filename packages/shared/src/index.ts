@@ -3,3 +3,4 @@ export * from "./query-utils.js";
 export * from "./constants.js";
 export * from "./chat.types.js";
 export * from "./feature-flags.js";
+export * from "./condition.js";

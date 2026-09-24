@@ -24,6 +24,8 @@ interface RouteState {
   page: Page;
   sessionId: string | null;
   dashboardId: string | null;
+  monitorId: string | null;
+  monitorSessionId: string | null;
 }
 
 function getRouteFromPath(): RouteState {
@@ -31,7 +33,9 @@ function getRouteFromPath(): RouteState {
   const page = segments[0] && validPages.has(segments[0]) ? (segments[0] as Page) : "debug";
   const sessionId = page === "debug" && segments[1] ? segments[1] : null;
   const dashboardId = page === "dashboard" && segments[1] ? segments[1] : null;
-  return { page, sessionId, dashboardId };
+  const monitorId = page === "monitors" && segments[1] ? segments[1] : null;
+  const monitorSessionId = monitorId && segments[2] ? segments[2] : null;
+  return { page, sessionId, dashboardId, monitorId, monitorSessionId };
 }
 
 // Stable reference for useSyncExternalStore — must return the same object for
@@ -61,7 +65,13 @@ function pushPath(path: string) {
 const PageFallback = () => <Spinner size="lg" centered />;
 
 export function App() {
-  const { page: currentPage, sessionId: currentSessionId, dashboardId: currentDashboardId } = useSyncExternalStore(subscribe, getRouteSnapshot);
+  const {
+    page: currentPage,
+    sessionId: currentSessionId,
+    dashboardId: currentDashboardId,
+    monitorId: currentMonitorId,
+    monitorSessionId: currentMonitorSessionId,
+  } = useSyncExternalStore(subscribe, getRouteSnapshot);
 
   const navigate = useCallback((page: Page) => {
     pushPath(page === "debug" ? "/" : `/${page}`);
@@ -83,6 +93,10 @@ export function App() {
     pushPath(`/dashboard/${crypto.randomUUID()}`);
   }, []);
 
+  const navigateMonitors = useCallback((monitorId?: string, sessionId?: string) => {
+    pushPath(["/monitors", monitorId, monitorId && sessionId].filter(Boolean).join("/"));
+  }, []);
+
   return (
     <Shell
       sidebar={
@@ -95,6 +109,8 @@ export function App() {
           currentDashboardId={currentDashboardId}
           onSelectDashboard={selectDashboard}
           onNewDashboard={newDashboard}
+          currentMonitorSessionId={currentMonitorSessionId}
+          onSelectMonitorSession={navigateMonitors}
         />
       }
     >
@@ -113,7 +129,13 @@ export function App() {
             onSessionChange={selectSession}
           />
         )}
-        {Monitors && currentPage === "monitors" && <Monitors />}
+        {Monitors && currentPage === "monitors" && (
+          <Monitors
+            monitorId={currentMonitorId ?? undefined}
+            sessionId={currentMonitorSessionId ?? undefined}
+            onNavigate={navigateMonitors}
+          />
+        )}
         {currentPage === "settings" && <Settings />}
       </Suspense>
     </Shell>

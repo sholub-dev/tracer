@@ -41,6 +41,19 @@ causes — all from a single conversation.
 
 ![Debug page](docs/screenshots/debug_page.png)
 
+## Monitors
+
+Tell an agent what to watch, and Tracer checks it on a schedule. When the
+condition is met, it starts a debug session that finds the cause for you.
+
+- Build and edit monitors in chat, e.g. "alert me on any new alert for the foundations team". The agent researches the data, proposes a New Relic (NRQL) or PostHog (HogQL) count query and condition (e.g. `count > 0`), and you click Save
+- Checks run on round clock times (every 5 min at :00, :05, ...) over back-to-back time windows, so no event is counted twice or missed
+- Each trigger starts a normal debug session with the same agent and tools; results show in the Monitors section of the sidebar, with an unread badge
+- Repeat detection: with `FACET` (e.g. by service), a group already investigated in the last 24h is marked as a repeat instead of starting a new session; new groups get past findings as context
+- Each card shows live query results for the chosen range (24h / 7d / 30d / 90d) and the times it fired
+- Run toggle turns checks on or off; Alert toggle decides if a firing starts a debug session (off still records it)
+- Drag cards to reorder; drag the right edge to resize (50 / 75 / 100% width); card color shows the provider
+
 ## Settings
 
 Configure providers, LLM credentials, integrations, and agent behavior. Each

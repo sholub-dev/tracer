@@ -41,7 +41,7 @@ function timeValueToUnixSeconds(v: unknown): number | null {
 }
 
 /** A finite number, or a plain decimal string (HogQL may serialize counts/aggregates as strings). */
-function isNumericValue(v: unknown): boolean {
+export function isNumericValue(v: unknown): boolean {
   if (typeof v === "number") return Number.isFinite(v);
   if (typeof v === "string") return /^-?\d+(\.\d+)?$/.test(v.trim());
   return false;

@@ -20,3 +20,15 @@
   background: #d4d2cd !important;
   opacity: 0.2 !important;
 }
+
+/* Recharts makes charts focusable; clicking one draws the browser focus ring. */
+.recharts-wrapper:focus,
+.recharts-wrapper:focus-visible,
+.recharts-surface:focus,
+.recharts-surface:focus-visible {
+  outline: none;
+}
+
+.recharts-wrapper {
+  user-select: none;
+}

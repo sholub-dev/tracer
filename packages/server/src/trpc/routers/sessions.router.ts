@@ -14,7 +14,7 @@ import {
   splitAtAnalysis,
 } from "@tracer-sh/shared";
 import { publicProcedure, router } from "../trpc.js";
-import { chatSessions, agentRuns } from "../../db/schema.js";
+import { chatSessions, agentRuns, monitorTriggers } from "../../db/schema.js";
 import { generateSessionSummary } from "../../agents/utility/summary.js";
 
 const AGENT_TYPE_LABELS: Record<string, string> = {
@@ -41,6 +41,7 @@ export const sessionsRouter = router({
       .where(and(
         notLike(chatSessions.id, `${SESSION_PREFIX.DASHBOARD}%`),
         notLike(chatSessions.id, `${SESSION_PREFIX.MONITORS}%`),
+        or(isNull(chatSessions.kind), ne(chatSessions.kind, SESSION_KIND.MONITOR)),
       ))
       .orderBy(desc(chatSessions.updatedAt))
       .all()
@@ -125,6 +126,7 @@ export const sessionsRouter = router({
           and(
             ne(chatSessions.kind, SESSION_KIND.IMPORTED),
             ne(chatSessions.kind, SESSION_KIND.API),
+            ne(chatSessions.kind, SESSION_KIND.MONITOR),
           ),
         ),
         or(
@@ -159,6 +161,8 @@ export const sessionsRouter = router({
         .delete(chatSessions)
         .where(eq(chatSessions.id, input.id))
         .run();
+      // Keep the firing in monitor history; it just loses its session link.
+      ctx.db.update(monitorTriggers).set({ sessionId: null }).where(eq(monitorTriggers.sessionId, input.id)).run();
       return { success: true };
     }),
 

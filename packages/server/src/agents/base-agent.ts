@@ -8,7 +8,7 @@ import { StreamBroadcaster } from "../lib/stream-broadcaster.js";
 import type { Context } from "../trpc/context.js";
 import type { ChatToolWriter as StreamWriter } from "@tracer-sh/shared";
 import { getCurrentDateBlock } from "../lib/current-context.js";
-import { EVIDENCE_GROUNDING } from "../lib/shared-prompts.js";
+import { EVIDENCE_GROUNDING, PLAIN_LANGUAGE } from "../lib/shared-prompts.js";
 import { CONFIG } from "../config.js";
 
 /** Appended to the system prompt only when an attachment is present. */
@@ -19,6 +19,11 @@ The user has attached one or more images or files. Treat each as primary evidenc
 - Transcribe values precisely and double-check each reading before relying on it — re-read the image to confirm digits, spelling, and signs rather than approximating.
 - Quote what is actually shown rather than paraphrasing loosely, and tie every conclusion back to specific details in the attachment.
 - If any part is blurry, cropped, truncated, or ambiguous, say so explicitly and ask — never guess at an unreadable value.`;
+
+export function firstUserMessageTitle(messages: UIMessage[]): string {
+  const textPart = messages.find((m) => m.role === "user")?.parts.find((p) => p.type === "text");
+  return textPart ? (textPart as { text: string }).text.slice(0, 60) : DEFAULT_SESSION_TITLE;
+}
 
 /**
  * Sanitize messages loaded from the DB so incomplete tool parts (from aborted
@@ -176,8 +181,8 @@ If a tool call fails, retry with a corrected approach. If you fail the same tool
 When the user's question spans multiple providers, query each relevant provider and synthesize findings across the results.`;
     const fragments = collected.promptFragments ?? [];
     systemPrompt = fragments.length > 0
-      ? `${basePrompt}\n\n${EVIDENCE_GROUNDING}\n\n${fragments.join("\n\n")}`
-      : `${basePrompt}\n\nNo observability providers are currently configured. If the user asks about observability data, let them know they can connect providers in the Settings page.`;
+      ? `${basePrompt}\n\n${EVIDENCE_GROUNDING}\n\n${PLAIN_LANGUAGE}\n\n${fragments.join("\n\n")}`
+      : `${basePrompt}\n\n${PLAIN_LANGUAGE}\n\nNo observability providers are currently configured. If the user asks about observability data, let them know they can connect providers in the Settings page.`;
   }
 
   systemPrompt += "\n\n" + getCurrentDateBlock(context.db);

@@ -1,8 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import type { UIMessage } from "ai";
 import { theme } from "../../lib/theme";
 import { trpc } from "../../lib/trpc";
 import { WEB_CONFIG } from "../../lib/config";
 import { ChatCore, type ChatCoreRef } from "./ChatCore";
+import { Spinner } from "../ui/Spinner";
 
 interface PanelChatProps {
   chatId: string;
@@ -12,6 +14,8 @@ interface PanelChatProps {
   extraBody?: Record<string, unknown>;
   onData?: (part: { type: string; data: unknown }) => void;
   className?: string;
+  /** Keep the server session across mounts and resume it instead of starting fresh. */
+  persist?: boolean;
 }
 
 export function PanelChat({
@@ -22,6 +26,7 @@ export function PanelChat({
   extraBody,
   onData,
   className,
+  persist = false,
 }: PanelChatProps) {
   const [panelWidth, setPanelWidth] = useState(() =>
     Math.floor((window.innerWidth - WEB_CONFIG.sidebarWidth) / 2),
@@ -32,8 +37,10 @@ export function PanelChat({
 
   // Delete stale server-side session on mount so AI starts fresh
   useEffect(() => {
-    deleteSession.mutate({ id: chatId });
+    if (!persist) deleteSession.mutate({ id: chatId });
   }, [chatId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const sessionQuery = trpc.sessions.get.useQuery({ id: chatId }, { enabled: persist, gcTime: 0 });
 
   const panelWidthRef = useRef(panelWidth);
   panelWidthRef.current = panelWidth;
@@ -66,7 +73,7 @@ export function PanelChat({
   const header = (
     <div className={theme.dashboardChatHeader}>
       <span className={theme.dashboardChatTitle}>{title}</span>
-      {hasMessages && (
+      {!persist && hasMessages && (
         <button
           type="button"
           onClick={() => {
@@ -91,22 +98,31 @@ export function PanelChat({
         onMouseDown={handleResizeStart}
         className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-[#2b5ea7]/20 transition-colors z-10"
       />
-      <ChatCore
-        ref={coreRef}
-        chatId={chatId}
-        apiEndpoint={apiEndpoint}
-        placeholder={placeholder}
-        extraBody={extraBody}
-        onData={onData}
-        variant="panel"
-        header={header}
-        onStatusChange={(status, msgs) => {
-          setHasMessages(msgs.length > 0);
-          if (status === "ready") {
-            utils.sessions.list.invalidate();
-          }
-        }}
-      />
+      {persist && sessionQuery.isLoading ? (
+        <>
+          {header}
+          <Spinner centered />
+        </>
+      ) : (
+        <ChatCore
+          key={persist ? chatId : undefined}
+          ref={coreRef}
+          chatId={chatId}
+          initialMessages={persist ? (sessionQuery.data?.messages as UIMessage[] | undefined) : undefined}
+          apiEndpoint={apiEndpoint}
+          placeholder={placeholder}
+          extraBody={extraBody}
+          onData={onData}
+          variant="panel"
+          header={header}
+          onStatusChange={(status, msgs) => {
+            setHasMessages(msgs.length > 0);
+            if (status === "ready") {
+              utils.sessions.list.invalidate();
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

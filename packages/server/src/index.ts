@@ -37,7 +37,7 @@ async function main() {
   const context = createContext({ db, providers });
   const app = createApp(context);
 
-  const scheduler = FEATURES.monitors ? new MonitorScheduler(db, providers) : null;
+  const scheduler = FEATURES.monitors ? new MonitorScheduler(context) : null;
   scheduler?.start();
 
   const server = serve({ fetch: app.fetch, port: CONFIG.port, hostname: CONFIG.host }, (info) => {

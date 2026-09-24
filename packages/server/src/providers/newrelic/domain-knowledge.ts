@@ -26,7 +26,7 @@ const NRQL_QUICK_REFERENCE = `## NRQL Reference
 - \`SLIDE BY N time_unit\` — sliding windows. Cannot use with TIMESERIES AUTO.
 - \`EXTRAPOLATE\` — compensate for APM event sampling. Only works with: count, average, sum, histogram, rate, percentage, apdex, stddev. Does NOT work with: uniqueCount, percentile, min, max, latest, earliest.
 - \`ORDER BY attr [ASC|DESC]\` — sort non-aggregation results only (not for FACET queries).
-- \`WITH TIMEZONE 'America/New_York'\` — affects time display and time functions. Default UTC.
+- \`WITH TIMEZONE 'America/New_York'\` — affects literal times, time display and time functions. Tracer adds the user's timezone automatically; do not add it yourself.
 - Subqueries: \`WHERE x IN (SELECT ... FROM ...)\` or \`FROM (SELECT ... FACET y) WHERE ...\` — max 3 per query, cannot reference outer query attributes.
 
 ### Key Functions
@@ -34,7 +34,7 @@ const NRQL_QUICK_REFERENCE = `## NRQL Reference
 **Rate/trend:** \`rate(aggregator, interval)\` — frequency per time unit. \`derivative(attr)\` — rate of change. \`filter(aggregator, WHERE cond)\` — conditional aggregation in SELECT, e.g. \`filter(count(*), WHERE error IS TRUE)\`. \`percentage(count(*), WHERE cond)\` — % matching condition.
 **String/extraction:** \`capture(attr, r'.*(?P<name>pattern).*')\` — RE2 regex extraction. Named groups \`(?P<name>...)\`. Must match FULL string. \`aparse(attr, 'anchor*pattern')\` — simpler/faster anchor-based extraction. \`concat(a, b)\`, \`lower()\`, \`upper()\`, \`length()\`, \`substring(attr, start, end)\`, \`position(str, sub)\`, \`replace(str, search, repl)\`.
 **Conditional:** \`if(condition, true_val, false_val)\` — per-row conditional.
-**Time grouping:** \`hourOf(timestamp)\`, \`dateOf()\`, \`weekdayOf()\`, \`dayOfMonthOf()\`, \`monthOf()\` — UTC by default, use WITH TIMEZONE.
+**Time grouping:** \`hourOf(timestamp)\`, \`dateOf()\`, \`weekdayOf()\`, \`dayOfMonthOf()\`, \`monthOf()\` — in the user's timezone (added automatically).
 **Type conversion:** \`numeric(val)\`, \`string(val)\`, \`boolean(val)\`. JSON: \`jsonParse(str_attr)\`, \`mapKeys()\`, \`mapValues()\`.
 **Discovery:** \`keyset() FROM EventType\` — list all attributes. \`SHOW EVENT TYPES\` — list all event types.
 
@@ -172,6 +172,8 @@ After completing all applicable checks, report results as a table. (This verdict
 End with an overall verdict on its own line:
 - \`Service appears healthy.\` — all checks pass
 - \`X check(s) flagged: [list check names].\` — one or more checks flagged
+
+**If 2 or more checks are flagged, plot them over the same window (TIMESERIES) and compare onsets before reporting.** A shared onset likely means ONE incident across several checks.
 
 If a check could not be evaluated (no baseline data available, service has no external calls, etc.), mark it as **N/A** with a brief note. Never silently skip a check.`;
 

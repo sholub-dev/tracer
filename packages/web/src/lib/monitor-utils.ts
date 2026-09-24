@@ -1,14 +1,3 @@
-import { substituteTimeRange } from "@tracer-sh/shared";
-import type { Threshold } from "../components/charts/ChartView";
-import { WEB_CONFIG } from "./config";
-
-export const MONITOR_PRESETS = [
-  { label: "1 hour", since: "1 hour ago" },
-  { label: "3 hours", since: "3 hours ago" },
-  { label: "8 hours", since: "8 hours ago" },
-  { label: "24 hours", since: "24 hours ago" },
-] as const;
-
 /** Convert "X hours/minutes ago" to seconds */
 export function sinceToSeconds(since: string): number {
   const m = since.match(/([\d.]+)\s*(minute|hour|day)/i);
@@ -20,40 +9,26 @@ export function sinceToSeconds(since: string): number {
   return n * 86400;
 }
 
-export const MAX_BUCKETS = WEB_CONFIG.maxBuckets;
-
-/**
- * Build TIMESERIES clause with bucket size = multiple of the monitor's
- * evaluation window, scaled up if needed to stay within NerdGraph's 366-bucket limit.
- */
-export function timeseriesClause(frequencySeconds: number, since: string): string {
-  const evalWindow = frequencySeconds * 2;
-  const rangeSeconds = sinceToSeconds(since);
-  const multiplier = Math.max(1, Math.ceil(rangeSeconds / (evalWindow * MAX_BUCKETS)));
-  return `TIMESERIES ${evalWindow * multiplier} seconds`;
-}
-
-/** Extract the data threshold from a monitor condition expression.
- *  Matches `.field > number` patterns, skipping structural checks like `.length > 0`. */
-export function parseThreshold(condition: string): Threshold | undefined {
-  const matches = [...condition.matchAll(/\.(\w+)\s*(>=|<=|>|<)\s*([\d.]+)/g)];
-  for (const m of matches) {
-    if (m[1] === "length") continue;
-    return { operator: m[2] as Threshold["operator"], value: parseFloat(m[3]) };
-  }
-  return undefined;
-}
-
 export function formatTime(ts: number | null | undefined): string {
   if (!ts) return "never";
-  return new Date(ts * 1000).toLocaleString();
+  const d = new Date(ts * 1000);
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (d.toDateString() === new Date().toDateString()) return time;
+  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
 }
 
-export function resolveQueryDisplay(query: string, frequencySeconds: number): string {
-  const lookback = frequencySeconds * 2;
-  return substituteTimeRange(query, `${lookback} seconds ago`);
+export function formatFrequency(seconds: number): string {
+  const units: Array<[number, string]> = [[86400, "day"], [3600, "hour"], [60, "min"]];
+  for (const [size, label] of units) {
+    if (seconds >= size && seconds % size === 0) {
+      const n = seconds / size;
+      return label === "min" ? `every ${n} min` : `every ${n} ${label}${n === 1 ? "" : "s"}`;
+    }
+  }
+  return `every ${seconds}s`;
 }
 
 export function statusVariant(status: string): "error" | "warn" | "success" {
-  return status === "alert" ? "error" : status === "error" ? "warn" : "success";
+  if (status === "triggered") return "error";
+  return status === "error" ? "warn" : "success";
 }

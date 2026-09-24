@@ -6,6 +6,7 @@ import { publicProcedure, router } from "../trpc.js";
 import { providerConfigs } from "../../db/schema.js";
 import { readProviderConfig } from "../../db/config-reader.js";
 import { getGcpAuth } from "../../providers/gcp/gcp-auth.js";
+import { toChartRows } from "../../providers/posthog/posthog-formatter.js";
 
 const timeRangeInput = z.object({
   since: z.string(),
@@ -180,7 +181,9 @@ export const providerRouter = router({
           message: `Provider "${input.provider}" not found`,
         });
       }
-      return p.executeRawQuery(input.query);
+      const result = await p.executeRawQuery(input.query);
+      // Same reshaping as chat, so time-bucketed HogQL charts instead of rendering as a table.
+      return p.type === "posthog" && Array.isArray(result) ? toChartRows(result) : result;
     }),
 
   // Shared gcloud ADC auth status — both the GCP data provider's project selector and the

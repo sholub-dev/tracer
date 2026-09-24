@@ -57,6 +57,9 @@ export const CONFIG = {
   monitorTickIntervalMs: 10_000,
   monitorQueryTimeoutMs: 30_000,
   monitorMinFrequencySeconds: 30,
+  /** Window end trails now by this much so late-arriving events are counted. */
+  monitorIngestLagSeconds: 60,
+  monitorRepeatWindowSeconds: 86_400,
 
   // ── Server lifecycle ──
 

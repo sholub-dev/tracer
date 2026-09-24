@@ -1,26 +1,18 @@
-import { trpc } from "../../lib/trpc";
 import { PanelChat } from "../chat/PanelChat";
 
 interface MonitorChatPanelProps {
+  sessionId: string;
   className?: string;
 }
 
-export function MonitorChatPanel({ className }: MonitorChatPanelProps) {
-  const utils = trpc.useUtils();
-
+export function MonitorChatPanel({ sessionId, className }: MonitorChatPanelProps) {
   return (
     <PanelChat
-      chatId="__monitors__"
+      chatId={sessionId}
       apiEndpoint="/api/monitor-chat"
       title="Monitor Builder"
-      placeholder="Create a monitor..."
-      onData={(part) => {
-        if (part.type === "data-monitor-changed") {
-          utils.monitors.list.invalidate();
-          utils.monitorAlerts.activeAlerts.invalidate();
-          utils.monitorAlerts.activeCount.invalidate();
-        }
-      }}
+      placeholder="Describe what to monitor..."
+      persist
       className={className}
     />
   );

@@ -63,11 +63,17 @@ export function runSetup(): void {
       name TEXT NOT NULL,
       provider TEXT NOT NULL DEFAULT 'newrelic',
       query TEXT NOT NULL,
+      chart_query TEXT,
       condition TEXT NOT NULL,
       frequency_seconds INTEGER NOT NULL DEFAULT 60,
       enabled INTEGER NOT NULL DEFAULT 1,
       last_checked_at INTEGER,
       last_status TEXT NOT NULL DEFAULT 'ok',
+      last_error TEXT,
+      chat_session_id TEXT,
+      sort_order INTEGER,
+      card_width INTEGER,
+      alert_enabled INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
@@ -79,6 +85,18 @@ export function runSetup(): void {
       resolved_at INTEGER,
       result_snapshot TEXT NOT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+
+    CREATE TABLE IF NOT EXISTS monitor_triggers (
+      id TEXT PRIMARY KEY,
+      monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+      triggered_at INTEGER NOT NULL,
+      value REAL NOT NULL,
+      window_start INTEGER NOT NULL,
+      window_end INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      groups TEXT NOT NULL,
+      session_id TEXT
     );
 
     CREATE TABLE IF NOT EXISTS sub_agent_runs (
@@ -102,6 +120,9 @@ export function runSetup(): void {
     CREATE INDEX IF NOT EXISTS idx_monitors_enabled ON monitors(enabled);
     CREATE INDEX IF NOT EXISTS idx_alerts_monitor ON monitor_alerts(monitor_id);
     CREATE INDEX IF NOT EXISTS idx_alerts_unresolved ON monitor_alerts(resolved_at) WHERE resolved_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_triggers_monitor ON monitor_triggers(monitor_id, triggered_at);
+    CREATE INDEX IF NOT EXISTS idx_triggers_session ON monitor_triggers(session_id);
+    CREATE INDEX IF NOT EXISTS idx_triggers_recent_session ON monitor_triggers(triggered_at) WHERE session_id IS NOT NULL;
     CREATE TABLE IF NOT EXISTS memory_operations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
@@ -140,6 +161,12 @@ export function runSetup(): void {
     `ALTER TABLE chat_sessions ADD COLUMN summary TEXT`,
     `ALTER TABLE chat_sessions ADD COLUMN summary_up_to INTEGER`,
     `ALTER TABLE chat_sessions ADD COLUMN summary_created_at INTEGER`,
+    `ALTER TABLE monitors ADD COLUMN last_error TEXT`,
+    `ALTER TABLE monitors ADD COLUMN chat_session_id TEXT`,
+    `ALTER TABLE monitors ADD COLUMN sort_order INTEGER`,
+    `ALTER TABLE monitors ADD COLUMN card_width INTEGER`,
+    `ALTER TABLE monitors ADD COLUMN alert_enabled INTEGER NOT NULL DEFAULT 1`,
+    `ALTER TABLE monitors ADD COLUMN chart_query TEXT`,
     // Drops the short-lived id-based boundary column (never shipped in a release).
     `ALTER TABLE chat_sessions DROP COLUMN summary_up_to_id`,
   ]) {
@@ -148,6 +175,10 @@ export function runSetup(): void {
 
   // Index on session_id must be created after the ALTER TABLE migration above
   sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_sub_agent_runs_session ON sub_agent_runs(session_id)`);
+  sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_sessions_status_kind ON chat_sessions(status, kind, id);
+    CREATE INDEX IF NOT EXISTS idx_sessions_list ON chat_sessions(updated_at, kind, status, id, title);
+  `);
 
   // 0.3.7: one model setting for everything — clear old per-provider overrides and
   // reset any saved chat model once, so every install starts on the new default.

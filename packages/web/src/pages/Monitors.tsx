@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { SESSION_PREFIX } from "@tracer-sh/shared";
 import { usePolling } from "../lib/hooks";
 import { theme } from "../lib/theme";
@@ -6,20 +6,17 @@ import { trpc } from "../lib/trpc";
 import { MonitorChatPanel } from "../components/monitors/MonitorChatPanel";
 import { MonitorCard } from "../components/monitors/MonitorCard";
 import { TimeRangePicker } from "../components/ui/TimeRangePicker";
-import { Debug } from "./Debug";
 
 interface MonitorsProps {
-  monitorId?: string;
-  sessionId?: string;
   builderSessionId?: string;
-  onNavigate: (monitorId?: string, sessionId?: string) => void;
+  onNavigate: (sessionId: string) => void;
   onOpenBuilder: (sessionId: string) => void;
+  onCloseBuilder: () => void;
 }
 
 type Editing = { sessionId: string; prefill: string };
 
 const newBuilderId = () => `${SESSION_PREFIX.MONITORS}${crypto.randomUUID()}`;
-const noop = () => {};
 const LIST_POLL_MS = 30_000;
 const RANGE_PRESETS = [
   { label: "24h", since: "24 hours ago" },
@@ -34,32 +31,16 @@ const WIDTHS: CardWidth[] = [50, 75, 100];
 const SPAN_CLASS: Record<CardWidth, string> = { 50: "@4xl:col-span-2", 75: "@4xl:col-span-3", 100: "@4xl:col-span-4" };
 const toWidth = (w: number | null | undefined): CardWidth => (w === 75 || w === 100 ? w : 50);
 
-function BackBar({ onBack }: { onBack: () => void }) {
-  return (
-    <div className={`flex items-center gap-4 px-6 py-2 ${theme.header}`}>
-      <button type="button" onClick={onBack} className="text-xs text-[#2b5ea7] hover:text-[#234d8a] font-sans">
-        Back to monitors
-      </button>
-    </div>
-  );
-}
-
-export function Monitors({ monitorId, sessionId, builderSessionId, onNavigate: navigate, onOpenBuilder }: MonitorsProps) {
+export function Monitors({ builderSessionId, onNavigate: navigate, onOpenBuilder, onCloseBuilder }: MonitorsProps) {
   const [editing, setEditing] = useState<Editing | null>(null);
   const [since, setSince] = useState<string>("24 hours ago");
   const utils = trpc.useUtils();
   const listQuery = trpc.monitors.list.useQuery();
   const monitors = listQuery.data ?? [];
-  const showList = !(sessionId && monitorId);
 
   usePolling(() => utils.monitors.list.invalidate(), LIST_POLL_MS, true, false);
 
   const hasMonitors = monitors.length > 0;
-  useEffect(() => {
-    if (showList && monitorId && hasMonitors) {
-      document.getElementById(`monitor-${monitorId}`)?.scrollIntoView({ block: "start" });
-    }
-  }, [showList, monitorId, hasMonitors]);
 
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
@@ -143,16 +124,7 @@ export function Monitors({ monitorId, sessionId, builderSessionId, onNavigate: n
   const startNew = () => onOpenBuilder(newBuilderId());
 
   let overlay;
-  if (sessionId && monitorId) {
-    overlay = (
-      <>
-        <BackBar onBack={() => navigate(monitorId)} />
-        <div className="flex flex-1 min-h-0 [&>*]:flex-1 [&>*]:min-w-0">
-          <Debug key={sessionId} sessionId={sessionId} onSessionChange={noop} />
-        </div>
-      </>
-    );
-  } else if (listQuery.isSuccess && !hasMonitors) {
+  if (listQuery.isSuccess && !hasMonitors) {
     overlay = (
       <div className="flex flex-1 items-center justify-center">
         <div className="text-center space-y-3">
@@ -163,9 +135,8 @@ export function Monitors({ monitorId, sessionId, builderSessionId, onNavigate: n
     );
   }
 
-  // The grid stays mounted while hidden so returning to it doesn't re-run every chart query.
   const grid = hasMonitors && (
-    <div className={`@container flex-1 min-h-0 overflow-y-auto ${showList ? "" : "hidden"}`}>
+    <div className="@container flex-1 min-h-0 overflow-y-auto">
       <div ref={gridRef} className="p-6 grid grid-cols-1 @4xl:grid-cols-4 gap-4 items-stretch content-start">
         {monitors.map((m) => (
           <MonitorCard
@@ -194,16 +165,16 @@ export function Monitors({ monitorId, sessionId, builderSessionId, onNavigate: n
       <div className={`flex items-center justify-between px-6 py-4 ${theme.header}`}>
         <span className={theme.headerTitle}>Monitors</span>
         <div className="flex items-center gap-4">
-          {showList && hasMonitors && <TimeRangePicker value={since} onChange={setSince} presets={RANGE_PRESETS} />}
-          {builderSessionId && showList && (
-            <button type="button" onClick={() => navigate()} className={theme.secondaryBtn}>Close chat</button>
+          {hasMonitors && <TimeRangePicker value={since} onChange={setSince} presets={RANGE_PRESETS} />}
+          {builderSessionId && (
+            <button type="button" onClick={onCloseBuilder} className={theme.secondaryBtn}>Close chat</button>
           )}
           <button type="button" onClick={startNew} className={theme.primaryBtn}>Edit</button>
         </div>
       </div>
       <div className="flex flex-1 min-h-0">
         <div className="flex flex-col flex-1 min-w-0 bg-[#fafaf8]">{overlay}{grid}</div>
-        {builderSessionId && showList && (
+        {builderSessionId && (
           <MonitorChatPanel
             key={builderSessionId}
             sessionId={builderSessionId}

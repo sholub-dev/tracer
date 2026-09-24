@@ -17,7 +17,7 @@ interface MonitorCardProps {
   isDragging: boolean;
   isTarget: boolean;
   resizeActive: boolean;
-  onNavigate: (monitorId?: string, sessionId?: string) => void;
+  onNavigate: (sessionId: string) => void;
   onEdit: (id: string) => void;
   onDragStartId: (id: string) => void;
   onDragEnd: () => void;
@@ -48,13 +48,7 @@ export const MonitorCard = memo(function MonitorCard({
     utils.monitors.list.setData(undefined, (rows) => rows?.map((m) => (m.id === monitor.id ? { ...m, alertEnabled: enabled ? 1 : 0 } : m)));
     setAlert.mutate({ id: monitor.id, enabled });
   };
-  const remove = trpc.monitors.delete.useMutation({
-    onSuccess: () => {
-      utils.monitors.list.invalidate();
-      utils.monitors.unreadCount.invalidate();
-      onNavigate();
-    },
-  });
+  const remove = trpc.monitors.delete.useMutation({ onSuccess: () => utils.monitors.list.invalidate() });
 
   return (
     <div

@@ -22,8 +22,6 @@ interface SidebarProps {
   currentDashboardId: string | null;
   onSelectDashboard: (id: string) => void;
   onNewDashboard: () => void;
-  currentMonitorSessionId: string | null;
-  onSelectMonitorSession: (monitorId: string, sessionId: string) => void;
   currentBuilderSessionId: string | null;
   onSelectBuilderChat: (sessionId: string) => void;
 }
@@ -51,20 +49,12 @@ export function Sidebar({
   currentDashboardId,
   onSelectDashboard,
   onNewDashboard,
-  currentMonitorSessionId,
-  onSelectMonitorSession,
   currentBuilderSessionId,
   onSelectBuilderChat,
 }: SidebarProps) {
   const sessionsQuery = trpc.sessions.list.useQuery();
   const dashboardsQuery = trpc.dashboards.list.useQuery(undefined, {
     enabled: FEATURES.dashboards && currentPage === "dashboard",
-  });
-  const monitorUnreadQuery = trpc.monitors.unreadCount.useQuery(undefined, {
-    enabled: FEATURES.monitors,
-  });
-  const monitorSessionsQuery = trpc.monitors.sessions.useQuery(undefined, {
-    enabled: FEATURES.monitors,
   });
   const builderChatsQuery = trpc.monitors.builderChats.useQuery(undefined, {
     enabled: FEATURES.monitors,
@@ -82,11 +72,7 @@ export function Sidebar({
   usePolling(() => {
     utils.sessions.activeCount.invalidate();
     if (currentPage === "debug") utils.sessions.list.invalidate();
-    if (FEATURES.monitors) {
-      utils.monitors.unreadCount.invalidate();
-      utils.monitors.sessions.invalidate();
-      utils.monitors.builderChats.invalidate();
-    }
+    if (FEATURES.monitors) utils.monitors.builderChats.invalidate();
   }, WEB_CONFIG.activeStreamPollingMs, true);
 
   const markViewedMutation = trpc.sessions.markViewed.useMutation();
@@ -113,12 +99,7 @@ export function Sidebar({
     return { regularSessions: regular, importedSessions: imported, apiSessions: api };
   }, [sessionsQuery.data]);
 
-  const monitorUnread = monitorUnreadQuery.data ?? 0;
-  const monitorItems = useMemo(() => {
-    const chats = (builderChatsQuery.data ?? []).map((c) => ({ ...c, monitorId: null as string | null, at: c.updatedAt }));
-    const runs = (monitorSessionsQuery.data ?? []).map((r) => ({ ...r, at: r.triggeredAt }));
-    return [...chats, ...runs].sort((a, b) => b.at - a.at);
-  }, [builderChatsQuery.data, monitorSessionsQuery.data]);
+  const builderChats = builderChatsQuery.data ?? [];
   const doneSessionCount = currentPage === "debug" && sessionsQuery.data
     ? sessionsQuery.data.filter(s => s.status === "done" && s.id !== currentSessionId && s.kind !== SESSION_KIND.API).length
     : (activeStatusQuery.data?.done ?? 0);
@@ -192,12 +173,11 @@ export function Sidebar({
         {
           onSuccess: () => {
             utils.sessions.list.invalidate();
-            utils.monitors.sessions.invalidate();
             utils.monitors.builderChats.invalidate();
             utils.monitors.triggers.invalidate();
             utils.monitors.list.invalidate();
             if (currentSessionId === confirmTarget.id) onNewSession();
-            if (currentMonitorSessionId === confirmTarget.id || currentBuilderSessionId === confirmTarget.id) onNavigate("monitors");
+            if (currentBuilderSessionId === confirmTarget.id) onNavigate("monitors");
           },
         },
       );
@@ -226,17 +206,7 @@ export function Sidebar({
         currentPage === page ? theme.navActive : theme.navInactive
       }`}
     >
-      {page === "monitors" && monitorUnread > 0 ? (
-        <span className="relative flex items-center justify-center w-5 shrink-0">
-          <NavIcon page={page} />
-          <span
-            className="absolute inset-0 flex items-center justify-center"
-            style={{ animation: "fill-up-down 4s ease-in-out infinite" }}
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="#b33a2a" stroke="none" /></svg>
-          </span>
-        </span>
-      ) : (page === "debug" && doneSessionCount > 0) ? (
+      {page === "debug" && doneSessionCount > 0 ? (
         <span className="relative flex items-center justify-center w-5 shrink-0">
           <NavIcon page={page} />
           <span
@@ -250,11 +220,6 @@ export function Sidebar({
         <span className="w-5 flex items-center justify-center shrink-0"><NavIcon page={page} /></span>
       )}
       {label}
-      {page === "monitors" && monitorUnread > 0 && (
-        <span className="ml-auto flex items-center gap-1.5">
-          <span className="text-[10px] font-medium text-[#b33a2a]" title={`${monitorUnread} new monitor ${monitorUnread === 1 ? "result" : "results"}`}>{monitorUnread}</span>
-        </span>
-      )}
     </button>
   );
 
@@ -336,15 +301,14 @@ export function Sidebar({
           <section className="flex-[5] min-h-0 flex flex-col pt-2">
             {renderNavButton("monitors", "Monitors")}
             <div className="flex-1 min-h-0 overflow-y-auto scrollbar-none space-y-0.5 mt-1">
-              {monitorItems.length === 0 ? (
-                <div className="px-3 py-1 text-[11px] text-[#9c9890]/70">No monitor chats or runs yet</div>
-              ) : monitorItems.map((s) => {
-                const active = currentPage === "monitors" && (s.monitorId ? currentMonitorSessionId : currentBuilderSessionId) === s.id;
-                const { monitorId } = s;
+              {builderChats.length === 0 ? (
+                <div className="px-3 py-1 text-[11px] text-[#9c9890]/70">No monitor chats yet</div>
+              ) : builderChats.map((s) => {
+                const active = currentPage === "monitors" && currentBuilderSessionId === s.id;
                 return (
                   <button
                     key={s.id}
-                    onClick={() => (monitorId ? onSelectMonitorSession(monitorId, s.id) : onSelectBuilderChat(s.id))}
+                    onClick={() => onSelectBuilderChat(s.id)}
                     className={active ? theme.sessionItemActive : theme.sessionItem}
                   >
                     <span

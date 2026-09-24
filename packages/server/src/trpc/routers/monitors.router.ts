@@ -102,23 +102,6 @@ export const monitorsRouter = router({
         .map((t) => ({ ...t, groups: parseTriggerGroups(t.groups) }));
     }),
 
-  sessions: publicProcedure.query(({ ctx }) => {
-    return ctx.db
-      .select({
-        id: chatSessions.id,
-        title: chatSessions.title,
-        status: chatSessions.status,
-        updatedAt: chatSessions.updatedAt,
-        monitorId: monitorTriggers.monitorId,
-        triggeredAt: monitorTriggers.triggeredAt,
-      })
-      .from(monitorTriggers)
-      .innerJoin(chatSessions, eq(monitorTriggers.sessionId, chatSessions.id))
-      .orderBy(desc(monitorTriggers.triggeredAt))
-      .limit(100)
-      .all();
-  }),
-
   builderChats: publicProcedure.query(({ ctx }) => {
     return ctx.db
       .select({ id: chatSessions.id, title: chatSessions.title, status: chatSessions.status, updatedAt: chatSessions.updatedAt })
@@ -127,15 +110,5 @@ export const monitorsRouter = router({
       .orderBy(desc(chatSessions.updatedAt))
       .limit(100)
       .all();
-  }),
-
-  unreadCount: publicProcedure.query(({ ctx }) => {
-    const row = ctx.db
-      .select({ count: sql<number>`COUNT(DISTINCT ${chatSessions.id})` })
-      .from(chatSessions)
-      .innerJoin(monitorTriggers, eq(monitorTriggers.sessionId, chatSessions.id))
-      .where(unreadSession)
-      .get();
-    return row?.count ?? 0;
   }),
 });

@@ -13,6 +13,7 @@ interface PanelChatProps {
   placeholder: string;
   extraBody?: Record<string, unknown>;
   onData?: (part: { type: string; data: unknown }) => void;
+  initialInput?: string;
   className?: string;
   /** Keep the server session across mounts and resume it instead of starting fresh. */
   persist?: boolean;
@@ -25,6 +26,7 @@ export function PanelChat({
   placeholder,
   extraBody,
   onData,
+  initialInput,
   className,
   persist = false,
 }: PanelChatProps) {
@@ -113,6 +115,7 @@ export function PanelChat({
           placeholder={placeholder}
           extraBody={extraBody}
           onData={onData}
+          initialInput={initialInput}
           variant="panel"
           header={header}
           onStatusChange={(status, msgs) => {

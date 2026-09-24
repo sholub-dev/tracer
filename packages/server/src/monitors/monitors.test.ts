@@ -9,6 +9,7 @@ import { evaluateCondition, extractGroups, parseCondition, sumGroups } from "./c
 import { classifyGroups } from "./repeats.js";
 import { isFailedWindow, nextWindow } from "./scheduler.js";
 import { validateMonitor } from "./validate.js";
+import { saveMonitor, setMonitorToggles } from "./store.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 
 function memoryDb(): Db {
@@ -162,4 +163,21 @@ test("validateMonitor checks provider-specific rules", async () => {
   assert.match((await err({ ...base, provider: "posthog", chartQuery: "SELECT 1" }))!, /\{\{SINCE\}\}/);
   assert.equal(await err({ ...base, provider: "posthog", chartQuery: hog }), null);
   assert.match((await err({ ...base, provider: "newrelic", query: "SELECT count(*) FROM Log SINCE {{SINCE}} UNTIL {{UNTIL}} TIMESERIES" }))!, /TIMESERIES/);
+});
+
+test("setMonitorToggles changes only the given toggles and resets the window when Run turns on", () => {
+  const db = memoryDb();
+  db.$client.exec(`CREATE TABLE monitors (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, provider TEXT NOT NULL, query TEXT NOT NULL, chart_query TEXT, condition TEXT NOT NULL,
+    frequency_seconds INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, alert_enabled INTEGER NOT NULL DEFAULT 1,
+    last_status TEXT, last_error TEXT, last_checked_at INTEGER, chat_session_id TEXT, sort_order INTEGER, card_width INTEGER,
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+  )`);
+  saveMonitor(db, "m1", { name: "A", provider: "newrelic", query: "q", chartQuery: null, condition: "> 0", frequencySeconds: 300 });
+  assert.deepEqual(setMonitorToggles(db, "m1", { alert: false }), { name: "A", run: true, alert: false });
+  db.update(schema.monitors).set({ lastCheckedAt: 123 }).run();
+  assert.deepEqual(setMonitorToggles(db, "m1", { run: false }), { name: "A", run: false, alert: false });
+  assert.deepEqual(setMonitorToggles(db, "m1", { run: true }), { name: "A", run: true, alert: false });
+  assert.equal(db.select().from(schema.monitors).get()?.lastCheckedAt, null);
+  assert.deepEqual(setMonitorToggles(db, "nope", { run: true }), { error: "Monitor not found", code: "NOT_FOUND" });
 });

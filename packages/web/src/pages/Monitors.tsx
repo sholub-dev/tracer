@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { SESSION_PREFIX } from "@tracer-sh/shared";
 import { usePolling } from "../lib/hooks";
 import { theme } from "../lib/theme";
@@ -11,10 +11,12 @@ import { Debug } from "./Debug";
 interface MonitorsProps {
   monitorId?: string;
   sessionId?: string;
+  builderSessionId?: string;
   onNavigate: (monitorId?: string, sessionId?: string) => void;
+  onOpenBuilder: (sessionId: string) => void;
 }
 
-type Builder = { sessionId: string; isNew: boolean; noSavedChat?: boolean };
+type Editing = { sessionId: string; prefill: string };
 
 const newBuilderId = () => `${SESSION_PREFIX.MONITORS}${crypto.randomUUID()}`;
 const noop = () => {};
@@ -28,37 +30,29 @@ const RANGE_PRESETS = [
 
 type CardWidth = 50 | 75 | 100;
 const WIDTHS: CardWidth[] = [50, 75, 100];
-const SPAN_CLASS: Record<CardWidth, string> = { 50: "xl:col-span-2", 75: "xl:col-span-3", 100: "xl:col-span-4" };
+// Container breakpoints: the grid narrows when the builder chat is open.
+const SPAN_CLASS: Record<CardWidth, string> = { 50: "@4xl:col-span-2", 75: "@4xl:col-span-3", 100: "@4xl:col-span-4" };
 const toWidth = (w: number | null | undefined): CardWidth => (w === 75 || w === 100 ? w : 50);
 
-function BackBar({ onBack, children }: { onBack: () => void; children?: ReactNode }) {
+function BackBar({ onBack }: { onBack: () => void }) {
   return (
     <div className={`flex items-center gap-4 px-6 py-2 ${theme.header}`}>
       <button type="button" onClick={onBack} className="text-xs text-[#2b5ea7] hover:text-[#234d8a] font-sans">
         Back to monitors
       </button>
-      {children}
     </div>
   );
 }
 
-export function Monitors({ monitorId, sessionId, onNavigate: navigate }: MonitorsProps) {
-  const [builder, setBuilder] = useState<Builder | null>(null);
+export function Monitors({ monitorId, sessionId, builderSessionId, onNavigate: navigate, onOpenBuilder }: MonitorsProps) {
+  const [editing, setEditing] = useState<Editing | null>(null);
   const [since, setSince] = useState<string>("24 hours ago");
   const utils = trpc.useUtils();
   const listQuery = trpc.monitors.list.useQuery();
   const monitors = listQuery.data ?? [];
-  const showList = !builder && !(sessionId && monitorId);
+  const showList = !(sessionId && monitorId);
 
   usePolling(() => utils.monitors.list.invalidate(), LIST_POLL_MS, true, false);
-
-  // Once a new builder chat is saved it owns a monitor: stay in the chat, but point the route at it.
-  const savedFromBuilder = builder?.isNew ? monitors.find((m) => m.chatSessionId === builder.sessionId) : undefined;
-  useEffect(() => {
-    if (!savedFromBuilder) return;
-    setBuilder({ sessionId: savedFromBuilder.chatSessionId!, isNew: false });
-    navigate(savedFromBuilder.id);
-  }, [savedFromBuilder?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const hasMonitors = monitors.length > 0;
   useEffect(() => {
@@ -141,32 +135,15 @@ export function Monitors({ monitorId, sessionId, onNavigate: navigate }: Monitor
 
   const onEdit = useCallback((id: string) => {
     const m = live.current.monitors.find((row) => row.id === id);
-    setBuilder(m?.chatSessionId
-      ? { sessionId: m.chatSessionId, isNew: false }
-      : { sessionId: newBuilderId(), isNew: true, noSavedChat: true });
-  }, []);
+    const newId = newBuilderId();
+    setEditing({ sessionId: newId, prefill: m ? `Modify monitor "${m.name}": ` : "" });
+    onOpenBuilder(newId);
+  }, [onOpenBuilder]);
 
-  const startNew = () => setBuilder({ sessionId: newBuilderId(), isNew: true });
+  const startNew = () => onOpenBuilder(newBuilderId());
 
   let overlay;
-  if (builder) {
-    overlay = (
-      <>
-        <BackBar onBack={() => setBuilder(null)}>
-          {builder.noSavedChat && (
-            <span className={theme.warnText}>This monitor has no saved builder chat. Saving here creates a new monitor.</span>
-          )}
-        </BackBar>
-        <div className="flex flex-1 min-h-0">
-          <MonitorChatPanel
-            key={builder.sessionId}
-            sessionId={builder.sessionId}
-            className="flex-1 w-full! max-w-none! border-l-0!"
-          />
-        </div>
-      </>
-    );
-  } else if (sessionId && monitorId) {
+  if (sessionId && monitorId) {
     overlay = (
       <>
         <BackBar onBack={() => navigate(monitorId)} />
@@ -188,28 +165,27 @@ export function Monitors({ monitorId, sessionId, onNavigate: navigate }: Monitor
 
   // The grid stays mounted while hidden so returning to it doesn't re-run every chart query.
   const grid = hasMonitors && (
-    <div
-      ref={gridRef}
-      className={`flex-1 min-h-0 overflow-y-auto p-6 grid grid-cols-1 xl:grid-cols-4 gap-4 items-stretch content-start ${showList ? "" : "hidden"}`}
-    >
-      {monitors.map((m) => (
-        <MonitorCard
-          key={m.id}
-          monitor={m}
-          since={since}
-          spanClass={SPAN_CLASS[resizing?.id === m.id ? resizing.width : toWidth(m.cardWidth)]}
-          isDragging={dragId === m.id}
-          isTarget={!!dragId && overId === m.id && dragId !== m.id}
-          resizeActive={resizing?.id === m.id}
-          onNavigate={navigate}
-          onEdit={onEdit}
-          onDragStartId={onDragStartId}
-          onDragEnd={onDragEnd}
-          onOverId={onOverId}
-          onDropId={onDropId}
-          onResizeStart={onResizeStart}
-        />
-      ))}
+    <div className={`@container flex-1 min-h-0 overflow-y-auto ${showList ? "" : "hidden"}`}>
+      <div ref={gridRef} className="p-6 grid grid-cols-1 @4xl:grid-cols-4 gap-4 items-stretch content-start">
+        {monitors.map((m) => (
+          <MonitorCard
+            key={m.id}
+            monitor={m}
+            since={since}
+            spanClass={SPAN_CLASS[resizing?.id === m.id ? resizing.width : toWidth(m.cardWidth)]}
+            isDragging={dragId === m.id}
+            isTarget={!!dragId && overId === m.id && dragId !== m.id}
+            resizeActive={resizing?.id === m.id}
+            onNavigate={navigate}
+            onEdit={onEdit}
+            onDragStartId={onDragStartId}
+            onDragEnd={onDragEnd}
+            onOverId={onOverId}
+            onDropId={onDropId}
+            onResizeStart={onResizeStart}
+          />
+        ))}
+      </div>
     </div>
   );
 
@@ -219,10 +195,22 @@ export function Monitors({ monitorId, sessionId, onNavigate: navigate }: Monitor
         <span className={theme.headerTitle}>Monitors</span>
         <div className="flex items-center gap-4">
           {showList && hasMonitors && <TimeRangePicker value={since} onChange={setSince} presets={RANGE_PRESETS} />}
-          <button type="button" onClick={startNew} className={theme.primaryBtn}>New monitor</button>
+          {builderSessionId && showList && (
+            <button type="button" onClick={() => navigate()} className={theme.secondaryBtn}>Close chat</button>
+          )}
+          <button type="button" onClick={startNew} className={theme.primaryBtn}>Edit</button>
         </div>
       </div>
-      <div className="flex flex-col flex-1 min-h-0 bg-[#fafaf8]">{overlay}{grid}</div>
+      <div className="flex flex-1 min-h-0">
+        <div className="flex flex-col flex-1 min-w-0 bg-[#fafaf8]">{overlay}{grid}</div>
+        {builderSessionId && showList && (
+          <MonitorChatPanel
+            key={builderSessionId}
+            sessionId={builderSessionId}
+            initialInput={editing?.sessionId === builderSessionId ? editing.prefill : undefined}
+          />
+        )}
+      </div>
     </div>
   );
 }

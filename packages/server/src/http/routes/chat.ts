@@ -75,8 +75,8 @@ export function registerChatRoutes(app: Hono, context: Context): void {
       summary,
       summaryUpTo,
       context,
-      collectTools: (writer) => collectMonitorTools(context.providers, context.db, writer),
-      sessionTitle: () => "Monitor Builder",
+      collectTools: (writer) => collectMonitorTools(context.providers, context.db, context.activeStreams, writer),
+      sessionTitle: firstUserMessageTitle,
     });
 
     if ("error" in result) return c.json({ error: result.error }, 400);

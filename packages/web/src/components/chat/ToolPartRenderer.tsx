@@ -1,4 +1,4 @@
-import React, { memo } from "react";
+import React, { memo, useRef } from "react";
 import { Streamdown } from "streamdown";
 import { CLIENT_TOOL_NAMES } from "@tracer-sh/shared";
 import { JsonTree } from "../ui/JsonTree";
@@ -10,7 +10,7 @@ import { useProgress, type ProgressStore } from "../../lib/progress-store";
 import { ThinkingDots } from "./MessageParts";
 import { ReasoningBlock } from "./ReasoningBlock";
 import { AnalysisContainer } from "./AnalysisContainer";
-import { MonitorDraftCard, type MonitorDraftOutput } from "../monitors/MonitorDraftCard";
+import { MonitorSavedCard, type MonitorSavedOutput } from "../monitors/MonitorSavedCard";
 
 interface ToolPart {
   type: string;
@@ -349,6 +349,8 @@ const ProgressPartsList = memo(function ProgressPartsList({ parts, isAnimating }
 export const ToolPartRenderer = memo(function ToolPartRenderer({ part, progressStore }: { part: ToolPart; progressStore: ProgressStore }) {
   // begin_analysis is an invisible marker — never render it
   if (part.type === CLIENT_TOOL_NAMES.BEGIN_ANALYSIS) return null;
+  // Drafts from the removed propose_monitor tool in older chats.
+  if (part.type === "tool-propose_monitor") return null;
 
   // AI SDK prefixes tool invocation parts with "tool-". Any tool invocation
   // that isn't CRUD is a sub-agent (provider investigation tool).
@@ -357,19 +359,21 @@ export const ToolPartRenderer = memo(function ToolPartRenderer({ part, progressS
   // (avoids unmounting + remounting thousands of DOM elements in a single frame).
   const isToolInvocation = part.type.startsWith("tool-");
   const isCrud = part.type in CRUD_LABELS;
-  const isProposeMonitor = part.type === CLIENT_TOOL_NAMES.PROPOSE_MONITOR;
-  const isSubAgent = isToolInvocation && !isCrud && !isProposeMonitor;
+  const isMonitorTool = part.type === CLIENT_TOOL_NAMES.SAVE_MONITOR || part.type === CLIENT_TOOL_NAMES.DELETE_MONITOR;
+  const isSubAgent = isToolInvocation && !isCrud && !isMonitorTool;
   const progress = useProgress(progressStore, isSubAgent ? part.toolCallId : undefined);
+  // Outputs already present on mount come from chat history, not a save that just happened.
+  const savedLive = useRef(part.state !== "output-available").current;
 
-  if (isProposeMonitor) {
-    if (part.state === "output-available") return <MonitorDraftCard output={(part.output ?? {}) as MonitorDraftOutput} />;
+  if (isMonitorTool) {
+    if (part.state === "output-available") return <MonitorSavedCard output={(part.output ?? {}) as MonitorSavedOutput} fresh={savedLive} />;
     if (part.state === "output-error") {
-      return <div className={theme.resultErrorMessage}>{part.errorText ?? "Monitor validation failed"}</div>;
+      return <div className={theme.resultErrorMessage}>{part.errorText ?? "Monitor save failed"}</div>;
     }
     return (
       <div className="flex items-center gap-2 py-2">
         <Spinner size="sm" />
-        <span className={theme.toolLoading}>Validating monitor...</span>
+        <span className={theme.toolLoading}>Working on monitor...</span>
       </div>
     );
   }

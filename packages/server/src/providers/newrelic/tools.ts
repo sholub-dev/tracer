@@ -11,6 +11,7 @@ import {
   type SubAgentQuery,
 } from "../../agents/chat/sub-agent.js";
 import type { Db } from "../../db/client.js";
+import { getTimezone } from "../../lib/current-context.js";
 import { toolModelOutput, buildAfterComplete } from "../../tools/provider-tool-helpers.js";
 import { beginAnalysisTool, ANALYSIS_TOOL_NAME } from "../../tools/analysis-tool.js";
 import { formatNrqlCsv, sanitizeNrqlRows } from "./nrql-formatter.js";
@@ -24,10 +25,15 @@ export { NR_DIRECT_MODE_MAX_STEPS, nrUnifiedFragment };
 
 // ── Shared tool builder ──
 
+export function withTimezone(query: string, timezone: string): string {
+  return /\bWITH\s+TIMEZONE\b/i.test(query) || /^\s*SHOW\b/i.test(query) ? query : `${query.trim().replace(/;$/, "")} WITH TIMEZONE '${timezone}'`;
+}
+
 function buildExecuteNrqlTool(
   provider: NewRelicProvider,
   collectedQueries: SubAgentQuery[],
   writer?: ChatToolWriter,
+  db?: Db,
 ) {
   return tool({
     description: "Execute a NRQL query against New Relic.",
@@ -36,7 +42,8 @@ function buildExecuteNrqlTool(
     }),
     execute: async ({ query }, { toolCallId }) => {
       try {
-        const raw = await provider.executeRawQuery(query);
+        const timezone = getTimezone(db);
+        const raw = await provider.executeRawQuery(withTimezone(query, timezone));
         const cleaned = sanitizeNrqlRows(raw as Record<string, unknown>[]);
         collectedQueries.push({ query, results: cleaned });
 
@@ -45,7 +52,7 @@ function buildExecuteNrqlTool(
           data: { toolCallId, part: { type: "query", query, results: cleaned } },
         });
 
-        const formatted = formatTimestamps(raw);
+        const formatted = formatTimestamps(raw, timezone);
         const csv = formatNrqlCsv(formatted as Record<string, unknown>[]);
         return { parts: [{ type: "query" as const, query, results: cleaned }], analysis: csv };
       } catch (err) {
@@ -70,7 +77,7 @@ export function createNewRelicDirectTools(
 
   return {
     tools: {
-      execute_nrql: buildExecuteNrqlTool(provider, collectedQueries, writer),
+      execute_nrql: buildExecuteNrqlTool(provider, collectedQueries, writer, db as Db | undefined),
       [ANALYSIS_TOOL_NAME]: beginAnalysisTool,
     },
     systemPrompt: injectMemories(directModeSystemPrompt, memoryContext),

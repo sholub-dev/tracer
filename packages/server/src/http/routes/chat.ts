@@ -1,9 +1,9 @@
 import type { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { createUIMessageStreamResponse, type UIMessage } from "ai";
-import { dashboardSessionId, SESSION_PREFIX, DEFAULT_SESSION_TITLE, UNIFIED_SCOPE, type ChatMode } from "@tracer-sh/shared";
+import { dashboardSessionId, SESSION_PREFIX, UNIFIED_SCOPE, type ChatMode } from "@tracer-sh/shared";
 import type { Context } from "../../trpc/context.js";
-import { loadSessionMessages, runChatAgent } from "../../agents/base-agent.js";
+import { firstUserMessageTitle, loadSessionMessages, runChatAgent } from "../../agents/base-agent.js";
 import { collectChatTools } from "../../tools/chat-tools.js";
 import { collectDashboardTools } from "../../tools/dashboard-tools.js";
 import { collectMonitorTools } from "../../tools/monitor-tools.js";
@@ -36,13 +36,7 @@ export function registerChatRoutes(app: Hono, context: Context): void {
       summaryUpTo,
       context,
       collectTools: (writer) => collectChatTools(context.providers, context.db, writer, scopedProvider, mode),
-      sessionTitle: (updatedMessages) => {
-        const firstUserMsg = updatedMessages.find((m) => m.role === "user");
-        const textPart = firstUserMsg?.parts.find((p) => p.type === "text");
-        return textPart
-          ? (textPart as { text: string }).text.slice(0, 60)
-          : DEFAULT_SESSION_TITLE;
-      },
+      sessionTitle: firstUserMessageTitle,
     });
 
     if ("error" in result) return c.json({ error: result.error }, 400);
@@ -69,8 +63,10 @@ export function registerChatRoutes(app: Hono, context: Context): void {
   });
 
   app.post("/api/monitor-chat", async (c) => {
-    const { message } = await c.req.json<{ message: UIMessage }>();
-    const sessionId = SESSION_PREFIX.MONITORS;
+    const { id: sessionId, message } = await c.req.json<{ id?: string; message: UIMessage }>();
+    if (typeof sessionId !== "string" || !sessionId.startsWith(SESSION_PREFIX.MONITORS)) {
+      return c.json({ error: `Monitor chat id must start with ${SESSION_PREFIX.MONITORS}` }, 400);
+    }
     const { messages, summary, summaryUpTo } = loadSessionMessages(context.db, sessionId, message);
 
     const result = await runChatAgent({

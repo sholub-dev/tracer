@@ -3,14 +3,18 @@ import { tool } from "ai";
 import { eq, desc } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import type { ProviderRegistry } from "../providers/registry.js";
-import { unixNow } from "@tracer-sh/shared";
 import type { ChatToolWriter as StreamWriter } from "@tracer-sh/shared";
 import { monitors } from "../db/schema.js";
 import { collectBaseTools } from "./shared-tool-setup.js";
 import { EVIDENCE_GROUNDING } from "../lib/shared-prompts.js";
-import { validateCondition } from "../monitors/condition.js";
-import { requireTimeRangePlaceholders, executeValidationQuery } from "./query-validation.js";
+import { MONITOR_PROVIDERS, normalizeDraft, validateMonitor } from "../monitors/validate.js";
 import { CONFIG } from "../config.js";
+
+type Monitor = typeof monitors.$inferSelect;
+
+function describeMonitor(m: Monitor): string {
+  return `${m.provider} query: ${m.query}${m.chartQuery ? ` | chartQuery: ${m.chartQuery}` : ""} | condition: ${m.condition} | every ${m.frequencySeconds}s`;
+}
 
 function getMonitorContext(db: Db): string {
   const rows = db.select().from(monitors).orderBy(desc(monitors.updatedAt)).all();
@@ -18,10 +22,16 @@ function getMonitorContext(db: Db): string {
     return "## Current Monitors\n(empty) — no monitors created yet.";
   }
   const lines = rows.map(
-    (m) =>
-      `- [id:${m.id}] "${m.name}" — query: ${m.query} | condition: ${m.condition} | every ${m.frequencySeconds}s | ${m.enabled ? "enabled" : "disabled"} | status: ${m.lastStatus} (provider: ${m.provider})`,
+    (m) => `- "${m.name}" — ${describeMonitor(m)} | ${m.enabled ? "enabled" : "disabled"} | status: ${m.lastStatus}`,
   );
   return `## Current Monitors\n${lines.join("\n")}`;
+}
+
+function getEditingContext(db: Db, sessionId: string | undefined): string | null {
+  if (!sessionId) return null;
+  const m = db.select().from(monitors).where(eq(monitors.chatSessionId, sessionId)).get();
+  if (!m) return null;
+  return `## Editing\nYou are editing monitor "${m.name}" (${describeMonitor(m)}). Propose the full updated monitor with propose_monitor; saving it updates this monitor.`;
 }
 
 export function collectMonitorTools(
@@ -29,218 +39,80 @@ export function collectMonitorTools(
   db: Db,
   writer?: StreamWriter,
 ) {
-  // "unified" mode makes providers return role-less prompt fragments (domain
-  // knowledge, query syntax) instead of full direct-mode system prompts.
   const { tools, promptFragments, connectedProviders } = collectBaseTools(registry, db, writer, "unified");
 
-  const defaultProvider = connectedProviders[0];
-
-  // ── Monitor CRUD tools ──
-
-  tools.create_monitor = tool({
+  tools.propose_monitor = tool({
     description:
-      "Create a new monitor that periodically checks a query and alerts when a condition is met.",
+      "Validate a New Relic or PostHog count monitor and show it to the user as a draft to review and save. Runs the query over one check window and returns the sample value. Does not save.",
     inputSchema: z.object({
-      name: z.string().describe("Human-readable monitor name"),
-      query: z.string().describe("Query with {{SINCE}} and {{UNTIL}} placeholders"),
-      condition: z.string().describe("JS expression evaluated against `result` array, e.g. `result[0].count > 100`"),
-      provider: z.string().optional().describe("Provider name (defaults to first connected)"),
-      frequencySeconds: z.number().optional().default(60).describe("Check interval in seconds (min 30)"),
+      name: z.string().describe("Short human-readable monitor name"),
+      provider: z.enum(MONITOR_PROVIDERS).default("newrelic").describe("Provider that holds the data"),
+      query: z.string().describe("Count query: NRQL with SINCE {{SINCE}} UNTIL {{UNTIL}}, or HogQL with timestamp >= toDateTime({{SINCE}}) AND timestamp < toDateTime({{UNTIL}})"),
+      chartQuery: z.string().optional().describe("PostHog only, required: HogQL timeseries of the same metric with the same placeholders and a time bucket column"),
+      condition: z.string().describe('Condition on the summed count, e.g. "> 0"'),
+      frequencySeconds: z.number().describe(`Check interval in seconds (default 300, min ${CONFIG.monitorMinFrequencySeconds})`),
     }),
-    execute: async ({ name, query, condition, provider: providerName, frequencySeconds }) => {
-      const targetProvider = providerName
-        ? registry.getProvider(providerName)
-        : defaultProvider;
-
-      if (!targetProvider?.connected) {
-        return { error: "No connected provider available" };
-      }
-
-      const placeholderCheck = requireTimeRangePlaceholders(query);
-      if (placeholderCheck) return placeholderCheck;
-
-      const validation = await executeValidationQuery(query, targetProvider, "2 minutes ago");
-      if ("error" in validation) return validation;
-
-      // Validate condition expression (syntax + runtime against real data)
-      const condCheck = validateCondition(condition, validation.result);
-      if ("error" in condCheck) return condCheck;
-
-      const id = crypto.randomUUID();
-      const now = unixNow();
-      const freq = Math.max(frequencySeconds ?? 60, CONFIG.monitorMinFrequencySeconds);
-
-      db.insert(monitors)
-        .values({
-          id,
-          name,
-          provider: targetProvider.name,
-          query,
-          condition,
-          frequencySeconds: freq,
-          enabled: 1,
-          lastStatus: "ok",
-          createdAt: now,
-          updatedAt: now,
-        })
-        .run();
-
-      writer?.write({
-        type: "data-monitor-changed",
-        data: { action: "created", monitorId: id },
-      });
-
-      return { created: true, id, name };
-    },
-  });
-
-  tools.update_monitor = tool({
-    description: "Update an existing monitor by ID.",
-    inputSchema: z.object({
-      id: z.string().describe("Monitor ID"),
-      name: z.string().optional().describe("New name"),
-      query: z.string().optional().describe("New query (must have {{SINCE}}/{{UNTIL}})"),
-      condition: z.string().optional().describe("New condition expression"),
-      frequencySeconds: z.number().optional().describe("New check interval"),
-    }),
-    execute: async ({ id, name, query, condition, frequencySeconds }) => {
-      const existing = db.select().from(monitors).where(eq(monitors.id, id)).get();
-      if (!existing) return { error: `Monitor not found: ${id}` };
-
-      if (query && query !== existing.query) {
-        const placeholderCheck = requireTimeRangePlaceholders(query);
-        if (placeholderCheck) return placeholderCheck;
-
-        const targetProvider = registry.getProvider(existing.provider);
-        if (!targetProvider?.connected) {
-          return { error: "Provider is not connected" };
-        }
-
-        const validation = await executeValidationQuery(query, targetProvider, "2 minutes ago");
-        if ("error" in validation) return validation;
-      }
-
-      if (condition) {
-        // Validate condition syntax first
-        const syntaxCheck = validateCondition(condition);
-        if ("error" in syntaxCheck) return syntaxCheck;
-
-        // Test condition against real data — catches field name typos
-        const targetProvider = registry.getProvider(existing.provider);
-        if (targetProvider?.connected) {
-          const validation = await executeValidationQuery(query ?? existing.query, targetProvider, "2 minutes ago");
-          if ("error" in validation) return validation;
-          const runtimeCheck = validateCondition(condition, validation.result);
-          if ("error" in runtimeCheck) return runtimeCheck;
-        }
-      }
-
-      const updates: Record<string, unknown> = {
-        updatedAt: unixNow(),
+    execute: async ({ name, provider, query, chartQuery, condition, frequencySeconds }) => {
+      const draft = normalizeDraft({ name, provider, query, chartQuery, condition, frequencySeconds });
+      const result = await validateMonitor(registry, draft, { runQuery: true });
+      if ("error" in result) return { error: result.error };
+      return {
+        draft,
+        sampleValue: result.sampleValue,
+        groups: result.groups,
+        wouldTrigger: result.wouldTrigger,
+        chatSessionId: writer?.sessionId,
       };
-      if (name !== undefined) updates.name = name;
-      if (query !== undefined) updates.query = query;
-      if (condition !== undefined) updates.condition = condition;
-      if (frequencySeconds !== undefined) updates.frequencySeconds = Math.max(frequencySeconds, CONFIG.monitorMinFrequencySeconds);
-
-      db.update(monitors).set(updates).where(eq(monitors.id, id)).run();
-
-      writer?.write({
-        type: "data-monitor-changed",
-        data: { action: "updated", monitorId: id },
-      });
-
-      return { updated: true, id };
     },
   });
 
-  tools.delete_monitor = tool({
-    description: "Delete a monitor and all its alerts by ID.",
-    inputSchema: z.object({
-      id: z.string().describe("Monitor ID to delete"),
-    }),
-    execute: async ({ id }) => {
-      const existing = db.select().from(monitors).where(eq(monitors.id, id)).get();
-      if (!existing) return { error: `Monitor not found: ${id}` };
-
-      // CASCADE auto-deletes monitor_alerts
-      db.delete(monitors).where(eq(monitors.id, id)).run();
-
-      writer?.write({
-        type: "data-monitor-changed",
-        data: { action: "deleted", monitorId: id },
-      });
-
-      return { deleted: true, id };
-    },
-  });
-
-  tools.toggle_monitor = tool({
-    description: "Enable or disable a monitor.",
-    inputSchema: z.object({
-      id: z.string().describe("Monitor ID"),
-      enabled: z.boolean().describe("true to enable, false to disable"),
-    }),
-    execute: async ({ id, enabled }) => {
-      const existing = db.select().from(monitors).where(eq(monitors.id, id)).get();
-      if (!existing) return { error: `Monitor not found: ${id}` };
-
-      db.update(monitors)
-        .set({ enabled: enabled ? 1 : 0, updatedAt: unixNow() })
-        .where(eq(monitors.id, id))
-        .run();
-
-      writer?.write({
-        type: "data-monitor-changed",
-        data: { action: "updated", monitorId: id },
-      });
-
-      return { toggled: true, id, enabled };
-    },
-  });
-
-  // ── Available providers context ──
   const providerNames = connectedProviders.map((p) => p.name).join(", ");
   const providerContext = connectedProviders.length > 0
     ? `## Available Providers\n${providerNames}`
     : "## Available Providers\nNo observability providers are currently connected.";
 
-  const monitorContext = getMonitorContext(db);
+  const basePrompt = `You are a monitor builder assistant for the Tracer platform. You help the user define one monitor: a count query (New Relic NRQL or PostHog HogQL), a condition on that count, and a check frequency. When the condition is true, Tracer starts a debug session that investigates the cause.
 
-  const basePrompt = `You are a monitor builder assistant for the Tracer platform. You help users create, update, and delete monitors that periodically check observability data and alert when conditions are met.
+## Workflow
+1. Choose the provider that holds the data the user asks about (backend services, APM, infrastructure, alerts: New Relic; product analytics, frontend events, pageviews, feature flags, client exceptions: PostHog). Research with that provider's tools: find the right event type, attributes and filters, and look at recent volumes.
+2. Ground the threshold in observed data. Unless the user gave an explicit number, state the baseline you saw (e.g. "usually 0-2 per 5 minutes, triggering above 5").
+3. Call propose_monitor with the chosen provider. It validates the query and shows the user a draft card with the sample value.
+4. Tell the user to review the draft and click Save. You cannot save monitors yourself.
+5. To change the monitor, call propose_monitor again in this same chat with the full updated monitor.
 
-When a user asks to create a monitor, use the create_monitor tool. When they ask to modify one, use update_monitor. When they ask to remove one, use delete_monitor. Use toggle_monitor to enable/disable.
+If a tool call fails, retry with a corrected approach. If you fail the same tool call twice, stop and explain the issue to the user.
 
-You can also investigate data using investigation tools to help users understand what queries and conditions would be useful.
+## Query Rules (New Relic NRQL)
+- The query must return a count: use count(*), sum(...) or uniqueCount(...).
+- It must end with SINCE {{SINCE}} UNTIL {{UNTIL}}. Tracer replaces them with epoch-millisecond times. Each check covers exactly one window equal to the frequency, and windows never overlap, so each event is counted once.
+- Never use literal times (SINCE 5 minutes ago), TIMESERIES or COMPARE WITH.
+- Optional: FACET <identity field> LIMIT 100 when the user cares about distinct things (service, entity, alert condition). Facet keys drive repeat detection: a key already investigated in the last 24h is not investigated again. Without FACET, every trigger is investigated.
+- Example: SELECT count(*) FROM NrAiIncident WHERE event = 'open' AND policyName LIKE '%foundations%' FACET conditionName LIMIT 100 SINCE {{SINCE}} UNTIL {{UNTIL}}
 
-If a tool call fails, retry with a corrected approach. If you fail the same tool call twice, DO NOT retry again — stop and explain the issue to the user.
+## Query Rules (PostHog HogQL)
+- Use provider "posthog". The query must return a count: count(), sum(...) or count(DISTINCT ...), aliased AS count.
+- Filter time with timestamp >= toDateTime({{SINCE}}) AND timestamp < toDateTime({{UNTIL}}). Tracer replaces them with epoch-second times; windows never overlap, as above.
+- Never use literal times (now() - INTERVAL ...).
+- Optional: GROUP BY <identity column> ... LIMIT 100 plays the role of FACET: the non-numeric columns form the group key that drives repeat detection. Put the count as the only numeric column; wrap numeric identity columns in toString(...).
+- Example: SELECT properties.$current_url AS url, count() AS count FROM events WHERE event = '$exception' AND timestamp >= toDateTime({{SINCE}}) AND timestamp < toDateTime({{UNTIL}}) GROUP BY url ORDER BY count DESC LIMIT 100
+- PostHog monitors also require chartQuery: the same metric as a timeseries for the card chart, with the same placeholders, a time bucket column and at most one group column. Example: SELECT toStartOfInterval(timestamp, INTERVAL 1 HOUR) AS bucket, count() AS count FROM events WHERE event = '$exception' AND timestamp >= toDateTime({{SINCE}}) AND timestamp < toDateTime({{UNTIL}}) GROUP BY bucket ORDER BY bucket LIMIT 10000
+- The chart spans 24 hours to 90 days, so use INTERVAL 1 HOUR buckets and LIMIT 10000 (HogQL returns only 100 rows by default). With a group column: SELECT toStartOfInterval(timestamp, INTERVAL 1 HOUR) AS bucket, properties.$current_url AS url, count() AS count ... GROUP BY bucket, url ORDER BY bucket LIMIT 10000
 
-## Query Guidelines
-- Every monitor query MUST use {{SINCE}} and {{UNTIL}} placeholders
-- Correct:   SELECT count(*) FROM Transaction WHERE error IS true SINCE {{SINCE}} UNTIL {{UNTIL}}
-- WRONG:     SELECT count(*) FROM Transaction WHERE error IS true SINCE 5 minutes ago
-- The scheduler replaces these with a lookback window based on the monitor's frequency
+## Condition
+An operator (> >= < <= == !=) and a number, checked against the sum of all counts (all facets or groups added together). Examples: "> 0", ">= 10".
 
-## Condition Expression
-The condition is a JS expression evaluated against the query \`result\` array. Examples:
-- \`result[0].count > 100\` — alert when count exceeds 100
-- \`result.length === 0\` — alert when no results returned
-- \`result[0].average > 2\` — alert when average exceeds 2 seconds
-- \`result[0].errorRate > 0.05\` — alert when error rate exceeds 5%
+## Frequency
+Seconds, at least ${CONFIG.monitorMinFrequencySeconds}. Default to 300 (5 min). Use a shorter interval only if the user explicitly asks for one; use 900+ for slow trends.`;
 
-## Threshold Grounding
-Never invent a threshold. Unless the user gave an explicit number, run the monitor's query over recent data FIRST and pick the threshold relative to the observed values. When proposing a condition, state the observed baseline it is based on (e.g. "normal is 5-10/min, alerting above 50"). A threshold chosen without looking at the data either never fires or fires constantly.
-
-## Frequency Recommendations
-- 30s — critical real-time checks
-- 60s — standard monitoring (default)
-- 300s (5 min) — trend-based checks
-- 900s (15 min) — hourly trend summaries
-
-## Scope
-You are managing all monitors. The monitor list above shows all existing monitors.`;
-
-  const systemPrompt = [basePrompt, EVIDENCE_GROUNDING, providerContext, monitorContext, ...promptFragments].join("\n\n");
+  const editingContext = getEditingContext(db, writer?.sessionId);
+  const systemPrompt = [
+    basePrompt,
+    EVIDENCE_GROUNDING,
+    providerContext,
+    getMonitorContext(db),
+    ...(editingContext ? [editingContext] : []),
+    ...promptFragments,
+  ].join("\n\n");
 
   return { tools, systemPrompt };
 }

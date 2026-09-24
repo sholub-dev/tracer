@@ -1,5 +1,5 @@
+import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { unixNow } from "@tracer-sh/shared";
 
 export const providerConfigs = sqliteTable("provider_configs", {
@@ -53,6 +53,8 @@ export const chatSessions = sqliteTable("chat_sessions", {
     .$defaultFn(() => unixNow()),
 }, (t) => [
   index("idx_sessions_updated").on(t.updatedAt),
+  index("idx_sessions_status_kind").on(t.status, t.kind, t.id),
+  index("idx_sessions_list").on(t.updatedAt, t.kind, t.status, t.id, t.title),
 ]);
 
 export const dashboards = sqliteTable("dashboards", {
@@ -95,11 +97,17 @@ export const monitors = sqliteTable("monitors", {
   name: text("name").notNull(),
   provider: text("provider").notNull().default("newrelic"),
   query: text("query").notNull(),
+  chartQuery: text("chart_query"),
   condition: text("condition").notNull(),
   frequencySeconds: integer("frequency_seconds").notNull().default(60),
   enabled: integer("enabled").notNull().default(1),
   lastCheckedAt: integer("last_checked_at"),
   lastStatus: text("last_status").notNull().default("ok"),
+  lastError: text("last_error"),
+  chatSessionId: text("chat_session_id"),
+  sortOrder: integer("sort_order"),
+  cardWidth: integer("card_width"),
+  alertEnabled: integer("alert_enabled").notNull().default(1),
   createdAt: integer("created_at")
     .notNull()
     .$defaultFn(() => unixNow()),
@@ -110,18 +118,20 @@ export const monitors = sqliteTable("monitors", {
   index("idx_monitors_enabled").on(t.enabled),
 ]);
 
-export const monitorAlerts = sqliteTable("monitor_alerts", {
+export const monitorTriggers = sqliteTable("monitor_triggers", {
   id: text("id").primaryKey(),
   monitorId: text("monitor_id").notNull().references(() => monitors.id, { onDelete: "cascade" }),
   triggeredAt: integer("triggered_at").notNull(),
-  resolvedAt: integer("resolved_at"),
-  resultSnapshot: text("result_snapshot").notNull(),
-  createdAt: integer("created_at")
-    .notNull()
-    .$defaultFn(() => unixNow()),
+  value: real("value").notNull(),
+  windowStart: integer("window_start").notNull(),
+  windowEnd: integer("window_end").notNull(),
+  status: text("status").notNull(), // "investigating" | "repeat" | "muted"
+  groups: text("groups").notNull(),
+  sessionId: text("session_id"),
 }, (t) => [
-  index("idx_alerts_monitor").on(t.monitorId),
-  index("idx_alerts_unresolved").on(t.resolvedAt).where(sql`resolved_at IS NULL`),
+  index("idx_triggers_monitor").on(t.monitorId, t.triggeredAt),
+  index("idx_triggers_session").on(t.sessionId),
+  index("idx_triggers_recent_session").on(t.triggeredAt).where(sql`session_id IS NOT NULL`),
 ]);
 
 export const memoryOperations = sqliteTable("memory_operations", {

@@ -1,237 +1,228 @@
-import { useState, useMemo } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { SESSION_PREFIX } from "@tracer-sh/shared";
 import { usePolling } from "../lib/hooks";
 import { theme } from "../lib/theme";
 import { trpc } from "../lib/trpc";
-import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { MonitorChatPanel } from "../components/monitors/MonitorChatPanel";
-import { QueryChart } from "../components/charts/QueryChart";
+import { MonitorCard } from "../components/monitors/MonitorCard";
 import { TimeRangePicker } from "../components/ui/TimeRangePicker";
-import { Badge } from "../components/ui/Badge";
-import { ToggleSwitch } from "../components/ui/ToggleSwitch";
-import { DEFAULT_SINCE, DEFAULT_UNTIL } from "../lib/nrql-utils";
-import { substituteTimeRange } from "@tracer-sh/shared";
-import { MONITOR_PRESETS, timeseriesClause, parseThreshold, formatTime, resolveQueryDisplay, statusVariant } from "../lib/monitor-utils";
+import { Debug } from "./Debug";
 
-export function Monitors() {
-  const [chatOpen, setChatOpen] = useState<boolean | null>(null);
-  const [expandedMonitors, setExpandedMonitors] = useState<Set<string>>(new Set());
-  const [monitorSince, setMonitorSince] = useState<Record<string, string>>({});
+interface MonitorsProps {
+  monitorId?: string;
+  sessionId?: string;
+  onNavigate: (monitorId?: string, sessionId?: string) => void;
+}
 
-  const monitorsQuery = trpc.monitors.list.useQuery();
-  const activeAlertsQuery = trpc.monitorAlerts.activeAlerts.useQuery();
-  const resolveMutation = trpc.monitorAlerts.resolve.useMutation();
-  const deleteMutation = trpc.monitors.delete.useMutation();
+type Builder = { sessionId: string; isNew: boolean; noSavedChat?: boolean };
+
+const newBuilderId = () => `${SESSION_PREFIX.MONITORS}${crypto.randomUUID()}`;
+const noop = () => {};
+const LIST_POLL_MS = 30_000;
+const RANGE_PRESETS = [
+  { label: "24h", since: "24 hours ago" },
+  { label: "7d", since: "7 days ago" },
+  { label: "30d", since: "30 days ago" },
+  { label: "90d", since: "90 days ago" },
+] as const;
+
+type CardWidth = 50 | 75 | 100;
+const WIDTHS: CardWidth[] = [50, 75, 100];
+const SPAN_CLASS: Record<CardWidth, string> = { 50: "xl:col-span-2", 75: "xl:col-span-3", 100: "xl:col-span-4" };
+const toWidth = (w: number | null | undefined): CardWidth => (w === 75 || w === 100 ? w : 50);
+
+function BackBar({ onBack, children }: { onBack: () => void; children?: ReactNode }) {
+  return (
+    <div className={`flex items-center gap-4 px-6 py-2 ${theme.header}`}>
+      <button type="button" onClick={onBack} className="text-xs text-[#2b5ea7] hover:text-[#234d8a] font-sans">
+        Back to monitors
+      </button>
+      {children}
+    </div>
+  );
+}
+
+export function Monitors({ monitorId, sessionId, onNavigate: navigate }: MonitorsProps) {
+  const [builder, setBuilder] = useState<Builder | null>(null);
+  const [since, setSince] = useState<string>("24 hours ago");
   const utils = trpc.useUtils();
+  const listQuery = trpc.monitors.list.useQuery();
+  const monitors = listQuery.data ?? [];
+  const showList = !builder && !(sessionId && monitorId);
 
-  const invalidateMonitorData = () => {
-    utils.monitors.list.invalidate();
-    utils.monitorAlerts.activeAlerts.invalidate();
-    utils.monitorAlerts.activeCount.invalidate();
-    utils.monitors.shouldPoll.invalidate();
-  };
+  usePolling(() => utils.monitors.list.invalidate(), LIST_POLL_MS, true, false);
 
-  const toggleEnabledMutation = trpc.monitors.toggleEnabled.useMutation({
-    onSuccess: () => {
-      utils.monitors.list.invalidate();
-      utils.monitors.shouldPoll.invalidate();
-    },
-  });
+  // Once a new builder chat is saved it owns a monitor: stay in the chat, but point the route at it.
+  const savedFromBuilder = builder?.isNew ? monitors.find((m) => m.chatSessionId === builder.sessionId) : undefined;
+  useEffect(() => {
+    if (!savedFromBuilder) return;
+    setBuilder({ sessionId: savedFromBuilder.chatSessionId!, isNew: false });
+    navigate(savedFromBuilder.id);
+  }, [savedFromBuilder?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const monitors = monitorsQuery.data ?? [];
-  const activeAlerts = activeAlertsQuery.data ?? [];
-
-  // Default: show chat if no monitors, hide if monitors exist. Manual toggle overrides.
-  const isChatOpen = chatOpen ?? monitors.length === 0;
-
-  const alertsByMonitor = useMemo(() => {
-    const map = new Map<string, typeof activeAlerts>();
-    for (const alert of activeAlerts) {
-      const list = map.get(alert.monitorId) ?? [];
-      list.push(alert);
-      map.set(alert.monitorId, list);
+  const hasMonitors = monitors.length > 0;
+  useEffect(() => {
+    if (showList && monitorId && hasMonitors) {
+      document.getElementById(`monitor-${monitorId}`)?.scrollIntoView({ block: "start" });
     }
-    return map;
-  }, [activeAlerts]);
+  }, [showList, monitorId, hasMonitors]);
 
-  const shouldPoll = monitors.some(m => m.enabled && !alertsByMonitor.has(m.id));
-  usePolling(invalidateMonitorData, 60_000, shouldPoll);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
+  const [resizing, setResizing] = useState<{ id: string; width: CardWidth } | null>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
+  const reorder = trpc.monitors.reorder.useMutation({ onError: () => utils.monitors.list.invalidate() });
+  const setCardWidth = trpc.monitors.setCardWidth.useMutation({ onError: () => utils.monitors.list.invalidate() });
 
-  const toggleMonitorChart = (monitorId: string) => {
-    setExpandedMonitors((prev) => {
-      const next = new Set(prev);
-      if (next.has(monitorId)) next.delete(monitorId);
-      else next.add(monitorId);
-      return next;
-    });
-  };
+  // Latest values for the stable card handlers below, so a drag or resize re-renders only affected cards.
+  const live = useRef({ monitors, dragId, overId, utils, reorder: reorder.mutate, setCardWidth: setCardWidth.mutate });
+  live.current = { ...live.current, monitors, utils, reorder: reorder.mutate, setCardWidth: setCardWidth.mutate };
 
-  const handleResolve = (alertId: string) => {
-    resolveMutation.mutate(
-      { id: alertId },
-      { onSuccess: invalidateMonitorData },
+  const onDragStartId = useCallback((id: string) => {
+    live.current.dragId = id;
+    setDragId(id);
+  }, []);
+  const onDragEnd = useCallback(() => {
+    live.current.dragId = null;
+    live.current.overId = null;
+    setDragId(null);
+    setOverId(null);
+  }, []);
+  const onOverId = useCallback((id: string) => {
+    if (!live.current.dragId || live.current.overId === id) return;
+    live.current.overId = id;
+    setOverId(id);
+  }, []);
+  const onDropId = useCallback((targetId: string) => {
+    const { dragId: from, monitors: rows, utils: u } = live.current;
+    onDragEnd();
+    if (!from || from === targetId) return;
+    const ids = rows.map((m) => m.id).filter((id) => id !== from);
+    ids.splice(rows.findIndex((m) => m.id === targetId), 0, from);
+    const byId = new Map(rows.map((m) => [m.id, m]));
+    u.monitors.list.setData(undefined, ids.map((id) => byId.get(id)!));
+    live.current.reorder({ ids });
+  }, [onDragEnd]);
+
+  const onResizeStart = useCallback((id: string, e: React.PointerEvent) => {
+    const grid = gridRef.current;
+    const card = document.getElementById(`monitor-${id}`);
+    if (!grid || !card || e.button !== 0) return;
+    e.preventDefault();
+    const style = getComputedStyle(grid);
+    const inner = grid.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    const left = card.getBoundingClientRect().left;
+    const start = toWidth(live.current.monitors.find((m) => m.id === id)?.cardWidth);
+    let current = start;
+    setResizing({ id, width: start });
+    document.body.style.cursor = "ew-resize";
+    document.body.style.userSelect = "none";
+    const onMove = (ev: PointerEvent) => {
+      const pct = ((ev.clientX - left) / inner) * 100;
+      const next = WIDTHS.reduce((a, b) => (Math.abs(b - pct) < Math.abs(a - pct) ? b : a));
+      if (next !== current) {
+        current = next;
+        setResizing({ id, width: next });
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      setResizing(null);
+      if (current === start) return;
+      live.current.utils.monitors.list.setData(undefined, (rows) => rows?.map((m) => (m.id === id ? { ...m, cardWidth: current } : m)));
+      live.current.setCardWidth({ id, width: current });
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }, []);
+
+  const onEdit = useCallback((id: string) => {
+    const m = live.current.monitors.find((row) => row.id === id);
+    setBuilder(m?.chatSessionId
+      ? { sessionId: m.chatSessionId, isNew: false }
+      : { sessionId: newBuilderId(), isNew: true, noSavedChat: true });
+  }, []);
+
+  const startNew = () => setBuilder({ sessionId: newBuilderId(), isNew: true });
+
+  let overlay;
+  if (builder) {
+    overlay = (
+      <>
+        <BackBar onBack={() => setBuilder(null)}>
+          {builder.noSavedChat && (
+            <span className={theme.warnText}>This monitor has no saved builder chat. Saving here creates a new monitor.</span>
+          )}
+        </BackBar>
+        <div className="flex flex-1 min-h-0">
+          <MonitorChatPanel
+            key={builder.sessionId}
+            sessionId={builder.sessionId}
+            className="flex-1 w-full! max-w-none! border-l-0!"
+          />
+        </div>
+      </>
     );
-  };
-
-  const handleToggleEnabled = (monitorId: string, newEnabled: boolean) => {
-    toggleEnabledMutation.mutate({ id: monitorId, enabled: newEnabled });
-  };
-
-  const [deleteId, setDeleteId] = useState<string | null>(null);
-
-  const handleDelete = (monitorId: string) => {
-    setDeleteId(monitorId);
-  };
-
-  const confirmDelete = () => {
-    if (!deleteId) return;
-    deleteMutation.mutate(
-      { id: deleteId },
-      { onSuccess: invalidateMonitorData },
+  } else if (sessionId && monitorId) {
+    overlay = (
+      <>
+        <BackBar onBack={() => navigate(monitorId)} />
+        <div className="flex flex-1 min-h-0 [&>*]:flex-1 [&>*]:min-w-0">
+          <Debug key={sessionId} sessionId={sessionId} onSessionChange={noop} />
+        </div>
+      </>
     );
-    setDeleteId(null);
-  };
+  } else if (listQuery.isSuccess && !hasMonitors) {
+    overlay = (
+      <div className="flex flex-1 items-center justify-center">
+        <div className="text-center space-y-3">
+          <p className="text-sm text-[#666666] font-sans">No monitors yet. Describe what to watch and the agent builds it.</p>
+          <button type="button" onClick={startNew} className={theme.primaryBtn}>New monitor</button>
+        </div>
+      </div>
+    );
+  }
+
+  // The grid stays mounted while hidden so returning to it doesn't re-run every chart query.
+  const grid = hasMonitors && (
+    <div
+      ref={gridRef}
+      className={`flex-1 min-h-0 overflow-y-auto p-6 grid grid-cols-1 xl:grid-cols-4 gap-4 items-stretch content-start ${showList ? "" : "hidden"}`}
+    >
+      {monitors.map((m) => (
+        <MonitorCard
+          key={m.id}
+          monitor={m}
+          since={since}
+          spanClass={SPAN_CLASS[resizing?.id === m.id ? resizing.width : toWidth(m.cardWidth)]}
+          isDragging={dragId === m.id}
+          isTarget={!!dragId && overId === m.id && dragId !== m.id}
+          resizeActive={resizing?.id === m.id}
+          onNavigate={navigate}
+          onEdit={onEdit}
+          onDragStartId={onDragStartId}
+          onDragEnd={onDragEnd}
+          onOverId={onOverId}
+          onDropId={onDropId}
+          onResizeStart={onResizeStart}
+        />
+      ))}
+    </div>
+  );
 
   return (
     <div className="flex flex-col h-full">
       <div className={`flex items-center justify-between px-6 py-4 ${theme.header}`}>
         <span className={theme.headerTitle}>Monitors</span>
-        <button
-          type="button"
-          onClick={() => setChatOpen(!isChatOpen)}
-          className={theme.secondaryBtn}
-        >
-          {isChatOpen ? "Hide Chat" : "Show Chat"}
-        </button>
-      </div>
-
-      <div className="flex flex-1 min-h-0">
-        <div className="flex-1 min-w-0 overflow-auto p-4 bg-[#fafaf8]">
-          {monitors.length === 0 ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center">
-                <p className="text-[#666666] text-sm font-sans mb-2">No monitors yet</p>
-                <p className="text-[#666666] text-xs font-sans">
-                  Use the chat to create monitors
-                </p>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {monitors.map((monitor) => {
-                const monitorAlerts = alertsByMonitor.get(monitor.id) ?? [];
-                return (
-                  <div key={monitor.id} className={theme.card}>
-                    <div className="flex items-center justify-between mb-3">
-                      <span className="text-sm font-medium text-[#2c2c2c] font-sans">
-                        {monitor.name}
-                      </span>
-                      <div className="flex items-center gap-3">
-                        <Badge variant={statusVariant(monitor.lastStatus)}>{monitor.lastStatus.toUpperCase()}</Badge>
-                        <button
-                          type="button"
-                          onClick={() => toggleMonitorChart(monitor.id)}
-                          className="text-xs text-[#666666] hover:text-[#2b5ea7] transition-colors font-sans"
-                        >
-                          {expandedMonitors.has(monitor.id) ? "Hide Chart" : "Show Chart"}
-                        </button>
-                        <ToggleSwitch
-                          checked={!!monitor.enabled}
-                          onChange={(enabled) => handleToggleEnabled(monitor.id, enabled)}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => handleDelete(monitor.id)}
-                          className="text-xs text-[#666666] hover:text-[#b33a2a] transition-colors font-sans"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="space-y-1.5 text-xs font-sans">
-                      <div>
-                        <span className="text-[#666666]">Query: </span>
-                        <code className="text-[#444444] bg-[#f5f4f0] px-1.5 py-0.5 rounded text-[11px] font-mono">
-                          {(() => {
-                            const resolved = resolveQueryDisplay(monitor.query, monitor.frequencySeconds);
-                            return resolved.length > 140 ? resolved.slice(0, 140) + "..." : resolved;
-                          })()}
-                        </code>
-                      </div>
-                      <div>
-                        <span className="text-[#666666]">Condition: </span>
-                        <code className="text-[#444444] bg-[#f5f4f0] px-1.5 py-0.5 rounded text-[11px] font-mono">
-                          {monitor.condition}
-                        </code>
-                      </div>
-                      <div className="flex gap-4 text-[#666666]">
-                        <span>Every {monitor.frequencySeconds}s</span>
-                        <span>Last check: {formatTime(monitor.lastCheckedAt)}</span>
-                        <span>Provider: {monitor.provider}</span>
-                      </div>
-                    </div>
-
-                    {expandedMonitors.has(monitor.id) && (
-                      <div className="mt-3 pt-3 border-t border-[#e8e6e1]">
-                        <TimeRangePicker
-                          value={monitorSince[monitor.id] ?? DEFAULT_SINCE}
-                          onChange={(v) => setMonitorSince((prev) => ({ ...prev, [monitor.id]: v }))}
-                          presets={MONITOR_PRESETS}
-                        />
-                        <QueryChart
-                          provider={monitor.provider}
-                          query={substituteTimeRange(monitor.query, monitorSince[monitor.id] ?? DEFAULT_SINCE, DEFAULT_UNTIL)
-                            + " " + timeseriesClause(monitor.frequencySeconds, monitorSince[monitor.id] ?? DEFAULT_SINCE)}
-                          height={180}
-                          className="mt-2"
-                          threshold={parseThreshold(monitor.condition)}
-                        />
-                      </div>
-                    )}
-
-                    {monitorAlerts.length > 0 && (
-                      <div className="mt-3 pt-3 border-t border-[#e8e6e1]">
-                        <div className="text-[9px] uppercase tracking-[0.15em] text-[#b33a2a] font-sans font-semibold mb-2">
-                          Active Alerts
-                        </div>
-                        <div className="space-y-1.5">
-                          {monitorAlerts.map((alert) => (
-                            <div
-                              key={alert.id}
-                              className="flex items-center justify-between bg-[#b33a2a]/5 border border-[#b33a2a]/20 rounded px-3 py-2"
-                            >
-                              <span className="text-xs text-[#b33a2a] font-sans">
-                                Triggered {formatTime(alert.triggeredAt)}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => handleResolve(alert.id)}
-                                className="text-xs text-[#2b5ea7] hover:text-[#234d8a] font-sans font-medium"
-                              >
-                                Resolve
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
+        <div className="flex items-center gap-4">
+          {showList && hasMonitors && <TimeRangePicker value={since} onChange={setSince} presets={RANGE_PRESETS} />}
+          <button type="button" onClick={startNew} className={theme.primaryBtn}>New monitor</button>
         </div>
-
-        <MonitorChatPanel className={isChatOpen ? "" : "hidden"} />
       </div>
-
-      <ConfirmDialog
-        open={deleteId !== null}
-        title="Delete monitor"
-        message="Delete this monitor and all its alerts?"
-        onConfirm={confirmDelete}
-        onCancel={() => setDeleteId(null)}
-      />
+      <div className="flex flex-col flex-1 min-h-0 bg-[#fafaf8]">{overlay}{grid}</div>
     </div>
   );
 }

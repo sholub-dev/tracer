@@ -38,12 +38,29 @@ export function Debug({ sessionId, onSessionChange }: DebugProps) {
   const utils = trpc.useUtils();
   const markViewed = trpc.sessions.markViewed.useMutation();
 
+  const sessionQuery = trpc.sessions.get.useQuery(
+    { id: resolvedId },
+    { enabled: !!sessionId, gcTime: 0 },
+  );
+  const sessionStatus = sessionQuery.data?.status;
+
   // Mark session as viewed immediately on select — optimistically update caches
   useEffect(() => {
     if (!sessionId) return;
     const listData = utils.sessions.list.getData();
     const session = listData?.find((s) => s.id === sessionId);
-    if (!session || session.status === "idle" || session.status === "streaming") return;
+    if (!session) {
+      // Monitor sessions are excluded from sessions.list
+      if (sessionStatus !== "done") return;
+      markViewed.mutate({ id: sessionId }, {
+        onSuccess: () => {
+          utils.monitors.unreadCount.invalidate();
+          utils.monitors.list.invalidate();
+        },
+      });
+      return;
+    }
+    if (session.status === "idle" || session.status === "streaming") return;
 
     // Optimistically clear the per-session indicator in the list cache
     utils.sessions.list.setData(undefined, (prev) =>
@@ -54,12 +71,7 @@ export function Debug({ sessionId, onSessionChange }: DebugProps) {
       prev ? { ...prev, done: Math.max(0, prev.done - 1) } : prev,
     );
     markViewed.mutate({ id: sessionId });
-  }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const sessionQuery = trpc.sessions.get.useQuery(
-    { id: resolvedId },
-    { enabled: !!sessionId, gcTime: 0 },
-  );
+  }, [sessionId, sessionStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const initialMessages = sessionQuery.data?.messages as UIMessage[] | undefined;
 

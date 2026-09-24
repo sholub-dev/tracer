@@ -129,6 +129,7 @@ function RechartsLineChart({ width, height, series, formatX, threshold }: LineCh
           dot={false}
           activeDot={{ r: 4, strokeWidth: 2, stroke: "#fff" }}
           connectNulls
+          isAnimationActive={false}
         />
       ))}
     </LineChart>
@@ -164,7 +165,7 @@ function RechartsBarChart({ width, height, data, color }: BarChartProps) {
         labelStyle={{ color: colors.inkMuted }}
         formatter={(val) => [formatYAxis(val as number), "count"]}
       />
-      <Bar dataKey="value" fill={color} radius={[2, 2, 0, 0]} maxBarSize={60} />
+      <Bar dataKey="value" fill={color} radius={[2, 2, 0, 0]} maxBarSize={60} isAnimationActive={false} />
     </BarChart>
   );
 }
@@ -183,7 +184,7 @@ function ChartLegend({
   if (items.length <= 1) return null;
   const hasSelection = selectedNames && selectedNames.size > 0;
   return (
-    <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
+    <div className="chart-legend flex flex-wrap gap-x-4 gap-y-1 mt-2">
       {items.map((item) => {
         const dimmed = hasSelection && !selectedNames.has(item.name);
         return (

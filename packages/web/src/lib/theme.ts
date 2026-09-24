@@ -195,6 +195,11 @@ export const theme = {
       label: "text-[9px] uppercase tracking-[0.15em] text-[#0052cc] font-sans font-semibold mb-2",
     },
   } as Record<string, { container: string; label: string }>,
+  // Monitor cards reuse the provider accent colors above.
+  providerCardAccents: {
+    newrelic: { label: "New Relic", border: "border-l-4 border-l-[#2a7a4a]" },
+    posthog: { label: "PostHog", border: "border-l-4 border-l-[#f7a501]" },
+  } as Record<string, { label: string; border: string }>,
   investigationTask: "text-xs text-[#9c9890] font-sans mb-2 italic",
   investigationThinking: "text-[#9c9890] py-2",
   analysisBlock:

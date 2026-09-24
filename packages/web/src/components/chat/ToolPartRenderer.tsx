@@ -2,6 +2,7 @@ import React, { memo } from "react";
 import { Streamdown } from "streamdown";
 import { CLIENT_TOOL_NAMES } from "@tracer-sh/shared";
 import { JsonTree } from "../ui/JsonTree";
+import { Spinner } from "../ui/Spinner";
 import type { ProgressPart } from "@tracer-sh/shared";
 import { theme } from "../../lib/theme";
 import ResultView from "../charts/ResultView";
@@ -9,12 +10,14 @@ import { useProgress, type ProgressStore } from "../../lib/progress-store";
 import { ThinkingDots } from "./MessageParts";
 import { ReasoningBlock } from "./ReasoningBlock";
 import { AnalysisContainer } from "./AnalysisContainer";
+import { MonitorDraftCard, type MonitorDraftOutput } from "../monitors/MonitorDraftCard";
 
 interface ToolPart {
   type: string;
   toolCallId?: string;
   state?: string;
   output?: unknown;
+  errorText?: string;
   input?: { task?: string; query?: string };
 }
 
@@ -29,10 +32,6 @@ const CRUD_LABELS: Record<string, { done: string; loading: string; errorLabel: s
   [CLIENT_TOOL_NAMES.CREATE_WIDGET]: { done: "Widget Created", loading: "Creating widget...", errorLabel: "Widget Error" },
   [CLIENT_TOOL_NAMES.UPDATE_WIDGET]: { done: "Widget Updated", loading: "Updating widget...", errorLabel: "Widget Error" },
   [CLIENT_TOOL_NAMES.DELETE_WIDGET]: { done: "Widget Deleted", loading: "Deleting widget...", errorLabel: "Widget Error" },
-  [CLIENT_TOOL_NAMES.CREATE_MONITOR]: { done: "Monitor Created", loading: "Creating monitor...", errorLabel: "Monitor Error" },
-  [CLIENT_TOOL_NAMES.UPDATE_MONITOR]: { done: "Monitor Updated", loading: "Updating monitor...", errorLabel: "Monitor Error" },
-  [CLIENT_TOOL_NAMES.DELETE_MONITOR]: { done: "Monitor Deleted", loading: "Deleting monitor...", errorLabel: "Monitor Error" },
-  [CLIENT_TOOL_NAMES.TOGGLE_MONITOR]: { done: "Monitor Toggled", loading: "Toggling monitor...", errorLabel: "Monitor Error" },
 };
 
 /** Provider labels by query-tool part type. `tool-execute_*` are the direct query tools a single
@@ -358,8 +357,22 @@ export const ToolPartRenderer = memo(function ToolPartRenderer({ part, progressS
   // (avoids unmounting + remounting thousands of DOM elements in a single frame).
   const isToolInvocation = part.type.startsWith("tool-");
   const isCrud = part.type in CRUD_LABELS;
-  const isSubAgent = isToolInvocation && !isCrud;
+  const isProposeMonitor = part.type === CLIENT_TOOL_NAMES.PROPOSE_MONITOR;
+  const isSubAgent = isToolInvocation && !isCrud && !isProposeMonitor;
   const progress = useProgress(progressStore, isSubAgent ? part.toolCallId : undefined);
+
+  if (isProposeMonitor) {
+    if (part.state === "output-available") return <MonitorDraftCard output={(part.output ?? {}) as MonitorDraftOutput} />;
+    if (part.state === "output-error") {
+      return <div className={theme.resultErrorMessage}>{part.errorText ?? "Monitor validation failed"}</div>;
+    }
+    return (
+      <div className="flex items-center gap-2 py-2">
+        <Spinner size="sm" />
+        <span className={theme.toolLoading}>Validating monitor...</span>
+      </div>
+    );
+  }
 
   if (isSubAgent) {
     const label = getSubAgentLabel(part.type);
@@ -466,7 +479,7 @@ export const ToolPartRenderer = memo(function ToolPartRenderer({ part, progressS
     return null;
   }
 
-  // ── Widget & Monitor CRUD tools ──
+  // ── Widget CRUD tools ──
   const crudLabel = CRUD_LABELS[part.type];
   if (crudLabel) {
     if (part.state === "output-available") {

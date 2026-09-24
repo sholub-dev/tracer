@@ -22,6 +22,8 @@ interface SidebarProps {
   currentDashboardId: string | null;
   onSelectDashboard: (id: string) => void;
   onNewDashboard: () => void;
+  currentMonitorSessionId: string | null;
+  onSelectMonitorSession: (monitorId: string, sessionId: string) => void;
 }
 
 const NavIcon = ({ page }: { page: Page }) => {
@@ -38,12 +40,6 @@ const NavIcon = ({ page }: { page: Page }) => {
   }
 };
 
-const NAV_ITEMS: { page: Page; label: string }[] = [
-  ...(FEATURES.dashboards ? [{ page: "dashboard" as const, label: "Dashboard" }] : []),
-  { page: "debug" as const, label: "Debug" },
-  ...(FEATURES.monitors ? [{ page: "monitors" as const, label: "Monitors" }] : []),
-];
-
 export function Sidebar({
   currentPage,
   onNavigate,
@@ -53,12 +49,17 @@ export function Sidebar({
   currentDashboardId,
   onSelectDashboard,
   onNewDashboard,
+  currentMonitorSessionId,
+  onSelectMonitorSession,
 }: SidebarProps) {
   const sessionsQuery = trpc.sessions.list.useQuery();
   const dashboardsQuery = trpc.dashboards.list.useQuery(undefined, {
     enabled: FEATURES.dashboards && currentPage === "dashboard",
   });
-  const alertCountQuery = trpc.monitorAlerts.activeCount.useQuery(undefined, {
+  const monitorUnreadQuery = trpc.monitors.unreadCount.useQuery(undefined, {
+    enabled: FEATURES.monitors,
+  });
+  const monitorSessionsQuery = trpc.monitors.sessions.useQuery(undefined, {
     enabled: FEATURES.monitors,
   });
   const activeStatusQuery = trpc.sessions.activeCount.useQuery();
@@ -74,15 +75,11 @@ export function Sidebar({
   usePolling(() => {
     utils.sessions.activeCount.invalidate();
     if (currentPage === "debug") utils.sessions.list.invalidate();
+    if (FEATURES.monitors) {
+      utils.monitors.unreadCount.invalidate();
+      utils.monitors.sessions.invalidate();
+    }
   }, WEB_CONFIG.activeStreamPollingMs, true);
-
-  const shouldPollMonitors = trpc.monitors.shouldPoll.useQuery(undefined, {
-    enabled: FEATURES.monitors,
-  });
-  usePolling(() => {
-    utils.monitorAlerts.activeCount.invalidate();
-    utils.monitors.shouldPoll.invalidate();
-  }, WEB_CONFIG.monitorPollingMs, (shouldPollMonitors.data ?? false) && FEATURES.monitors);
 
   const markViewedMutation = trpc.sessions.markViewed.useMutation();
 
@@ -108,7 +105,8 @@ export function Sidebar({
     return { regularSessions: regular, importedSessions: imported, apiSessions: api };
   }, [sessionsQuery.data]);
 
-  const alertCount = alertCountQuery.data ?? 0;
+  const monitorUnread = monitorUnreadQuery.data ?? 0;
+  const monitorSessions = monitorSessionsQuery.data ?? [];
   const doneSessionCount = currentPage === "debug" && sessionsQuery.data
     ? sessionsQuery.data.filter(s => s.status === "done" && s.id !== currentSessionId && s.kind !== SESSION_KIND.API).length
     : (activeStatusQuery.data?.done ?? 0);
@@ -182,7 +180,11 @@ export function Sidebar({
         {
           onSuccess: () => {
             utils.sessions.list.invalidate();
+            utils.monitors.sessions.invalidate();
+            utils.monitors.triggers.invalidate();
+            utils.monitors.list.invalidate();
             if (currentSessionId === confirmTarget.id) onNewSession();
+            if (currentMonitorSessionId === confirmTarget.id) onNavigate("monitors");
           },
         },
       );
@@ -202,6 +204,69 @@ export function Sidebar({
     setConfirmTarget(null);
   };
 
+  const sectionHeaderClass = "shrink-0 text-[10px] uppercase tracking-wider text-[#9c9890]/60 px-3 pt-3 pb-1";
+
+  const renderNavButton = (page: Page, label: string) => (
+    <button
+      onClick={() => onNavigate(page)}
+      className={`shrink-0 w-full flex items-center gap-3 px-3 py-2 rounded-sm text-sm transition-colors ${
+        currentPage === page ? theme.navActive : theme.navInactive
+      }`}
+    >
+      {page === "monitors" && monitorUnread > 0 ? (
+        <span className="relative flex items-center justify-center w-5 shrink-0">
+          <NavIcon page={page} />
+          <span
+            className="absolute inset-0 flex items-center justify-center"
+            style={{ animation: "fill-up-down 4s ease-in-out infinite" }}
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="#b33a2a" stroke="none" /></svg>
+          </span>
+        </span>
+      ) : (page === "debug" && doneSessionCount > 0) ? (
+        <span className="relative flex items-center justify-center w-5 shrink-0">
+          <NavIcon page={page} />
+          <span
+            className="absolute inset-0 flex items-center justify-center"
+            style={{ animation: "fill-up-down 4s ease-in-out infinite" }}
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1.5L14.5 8L8 14.5L1.5 8Z" fill="#2b5ea7" stroke="none" /></svg>
+          </span>
+        </span>
+      ) : (
+        <span className="w-5 flex items-center justify-center shrink-0"><NavIcon page={page} /></span>
+      )}
+      {label}
+      {page === "monitors" && monitorUnread > 0 && (
+        <span className="ml-auto flex items-center gap-1.5">
+          <span className="text-[10px] font-medium text-[#b33a2a]" title={`${monitorUnread} new monitor ${monitorUnread === 1 ? "result" : "results"}`}>{monitorUnread}</span>
+        </span>
+      )}
+    </button>
+  );
+
+  const renderSessionRow = (session: (typeof regularSessions)[number]) => (
+    <button
+      key={session.id}
+      onClick={() => onSelectSession(session.id)}
+      className={currentSessionId === session.id ? theme.sessionItemActive : theme.sessionItem}
+    >
+      <span
+        className={`truncate flex-1 text-left ${
+          (session.status === "streaming" || session.status === "done") && session.id !== currentSessionId
+            ? "text-[#2b5ea7] underline"
+            : ""
+        }`}
+        title={session.title}
+      >
+        {session.title}
+      </span>
+      <span onClick={(e) => handleDeleteSession(e, session.id)} className={theme.sessionDeleteBtn}>
+        ×
+      </span>
+    </button>
+  );
+
   return (
     <div className={`flex flex-col h-full ${theme.sidebar}`}>
       <div className="p-6">
@@ -214,165 +279,113 @@ export function Sidebar({
         </p>
       </div>
 
-      <nav className="flex-1 px-3 space-y-1 overflow-y-auto">
-        {NAV_ITEMS.map(({ page, label }) => {
-          const active = currentPage === page;
-          return (
-            <div key={page}>
-              <button
-                onClick={() => onNavigate(page)}
-                className={`w-full flex items-center gap-3 px-3 py-2 rounded-sm text-sm transition-colors ${
-                  active ? theme.navActive : theme.navInactive
-                }`}
-              >
-                {page === "monitors" && alertCount > 0 ? (
-                  <span className="relative flex items-center justify-center w-5 shrink-0">
-                    <NavIcon page={page} />
-                    <span
-                      className="absolute inset-0 flex items-center justify-center"
-                      style={{ animation: "fill-up-down 4s ease-in-out infinite" }}
+      <nav className="flex-1 min-h-0 px-3 flex flex-col">
+        {FEATURES.dashboards && (
+          <div className="shrink-0">
+            {renderNavButton("dashboard", "Dashboard")}
+            {currentPage === "dashboard" && (
+              <div className="mt-1 space-y-0.5">
+                <button onClick={onNewDashboard} className={theme.sessionNewBtn}>
+                  <span className="text-[10px]">+</span>
+                  New dashboard
+                </button>
+                <ScrollableList>
+                  {dashboardsQuery.data?.map((dashboard) => (
+                    <button
+                      key={dashboard.id}
+                      onClick={() => onSelectDashboard(dashboard.id)}
+                      className={currentDashboardId === dashboard.id ? theme.sessionItemActive : theme.sessionItem}
                     >
-                      <svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="#b33a2a" stroke="none" /></svg>
-                    </span>
-                  </span>
-                ) : (page === "debug" && doneSessionCount > 0) ? (
-                  <span className="relative flex items-center justify-center w-5 shrink-0">
-                    <NavIcon page={page} />
-                    <span
-                      className="absolute inset-0 flex items-center justify-center"
-                      style={{ animation: "fill-up-down 4s ease-in-out infinite" }}
-                    >
-                      <svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1.5L14.5 8L8 14.5L1.5 8Z" fill="#2b5ea7" stroke="none" /></svg>
-                    </span>
-                  </span>
-                ) : (
-                  <span className="w-5 flex items-center justify-center shrink-0"><NavIcon page={page} /></span>
-                )}
-                {label}
-                {page === "monitors" && alertCount > 0 && (
-                  <span className="ml-auto flex items-center gap-1.5">
-                    <span className="text-[10px] font-medium text-[#b33a2a]">{alertCount}</span>
-                  </span>
-                )}
-              </button>
+                      <span className="truncate flex-1 text-left">{dashboard.title}</span>
+                      <span onClick={(e) => handleDeleteDashboard(e, dashboard.id)} className={theme.sessionDeleteBtn}>
+                        ×
+                      </span>
+                    </button>
+                  ))}
+                </ScrollableList>
+              </div>
+            )}
+          </div>
+        )}
 
-              {page === "dashboard" && currentPage === "dashboard" && (
-                <div className="mt-1 space-y-0.5">
-                  <button
-                    onClick={onNewDashboard}
-                    className={theme.sessionNewBtn}
-                  >
-                    <span className="text-[10px]">+</span>
-                    New dashboard
-                  </button>
-                  <ScrollableList>
-                    {dashboardsQuery.data?.map((dashboard) => (
-                      <button
-                        key={dashboard.id}
-                        onClick={() => onSelectDashboard(dashboard.id)}
-                        className={
-                          currentDashboardId === dashboard.id
-                            ? theme.sessionItemActive
-                            : theme.sessionItem
-                        }
-                      >
-                        <span className="truncate flex-1 text-left">
-                          {dashboard.title}
-                        </span>
-                        <span
-                          onClick={(e) => handleDeleteDashboard(e, dashboard.id)}
-                          className={theme.sessionDeleteBtn}
-                        >
-                          ×
-                        </span>
-                      </button>
-                    ))}
-                  </ScrollableList>
-                </div>
-              )}
+        <section className="flex-[8] min-h-0 flex flex-col">
+          {renderNavButton("debug", "Debug")}
+          <button onClick={onNewSession} className={`${theme.sessionNewBtn} mt-1 shrink-0`}>
+            <span className="text-[10px]">+</span>
+            New chat
+          </button>
+          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-none space-y-0.5 mt-0.5">
+            {regularSessions.map(renderSessionRow)}
+          </div>
+        </section>
 
-              {page === "debug" && (() => {
-                const renderRow = (session: (typeof regularSessions)[number]) => (
+        {FEATURES.monitors && (
+          <section className="flex-[5] min-h-0 flex flex-col pt-2">
+            {renderNavButton("monitors", "Monitors")}
+            <div className="flex-1 min-h-0 overflow-y-auto scrollbar-none space-y-0.5 mt-1">
+              {monitorSessions.length === 0 ? (
+                <div className="px-3 py-1 text-[11px] text-[#9c9890]/70">No monitor runs yet</div>
+              ) : monitorSessions.map((s) => {
+                const active = currentPage === "monitors" && currentMonitorSessionId === s.id;
+                return (
                   <button
-                    key={session.id}
-                    onClick={() => onSelectSession(session.id)}
-                    className={
-                      currentSessionId === session.id
-                        ? theme.sessionItemActive
-                        : theme.sessionItem
-                    }
+                    key={s.id}
+                    onClick={() => onSelectMonitorSession(s.monitorId, s.id)}
+                    className={active ? theme.sessionItemActive : theme.sessionItem}
                   >
                     <span
                       className={`truncate flex-1 text-left ${
-                        (session.status === "streaming" || session.status === "done") && session.id !== currentSessionId
-                          ? "text-[#2b5ea7] underline"
-                          : ""
+                        (s.status === "streaming" || s.status === "done") && !active ? "text-[#2b5ea7] underline" : ""
                       }`}
-                      title={session.title}
+                      title={s.title}
                     >
-                      {session.title}
+                      {s.title}
                     </span>
-                    <span
-                      onClick={(e) => handleDeleteSession(e, session.id)}
-                      className={theme.sessionDeleteBtn}
-                    >
+                    <span onClick={(e) => handleDeleteSession(e, s.id)} className={theme.sessionDeleteBtn}>
                       ×
                     </span>
                   </button>
                 );
-                return (
-                  <div className="mt-1 space-y-0.5">
-                    <button onClick={onNewSession} className={theme.sessionNewBtn}>
-                      <span className="text-[10px]">+</span>
-                      New chat
-                    </button>
-                    <ScrollableList>{regularSessions.map(renderRow)}</ScrollableList>
-                    {importedSessions.length > 0 && (
-                      <>
-                        <div className="text-[10px] uppercase tracking-wider text-[#9c9890]/60 px-3 pt-3 pb-1">
-                          Imported
-                        </div>
-                        <ScrollableList>{importedSessions.map(renderRow)}</ScrollableList>
-                      </>
-                    )}
-                    {apiSessions.length > 0 && (
-                      <>
-                        <div className="text-[10px] uppercase tracking-wider text-[#9c9890]/60 px-3 pt-3 pb-1">
-                          API
-                        </div>
-                        <ScrollableList>{apiSessions.map(renderRow)}</ScrollableList>
-                      </>
-                    )}
-                    <label
-                      className={`mt-3 mx-2 flex items-center justify-center gap-1.5 px-3 py-2 text-[11px] rounded border border-dashed cursor-pointer transition-colors ${
-                        importDragActive
-                          ? "border-[#2b5ea7] bg-[#eaf0f8] text-[#2b5ea7]"
-                          : "border-[#d4d2cd] text-[#9c9890] hover:text-[#2b5ea7] hover:border-[#2b5ea7]"
-                      }`}
-                      {...importDropProps}
-                    >
-                      <input
-                        type="file"
-                        accept="image/png"
-                        className="hidden"
-                        onChange={(e) => { const f = e.target.files?.[0]; if (f) importPng(f); e.target.value = ""; }}
-                      />
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                        <polyline points="17 8 12 3 7 8" />
-                        <line x1="12" y1="3" x2="12" y2="15" />
-                      </svg>
-                      Import analysis image
-                    </label>
-                    {importError && (
-                      <div className="mx-2 mt-1 text-[10px] text-[#b33a2a]">{importError}</div>
-                    )}
-                  </div>
-                );
-              })()}
+              })}
             </div>
-          );
-        })}
+          </section>
+        )}
+
+        <section className="flex-[4] min-h-0 flex flex-col">
+          <div className={sectionHeaderClass}>API</div>
+          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-none space-y-0.5">
+            {apiSessions.map(renderSessionRow)}
+          </div>
+        </section>
+
+        <section className="flex-[3] min-h-0 flex flex-col">
+          <div className={sectionHeaderClass}>Imported</div>
+          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-none space-y-0.5">
+            <label
+              className={`mx-2 mb-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[11px] rounded border border-dashed cursor-pointer transition-colors ${
+                importDragActive
+                  ? "border-[#2b5ea7] bg-[#eaf0f8] text-[#2b5ea7]"
+                  : "border-[#d4d2cd] text-[#9c9890] hover:text-[#2b5ea7] hover:border-[#2b5ea7]"
+              }`}
+              {...importDropProps}
+            >
+              <input
+                type="file"
+                accept="image/png"
+                className="hidden"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) importPng(f); e.target.value = ""; }}
+              />
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+              Import analysis image
+            </label>
+            {importError && <div className="mx-2 mb-1 text-[10px] text-[#b33a2a]">{importError}</div>}
+            {importedSessions.map(renderSessionRow)}
+          </div>
+        </section>
       </nav>
 
       <div className="px-3 pb-2">

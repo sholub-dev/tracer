@@ -2,6 +2,12 @@ export function substituteTimeRange(query: string, since: string, until = "NOW")
   return query.replace(/\{\{SINCE\}\}/g, since).replace(/\{\{UNTIL\}\}/g, until);
 }
 
+/** Fill {{SINCE}}/{{UNTIL}} with a window in the provider's format: PostHog epoch seconds, New Relic epoch ms. */
+export function substituteWindow(provider: string, query: string, startSec: number, endSec: number): string {
+  const fmt = (s: number) => String(provider === "posthog" ? s : s * 1000);
+  return substituteTimeRange(query, fmt(startSec), fmt(endSec));
+}
+
 // ── Timestamp utilities ──
 
 const TIMESTAMP_KEYS = new Set([

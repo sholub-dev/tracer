@@ -20,6 +20,11 @@ The user has attached one or more images or files. Treat each as primary evidenc
 - Quote what is actually shown rather than paraphrasing loosely, and tie every conclusion back to specific details in the attachment.
 - If any part is blurry, cropped, truncated, or ambiguous, say so explicitly and ask — never guess at an unreadable value.`;
 
+export function firstUserMessageTitle(messages: UIMessage[]): string {
+  const textPart = messages.find((m) => m.role === "user")?.parts.find((p) => p.type === "text");
+  return textPart ? (textPart as { text: string }).text.slice(0, 60) : DEFAULT_SESSION_TITLE;
+}
+
 /**
  * Sanitize messages loaded from the DB so incomplete tool parts (from aborted
  * runs) and stale streaming parts don't break `convertToModelMessages`.

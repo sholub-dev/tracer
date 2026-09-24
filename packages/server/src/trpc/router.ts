@@ -6,7 +6,6 @@ import { sessionsRouter } from "./routers/sessions.router.js";
 import { widgetsRouter } from "./routers/widgets.router.js";
 import { dashboardsRouter } from "./routers/dashboards.router.js";
 import { monitorsRouter } from "./routers/monitors.router.js";
-import { monitorAlertsRouter } from "./routers/monitor-alerts.router.js";
 import { updateRouter } from "./routers/update.router.js";
 import { integrationsRouter } from "./routers/integrations.router.js";
 
@@ -19,7 +18,6 @@ export const appRouter = router({
   widgets: widgetsRouter,
   dashboards: dashboardsRouter,
   monitors: monitorsRouter,
-  monitorAlerts: monitorAlertsRouter,
   update: updateRouter,
 });
 

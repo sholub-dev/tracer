@@ -69,9 +69,11 @@ export function useContainerSize() {
     if (!el) return;
     const ro = new ResizeObserver((entries) => {
       const rect = entries[0]?.contentRect;
-      if (rect && rect.width > 0) {
-        setSize({ width: rect.width, height: rect.height });
-      }
+      // 0 width = hidden (display:none); keep the last size so nothing re-renders.
+      if (!rect || rect.width <= 0) return;
+      const width = Math.round(rect.width);
+      const height = Math.round(rect.height);
+      setSize((p) => (p.width === width && p.height === height ? p : { width, height }));
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -85,13 +87,14 @@ export function usePolling(
   invalidate: () => void,
   intervalMs: number,
   enabled: boolean,
+  immediate = true,
 ) {
   const callbackRef = useRef(invalidate);
   callbackRef.current = invalidate;
 
   useEffect(() => {
     if (!enabled) return;
-    callbackRef.current();
+    if (immediate) callbackRef.current();
     const id = setInterval(() => {
       if (document.visibilityState === "visible") callbackRef.current();
     }, intervalMs);
@@ -103,7 +106,7 @@ export function usePolling(
       clearInterval(id);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [enabled, intervalMs]);
+  }, [enabled, intervalMs, immediate]);
 }
 
 /** Track whether a scrollable element can scroll up/down, for fade indicators */

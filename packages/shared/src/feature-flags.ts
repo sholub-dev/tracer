@@ -8,5 +8,5 @@ export const FEATURES = {
   dashboards: false,
 
   /** Monitor page with alerting. */
-  monitors: false,
+  monitors: true,
 } as const;

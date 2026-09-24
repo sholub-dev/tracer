@@ -2,17 +2,14 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { trpc } from "../../lib/trpc";
 import { theme } from "../../lib/theme";
 import { usePolling } from "../../lib/hooks";
-import { WEB_CONFIG } from "../../lib/config";
 import { formatTime, sinceToSeconds } from "../../lib/monitor-utils";
-import { substituteTimeRange, substituteWindow, unixNow } from "@tracer-sh/shared";
-import { QueryChart } from "../charts/QueryChart";
+import { MonitorChart } from "./MonitorChart";
 import { Badge } from "../ui/Badge";
 import { Spinner } from "../ui/Spinner";
 
 const STREAMING_POLL_MS = 5_000;
 const MAX_KEYS_SHOWN = 2;
 const TRIGGERS_PREVIEW = 5;
-const CHART_HEIGHT = 180;
 
 type Trigger = NonNullable<ReturnType<ReturnType<typeof trpc.useUtils>["monitors"]["triggers"]["getData"]>>[number];
 
@@ -106,14 +103,6 @@ export const MonitorTriggers = memo(function MonitorTriggers({ monitorId, provid
 
   usePolling(() => utils.monitors.triggers.invalidate({ monitorId }), STREAMING_POLL_MS, streaming, false);
 
-  // Refresh the chart only when a run crosses a chart bucket boundary.
-  const bucketSeconds = Math.max(300, sinceSeconds / WEB_CONFIG.maxBuckets);
-  const refreshKey = Math.floor((lastRunAt ?? 0) / bucketSeconds);
-  const chartQuery = useMemo(() => {
-    if (provider !== "posthog") return `${substituteTimeRange(monitorQuery, since)} TIMESERIES AUTO`;
-    const until = Math.ceil(unixNow() / bucketSeconds) * bucketSeconds;
-    return substituteWindow(provider, monitorChartQuery ?? monitorQuery, until - sinceSeconds, until);
-  }, [provider, monitorQuery, monitorChartQuery, since, sinceSeconds, bucketSeconds, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const repeatLabels = useMemo(() => {
     const labels = new Map<string, string>();
     for (const t of triggers) {
@@ -125,16 +114,7 @@ export const MonitorTriggers = memo(function MonitorTriggers({ monitorId, provid
 
   return (
     <>
-      <div className="flex-1 px-5 py-4 border-t border-[#e8e6e1]">
-        <QueryChart
-          provider={provider}
-          query={chartQuery}
-          height={CHART_HEIGHT}
-          refreshKey={refreshKey}
-          growWithLegend
-          className="[&_.chart-legend]:max-h-[88px] [&_.chart-legend]:overflow-y-auto"
-        />
-      </div>
+      <MonitorChart provider={provider} query={monitorQuery} chartQuery={monitorChartQuery} lastRunAt={lastRunAt} since={since} />
 
       <div className="relative border-t border-[#e8e6e1]">
         {/* Opens upward over the chart so the card (and its row) keeps its height. */}

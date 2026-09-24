@@ -1,12 +1,12 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { eq, asc, desc, and, gt, inArray, isNotNull, sql } from "drizzle-orm";
-import { SESSION_KIND, unixNow } from "@tracer-sh/shared";
+import { eq, asc, desc, and, gt, like, sql } from "drizzle-orm";
+import { SESSION_KIND, SESSION_PREFIX, unixNow } from "@tracer-sh/shared";
 import { publicProcedure, router } from "../trpc.js";
 import { chatSessions, monitors, monitorTriggers } from "../../db/schema.js";
 import { CONFIG } from "../../config.js";
-import { MONITOR_PROVIDERS, normalizeDraft, validateMonitor } from "../../monitors/validate.js";
 import { parseTriggerGroups } from "../../monitors/repeats.js";
+import { deleteMonitor, setMonitorToggles } from "../../monitors/store.js";
 
 const unreadSession = and(eq(chatSessions.kind, SESSION_KIND.MONITOR), eq(chatSessions.status, "done"));
 
@@ -34,45 +34,6 @@ export const monitorsRouter = router({
     }));
   }),
 
-  save: publicProcedure
-    .input(z.object({
-      chatSessionId: z.string(),
-      name: z.string().min(1),
-      provider: z.enum(MONITOR_PROVIDERS).default("newrelic"),
-      query: z.string().min(1),
-      chartQuery: z.string().nullish(),
-      condition: z.string().min(1),
-      frequencySeconds: z.number(),
-    }))
-    .mutation(async ({ ctx, input }) => {
-      const draft = normalizeDraft(input);
-      const validation = await validateMonitor(ctx.providers, draft);
-      if ("error" in validation) throw new TRPCError({ code: "BAD_REQUEST", message: validation.error });
-
-      const now = unixNow();
-      const fields = {
-        name: draft.name,
-        provider: draft.provider,
-        query: draft.query,
-        chartQuery: draft.chartQuery,
-        condition: draft.condition,
-        frequencySeconds: draft.frequencySeconds,
-        updatedAt: now,
-      };
-      const existing = ctx.db.select().from(monitors).where(eq(monitors.chatSessionId, input.chatSessionId)).get();
-      if (existing) {
-        return ctx.db.update(monitors).set(fields).where(eq(monitors.id, existing.id)).returning().get();
-      }
-      return ctx.db.insert(monitors).values({
-        ...fields,
-        id: crypto.randomUUID(),
-        enabled: 1,
-        lastStatus: "ok",
-        chatSessionId: input.chatSessionId,
-        createdAt: now,
-      }).returning().get();
-    }),
-
   reorder: publicProcedure
     .input(z.object({ ids: z.array(z.string()) }))
     .mutation(({ ctx, input }) => {
@@ -92,53 +53,24 @@ export const monitorsRouter = router({
   setAlertEnabled: publicProcedure
     .input(z.object({ id: z.string(), enabled: z.boolean() }))
     .mutation(({ ctx, input }) => {
-      const updated = ctx.db.update(monitors)
-        .set({ alertEnabled: input.enabled ? 1 : 0, updatedAt: unixNow() })
-        .where(eq(monitors.id, input.id))
-        .returning({ id: monitors.id })
-        .get();
-      if (!updated) throw new TRPCError({ code: "NOT_FOUND", message: "Monitor not found" });
+      const result = setMonitorToggles(ctx.db, input.id, { alert: input.enabled });
+      if ("error" in result) throw new TRPCError({ code: result.code, message: result.error });
       return { success: true };
     }),
 
   toggleEnabled: publicProcedure
     .input(z.object({ id: z.string(), enabled: z.boolean() }))
     .mutation(({ ctx, input }) => {
-      const updated = ctx.db.update(monitors)
-        .set({
-          enabled: input.enabled ? 1 : 0,
-          updatedAt: unixNow(),
-          // Re-enabled monitors resume from now instead of checking the whole paused period.
-          ...(input.enabled ? { lastCheckedAt: null } : {}),
-        })
-        .where(eq(monitors.id, input.id))
-        .returning({ id: monitors.id })
-        .get();
-      if (!updated) throw new TRPCError({ code: "NOT_FOUND", message: "Monitor not found" });
+      const result = setMonitorToggles(ctx.db, input.id, { run: input.enabled });
+      if ("error" in result) throw new TRPCError({ code: result.code, message: result.error });
       return { success: true };
     }),
 
   delete: publicProcedure
     .input(z.object({ id: z.string() }))
     .mutation(({ ctx, input }) => {
-      const monitor = ctx.db.select().from(monitors).where(eq(monitors.id, input.id)).get();
-      if (!monitor) throw new TRPCError({ code: "NOT_FOUND", message: "Monitor not found" });
-
-      const sessionIds = ctx.db
-        .select({ sessionId: monitorTriggers.sessionId })
-        .from(monitorTriggers)
-        .where(and(eq(monitorTriggers.monitorId, input.id), isNotNull(monitorTriggers.sessionId)))
-        .all()
-        .map((r) => r.sessionId as string);
-      if (sessionIds.some((id) => ctx.activeStreams.has(id))) {
-        throw new TRPCError({ code: "CONFLICT", message: "A session for this monitor is still running. Stop it first." });
-      }
-
-      const toDelete = [...new Set(monitor.chatSessionId ? [...sessionIds, monitor.chatSessionId] : sessionIds)];
-      ctx.db.transaction((tx) => {
-        if (toDelete.length > 0) tx.delete(chatSessions).where(inArray(chatSessions.id, toDelete)).run();
-        tx.delete(monitors).where(eq(monitors.id, input.id)).run();
-      });
+      const result = deleteMonitor(ctx.db, ctx.activeStreams, input.id);
+      if ("error" in result) throw new TRPCError({ code: result.code, message: result.error });
       return { success: true };
     }),
 
@@ -178,10 +110,21 @@ export const monitorsRouter = router({
         status: chatSessions.status,
         updatedAt: chatSessions.updatedAt,
         monitorId: monitorTriggers.monitorId,
+        triggeredAt: monitorTriggers.triggeredAt,
       })
       .from(monitorTriggers)
       .innerJoin(chatSessions, eq(monitorTriggers.sessionId, chatSessions.id))
       .orderBy(desc(monitorTriggers.triggeredAt))
+      .limit(100)
+      .all();
+  }),
+
+  builderChats: publicProcedure.query(({ ctx }) => {
+    return ctx.db
+      .select({ id: chatSessions.id, title: chatSessions.title, status: chatSessions.status, updatedAt: chatSessions.updatedAt })
+      .from(chatSessions)
+      .where(like(chatSessions.id, `${SESSION_PREFIX.MONITORS}%`))
+      .orderBy(desc(chatSessions.updatedAt))
       .limit(100)
       .all();
   }),

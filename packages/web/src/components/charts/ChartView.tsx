@@ -181,7 +181,7 @@ function ChartLegend({
   selectedNames?: Set<string>;
   onToggle?: (name: string) => void;
 }) {
-  if (items.length <= 1) return null;
+  if (items.length === 0) return null;
   const hasSelection = selectedNames && selectedNames.size > 0;
   return (
     <div className="chart-legend flex flex-wrap gap-x-4 gap-y-1 mt-2">
@@ -255,7 +255,7 @@ function SimpleTimeseriesChart({ rows, containerSize, threshold }: { rows: Recor
   [rows, metricKeys]);
 
   const { selected, toggle, visible } = useSeriesVisibility(series);
-  const legendH = series.length > 1 ? 28 : 0;
+  const legendH = series.length > 0 ? 28 : 0;
 
   return (
     <ChartContainer containerSize={containerSize} defaultHeight={280} legendHeight={legendH}>
@@ -301,7 +301,7 @@ function FacetTimeseriesChart({ rows, containerSize, threshold }: { rows: Record
   }, [rows]);
 
   const { selected, toggle, visible } = useSeriesVisibility(series);
-  const legendH = series.length > 1 ? 28 : 0;
+  const legendH = series.length > 0 ? 28 : 0;
 
   return (
     <ChartContainer containerSize={containerSize} defaultHeight={300} legendHeight={legendH}>
@@ -360,7 +360,7 @@ function CompareTimeseriesChart({ rows, containerSize }: { rows: Record<string, 
   }, [rows]);
 
   const { selected, toggle, visible } = useSeriesVisibility(series);
-  const legendH = series.length > 1 ? 28 : 0;
+  const legendH = series.length > 0 ? 28 : 0;
 
   return (
     <ChartContainer containerSize={containerSize} defaultHeight={280} legendHeight={legendH}>

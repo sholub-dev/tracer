@@ -17,7 +17,8 @@ export const TOOL_NAMES = {
   CREATE_WIDGET: "create_widget",
   UPDATE_WIDGET: "update_widget",
   DELETE_WIDGET: "delete_widget",
-  PROPOSE_MONITOR: "propose_monitor",
+  SAVE_MONITOR: "save_monitor",
+  DELETE_MONITOR: "delete_monitor",
   BEGIN_ANALYSIS: "begin_analysis",
 } as const;
 

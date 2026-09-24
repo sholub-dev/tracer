@@ -2,10 +2,10 @@ import { PanelChat } from "../chat/PanelChat";
 
 interface MonitorChatPanelProps {
   sessionId: string;
-  className?: string;
+  initialInput?: string;
 }
 
-export function MonitorChatPanel({ sessionId, className }: MonitorChatPanelProps) {
+export function MonitorChatPanel({ sessionId, initialInput }: MonitorChatPanelProps) {
   return (
     <PanelChat
       chatId={sessionId}
@@ -13,7 +13,7 @@ export function MonitorChatPanel({ sessionId, className }: MonitorChatPanelProps
       title="Monitor Builder"
       placeholder="Describe what to monitor..."
       persist
-      className={className}
+      initialInput={initialInput}
     />
   );
 }

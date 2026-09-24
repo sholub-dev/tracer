@@ -80,6 +80,7 @@ export interface ChatCoreProps {
   onData?: (part: { type: string; data: unknown }) => void;
   initialMessages?: UIMessage[];
   onStatusChange?: (status: string, messages: UIMessage[]) => void;
+  initialInput?: string;
   onBeforeStop?: (ctx: {
     messages: UIMessage[];
     progressStore: ProgressStore;
@@ -216,6 +217,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
       onData,
       initialMessages,
       onStatusChange,
+      initialInput = "",
       onBeforeStop,
       variant = "full",
       header,
@@ -237,7 +239,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
     },
     ref,
   ) {
-    const [input, setInput] = useState("");
+    const [input, setInput] = useState(initialInput);
     const [attachments, setAttachments] = useState<Attachment[]>([]);
     const [attachError, setAttachError] = useState<string | null>(null);
     const progressStore = useRef(new ProgressStore()).current;

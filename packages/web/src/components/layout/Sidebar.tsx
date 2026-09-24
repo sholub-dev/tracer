@@ -24,6 +24,8 @@ interface SidebarProps {
   onNewDashboard: () => void;
   currentMonitorSessionId: string | null;
   onSelectMonitorSession: (monitorId: string, sessionId: string) => void;
+  currentBuilderSessionId: string | null;
+  onSelectBuilderChat: (sessionId: string) => void;
 }
 
 const NavIcon = ({ page }: { page: Page }) => {
@@ -51,6 +53,8 @@ export function Sidebar({
   onNewDashboard,
   currentMonitorSessionId,
   onSelectMonitorSession,
+  currentBuilderSessionId,
+  onSelectBuilderChat,
 }: SidebarProps) {
   const sessionsQuery = trpc.sessions.list.useQuery();
   const dashboardsQuery = trpc.dashboards.list.useQuery(undefined, {
@@ -60,6 +64,9 @@ export function Sidebar({
     enabled: FEATURES.monitors,
   });
   const monitorSessionsQuery = trpc.monitors.sessions.useQuery(undefined, {
+    enabled: FEATURES.monitors,
+  });
+  const builderChatsQuery = trpc.monitors.builderChats.useQuery(undefined, {
     enabled: FEATURES.monitors,
   });
   const activeStatusQuery = trpc.sessions.activeCount.useQuery();
@@ -78,6 +85,7 @@ export function Sidebar({
     if (FEATURES.monitors) {
       utils.monitors.unreadCount.invalidate();
       utils.monitors.sessions.invalidate();
+      utils.monitors.builderChats.invalidate();
     }
   }, WEB_CONFIG.activeStreamPollingMs, true);
 
@@ -106,7 +114,11 @@ export function Sidebar({
   }, [sessionsQuery.data]);
 
   const monitorUnread = monitorUnreadQuery.data ?? 0;
-  const monitorSessions = monitorSessionsQuery.data ?? [];
+  const monitorItems = useMemo(() => {
+    const chats = (builderChatsQuery.data ?? []).map((c) => ({ ...c, monitorId: null as string | null, at: c.updatedAt }));
+    const runs = (monitorSessionsQuery.data ?? []).map((r) => ({ ...r, at: r.triggeredAt }));
+    return [...chats, ...runs].sort((a, b) => b.at - a.at);
+  }, [builderChatsQuery.data, monitorSessionsQuery.data]);
   const doneSessionCount = currentPage === "debug" && sessionsQuery.data
     ? sessionsQuery.data.filter(s => s.status === "done" && s.id !== currentSessionId && s.kind !== SESSION_KIND.API).length
     : (activeStatusQuery.data?.done ?? 0);
@@ -181,10 +193,11 @@ export function Sidebar({
           onSuccess: () => {
             utils.sessions.list.invalidate();
             utils.monitors.sessions.invalidate();
+            utils.monitors.builderChats.invalidate();
             utils.monitors.triggers.invalidate();
             utils.monitors.list.invalidate();
             if (currentSessionId === confirmTarget.id) onNewSession();
-            if (currentMonitorSessionId === confirmTarget.id) onNavigate("monitors");
+            if (currentMonitorSessionId === confirmTarget.id || currentBuilderSessionId === confirmTarget.id) onNavigate("monitors");
           },
         },
       );
@@ -323,14 +336,15 @@ export function Sidebar({
           <section className="flex-[5] min-h-0 flex flex-col pt-2">
             {renderNavButton("monitors", "Monitors")}
             <div className="flex-1 min-h-0 overflow-y-auto scrollbar-none space-y-0.5 mt-1">
-              {monitorSessions.length === 0 ? (
-                <div className="px-3 py-1 text-[11px] text-[#9c9890]/70">No monitor runs yet</div>
-              ) : monitorSessions.map((s) => {
-                const active = currentPage === "monitors" && currentMonitorSessionId === s.id;
+              {monitorItems.length === 0 ? (
+                <div className="px-3 py-1 text-[11px] text-[#9c9890]/70">No monitor chats or runs yet</div>
+              ) : monitorItems.map((s) => {
+                const active = currentPage === "monitors" && (s.monitorId ? currentMonitorSessionId : currentBuilderSessionId) === s.id;
+                const { monitorId } = s;
                 return (
                   <button
                     key={s.id}
-                    onClick={() => onSelectMonitorSession(s.monitorId, s.id)}
+                    onClick={() => (monitorId ? onSelectMonitorSession(monitorId, s.id) : onSelectBuilderChat(s.id))}
                     className={active ? theme.sessionItemActive : theme.sessionItem}
                   >
                     <span

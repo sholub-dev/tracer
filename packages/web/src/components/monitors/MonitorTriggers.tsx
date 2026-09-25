@@ -9,7 +9,6 @@ import { Spinner } from "../ui/Spinner";
 
 const STREAMING_POLL_MS = 5_000;
 const MAX_KEYS_SHOWN = 2;
-const TRIGGERS_PREVIEW = 5;
 
 type Trigger = NonNullable<ReturnType<ReturnType<typeof trpc.useUtils>["monitors"]["triggers"]["getData"]>>[number];
 
@@ -41,7 +40,7 @@ const TriggerRow = memo(function TriggerRow({ trigger: t, repeatLabels, onNaviga
       tabIndex={sessionId ? 0 : undefined}
       onClick={sessionId ? () => onNavigate(sessionId) : undefined}
       onKeyDown={sessionId ? (e) => { if (e.key === "Enter" && e.target === e.currentTarget) onNavigate(sessionId); } : undefined}
-      className={`px-5 py-2 border-t border-[#f0eee9] text-xs font-sans flex items-center gap-3 whitespace-nowrap ${
+      className={`px-5 py-2 text-xs font-sans flex items-center gap-3 whitespace-nowrap ${
         sessionId ? "cursor-pointer hover:bg-[#f5f4f0]/60" : ""
       }`}
     >
@@ -56,7 +55,11 @@ const TriggerRow = memo(function TriggerRow({ trigger: t, repeatLabels, onNaviga
         >
           Repeat of {repeatLabels.get(repeatOf) ?? "earlier run"}
         </button>
-      ) : t.status !== "investigating" && (
+      ) : sessionId ? (
+        <span className="shrink-0 text-[#2b5ea7]">Open session</span>
+      ) : t.status === "investigating" ? (
+        <span className="shrink-0 text-[#999999]">Session deleted</span>
+      ) : (
         <span className="shrink-0">
           <Badge variant="default">{t.status === "muted" ? "Alert off" : "Repeat"}</Badge>
         </span>
@@ -81,7 +84,6 @@ interface MonitorTriggersProps {
 }
 
 export const MonitorTriggers = memo(function MonitorTriggers({ monitorId, provider, query: monitorQuery, condition, chartQuery: monitorChartQuery, lastRunAt, since, onNavigate }: MonitorTriggersProps) {
-  const [showAll, setShowAll] = useState(false);
   const [open, setOpen] = useState(false);
   const sinceSeconds = sinceToSeconds(since);
   const utils = trpc.useUtils();
@@ -112,44 +114,35 @@ export const MonitorTriggers = memo(function MonitorTriggers({ monitorId, provid
 
   return (
     <>
-      <MonitorChart provider={provider} query={monitorQuery} condition={condition} chartQuery={monitorChartQuery} lastRunAt={lastRunAt} since={since} />
-
-      <div className="relative border-t border-[#e8e6e1]">
-        {/* Opens upward over the chart so the card (and its row) keeps its height. */}
+      {/* The list replaces the chart in place, so the card (and its grid row) keeps its height. */}
+      <div className="relative flex-1 flex flex-col min-h-[212px]">
+        <MonitorChart provider={provider} query={monitorQuery} condition={condition} chartQuery={monitorChartQuery} lastRunAt={lastRunAt} since={since} />
         {expanded && (
-          <div className="absolute inset-x-0 bottom-full z-20 max-h-[260px] overflow-y-auto bg-white border-t border-[#e8e6e1] shadow-[0_-4px_8px_rgba(0,0,0,0.04)]">
-            {(showAll ? triggers : triggers.slice(0, TRIGGERS_PREVIEW)).map((t) => (
+          <div className="absolute inset-0 z-20 overflow-y-auto bg-white border-t border-[#e8e6e1] divide-y divide-[#f0eee9]">
+            {triggers.map((t) => (
               <TriggerRow key={t.id} trigger={t} repeatLabels={repeatLabels} onNavigate={onNavigate} />
             ))}
           </div>
         )}
-        <div
-          role={hasTriggers ? "button" : undefined}
-          tabIndex={hasTriggers ? 0 : undefined}
-          aria-expanded={hasTriggers ? expanded : undefined}
-          onClick={hasTriggers ? toggleOpen : undefined}
-          onKeyDown={hasTriggers ? (e) => {
-            if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
-            e.preventDefault();
-            toggleOpen();
-          } : undefined}
-          className={`px-5 flex items-center justify-between py-3 ${
-            hasTriggers ? "cursor-pointer hover:bg-[#f5f4f0]/60" : ""
-          }`}
-        >
-          <span className={theme.cardTitle}>
-            Times fired ({triggers.length}){hasTriggers && ` ${expanded ? "∨" : ">"}`}
-          </span>
-          {expanded && triggers.length > TRIGGERS_PREVIEW && (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); setShowAll((v) => !v); }}
-              className="text-xs text-[#2b5ea7] hover:text-[#234d8a] font-sans"
-            >
-              {showAll ? "Show latest" : `Show all (${triggers.length})`}
-            </button>
-          )}
-        </div>
+      </div>
+
+      <div
+        role={hasTriggers ? "button" : undefined}
+        tabIndex={hasTriggers ? 0 : undefined}
+        aria-expanded={hasTriggers ? expanded : undefined}
+        onClick={hasTriggers ? toggleOpen : undefined}
+        onKeyDown={hasTriggers ? (e) => {
+          if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+          e.preventDefault();
+          toggleOpen();
+        } : undefined}
+        className={`px-5 flex items-center justify-between py-3 border-t border-[#e8e6e1] ${
+          hasTriggers ? "cursor-pointer hover:bg-[#f5f4f0]/60" : ""
+        }`}
+      >
+        <span className={theme.cardTitle}>
+          Times fired ({triggers.length}){hasTriggers && ` ${expanded ? "∨" : ">"}`}
+        </span>
       </div>
     </>
   );

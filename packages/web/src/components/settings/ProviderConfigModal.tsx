@@ -3,12 +3,14 @@ import { theme } from "../../lib/theme";
 import { Spinner } from "../ui/Spinner";
 import { Modal } from "../ui/Modal";
 
-interface ConfigField {
+export interface ConfigField {
   key: string;
   label: string;
   type: string;
   required?: boolean;
 }
+
+export type SaveResult = { success: boolean; error?: string };
 
 interface ProviderConfigModalProps {
   open: boolean;
@@ -17,7 +19,7 @@ interface ProviderConfigModalProps {
   formValues: Record<string, string>;
   onFormChange: (key: string, value: string) => void;
   existingConfig: Record<string, string> | null;
-  saveResult: { success: boolean; error?: string } | null;
+  saveResult: SaveResult | null;
   savePending: boolean;
   configured: boolean;
   /** Optional guidance rendered under the title (e.g. required token scopes). */

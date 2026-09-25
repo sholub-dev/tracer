@@ -7,6 +7,9 @@ import { CONFIG } from "../config.js";
 import { evaluateCondition, extractGroups, parseCondition, sumGroups, type Group } from "./condition.js";
 import { classifyGroups, pastSummaries, type TriggerGroup } from "./repeats.js";
 import { withTimeout } from "./validate.js";
+import { extractAnalysis } from "../agents/analysis.js";
+import { getTimezone } from "../lib/current-context.js";
+import { monitorAlertText, postSlack, readSlackConfig } from "../integrations/slack.js";
 
 type Monitor = typeof monitors.$inferSelect;
 
@@ -79,9 +82,40 @@ function buildMessage(
   lines.push(
     "",
     "If this matches a past issue, confirm with the fewest queries possible and say which one; otherwise investigate fully.",
-    "Find the root cause and end with a short summary.",
+    "Find the root cause and end with a short summary. Its last two lines must be exactly:",
+    "Severity: <critical|high|medium|low> (critical: outage or users blocked; high: a key flow degraded; medium: limited impact; low: noise or no user impact)",
+    "TL;DR: <one sentence: the actual issue and its root cause, not a restatement of the monitor; no personal data such as emails, names or account numbers>",
   );
   return lines.join("\n");
+}
+
+/** Never throws: a Slack failure is only logged. */
+async function notifySlack(context: Context, monitor: Monitor, value: number, classified: TriggerGroup[], triggeredAt: number, sessionId: string): Promise<void> {
+  let error: string;
+  try {
+    const slack = readSlackConfig(context.db);
+    if (!slack) return;
+    const row = context.db.select({ messages: chatSessions.messages }).from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
+    let analysis = "";
+    try {
+      analysis = row ? extractAnalysis(JSON.parse(row.messages)).analysis : "";
+    } catch { /* post without a summary */ }
+    const result = await postSlack(slack.webhookUrl, monitorAlertText({
+      name: monitor.name,
+      condition: monitor.condition,
+      value,
+      groups: classified.filter((g) => !g.repeat).map((g) => g.key),
+      triggeredAt,
+      analysis,
+      timeZone: getTimezone(context.db),
+      mentions: slack.mentions,
+    }));
+    if (!("error" in result)) return;
+    error = result.error;
+  } catch (err) {
+    error = err instanceof Error ? err.message : String(err);
+  }
+  console.warn(`[monitor] "${monitor.name}" Slack post failed:`, error);
 }
 
 function setStatus(context: Context, monitorId: string, fields: Partial<Pick<Monitor, "lastStatus" | "lastError" | "lastCheckedAt">>): void {
@@ -186,6 +220,7 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
       kind: SESSION_KIND.MONITOR,
       title: sessionTitle(monitor.name, classified),
       message,
+      onComplete: () => void notifySlack(context, monitor, value, classified, now, sessionId),
     });
     if ("error" in started) {
       context.db.delete(monitorTriggers).where(eq(monitorTriggers.id, triggerId)).run();

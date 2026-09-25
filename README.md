@@ -53,6 +53,7 @@ condition is met, it starts a debug session that finds the cause for you.
 - Each card shows live query results for the chosen range (24h / 7d / 30d / 90d) and the times it fired
 - Run toggle turns checks on or off; Alert toggle decides if a firing starts a debug session (off still records it)
 - Drag cards to reorder; drag the right edge to resize (50 / 75 / 100% width); card color shows the provider
+- Slack alerts: add an incoming webhook in Settings > Integrations. When a firing's debug session finishes, Tracer posts the issue it found to that channel: severity and a one-line root cause first, then the monitor that found it, tagging the Slack member IDs set there (repeats and firings with Alert off are not posted). Everyone in that channel sees these findings
 
 ## Settings
 
@@ -62,7 +63,7 @@ least-privilege API keys.
 
 - LLM backends: Anthropic (Claude), Google (Gemini via AI Studio or Vertex AI)
 - Data provider setup with connectivity tests
-- Jira integration
+- Jira and Slack integrations
 - Thinking budgets and step limits
 - Agent memory management
 
@@ -75,7 +76,8 @@ least-privilege API keys.
 **LLM:** Anthropic (Claude), Google (Gemini — AI Studio or Vertex AI)
 
 **Integrations:** Jira — the agent reads issue details and comment threads for
-incident context, and posts comments back only when you explicitly ask.
+incident context, and posts comments back only when you explicitly ask. Slack —
+monitor alerts are posted to one channel through an incoming webhook.
 
 ## Install
 

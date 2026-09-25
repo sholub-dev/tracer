@@ -2,6 +2,7 @@ import { z } from "zod";
 import { publicProcedure, router } from "../trpc.js";
 import { JiraClient, normalizeJiraDomain } from "../../integrations/jira/jira.client.js";
 import { readJiraConfig, writeJiraConfig, deleteJiraConfig } from "../../integrations/jira/config.js";
+import { readSlackConfig, writeSlackConfig, deleteSlackConfig, postSlack, parseMentions, mentionPrefix } from "../../integrations/slack.js";
 
 function maskToken(token: string): string {
   return token.length <= 4 ? "••••" : "••••••••" + token.slice(-4);
@@ -53,6 +54,31 @@ export const integrationsRouter = router({
 
   removeJira: publicProcedure.mutation(({ ctx }) => {
     deleteJiraConfig(ctx.db);
+    return { success: true };
+  }),
+
+  getSlack: publicProcedure.query(({ ctx }) => {
+    const config = readSlackConfig(ctx.db);
+    if (!config) return { configured: false, config: null };
+    return { configured: true, config: { webhookUrl: maskToken(config.webhookUrl), mentions: config.mentions ?? "" } };
+  }),
+
+  // Validated by posting a test message before persisting.
+  saveSlack: publicProcedure
+    .input(z.object({ webhookUrl: z.string().min(1), mentions: z.string().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const webhookUrl = input.webhookUrl.trim();
+      const mentions = input.mentions?.trim() ?? "";
+      const parsed = parseMentions(mentions);
+      if ("error" in parsed) return { success: false, error: parsed.error };
+      const result = await postSlack(webhookUrl, `${mentionPrefix(parsed.mentions)}Tracer is connected. Monitor alerts will be posted here.`);
+      if ("error" in result) return { success: false, error: result.error };
+      writeSlackConfig(ctx.db, { webhookUrl, mentions });
+      return { success: true };
+    }),
+
+  removeSlack: publicProcedure.mutation(({ ctx }) => {
+    deleteSlackConfig(ctx.db);
     return { success: true };
   }),
 });

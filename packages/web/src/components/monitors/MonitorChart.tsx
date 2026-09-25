@@ -1,10 +1,13 @@
 import { memo, useMemo } from "react";
 import { WEB_CONFIG } from "../../lib/config";
 import { parseThreshold, sinceToSeconds } from "../../lib/monitor-utils";
-import { substituteTimeRange, substituteWindow, unixNow } from "@tracer-sh/shared";
+import { substituteWindow, unixNow } from "@tracer-sh/shared";
 import { QueryChart } from "../charts/QueryChart";
 
 const CHART_HEIGHT = 180;
+const DAY = 86_400;
+// Fixed buckets per range preset (24h, 7d, 30d, 90d); NRQL's AUTO picks 6h buckets for 7d.
+const BUCKET_SECONDS: Record<number, number> = { [DAY]: 900, [7 * DAY]: 3600, [30 * DAY]: 21_600, [90 * DAY]: DAY };
 
 interface MonitorChartProps {
   provider: string;
@@ -17,12 +20,15 @@ interface MonitorChartProps {
 
 export const MonitorChart = memo(function MonitorChart({ provider, query: monitorQuery, condition, chartQuery: monitorChartQuery, lastRunAt, since }: MonitorChartProps) {
   const sinceSeconds = sinceToSeconds(since);
-  // Refresh the chart only when a run crosses a chart bucket boundary.
-  const bucketSeconds = Math.max(300, sinceSeconds / WEB_CONFIG.maxBuckets);
-  const refreshKey = Math.floor((lastRunAt ?? 0) / bucketSeconds);
+  const bucketSeconds = BUCKET_SECONDS[sinceSeconds] ?? Math.max(300, Math.ceil(sinceSeconds / WEB_CONFIG.maxBuckets / 60) * 60);
+  const refreshKey = lastRunAt ?? 0;
   const chartQuery = useMemo(() => {
-    if (provider !== "posthog") return `${substituteTimeRange(monitorQuery, since)} TIMESERIES AUTO`;
-    const until = Math.ceil(unixNow() / bucketSeconds) * bucketSeconds;
+    // Buckets end on local clock boundaries, so the last point is the current bucket, not one hours old.
+    const offset = new Date().getTimezoneOffset() * 60;
+    const until = Math.ceil((unixNow() - offset) / bucketSeconds) * bucketSeconds + offset;
+    if (provider !== "posthog") {
+      return `${substituteWindow(provider, monitorQuery, until - sinceSeconds, until)} TIMESERIES ${bucketSeconds / 60} minutes`;
+    }
     return substituteWindow(provider, monitorChartQuery ?? monitorQuery, until - sinceSeconds, until);
   }, [provider, monitorQuery, monitorChartQuery, since, sinceSeconds, bucketSeconds, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 

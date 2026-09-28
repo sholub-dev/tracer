@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { chmodSync, mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, statSync } from "node:fs";
 import Database, { type Database as DatabaseType } from "better-sqlite3-multiple-ciphers";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "./schema.js";
@@ -14,12 +14,15 @@ chmodSync(TRACER_HOME, 0o700);
 chmodSync(dataDir, 0o700);
 
 const dbPath = join(dataDir, "tracer.db");
-const keyHex = resolveDbKey(TRACER_HOME);
+// An empty file (created on open, never written) holds no data, so it does not block key generation.
+const plaintext = isPlaintext(dbPath);
+const hasEncryptedDb = !plaintext && existsSync(dbPath) && statSync(dbPath).size > 0;
+const keyHex = resolveDbKey(TRACER_HOME, { hasEncryptedDb });
 
 // Detection-driven, one-time migration: a plaintext DB left by a pre-encryption
 // version is converted in place on the first boot of the encrypted build. Fresh
 // installs have no file yet and are created encrypted below.
-if (isPlaintext(dbPath)) {
+if (plaintext) {
   migratePlaintextToEncrypted(dbPath, keyHex);
 }
 

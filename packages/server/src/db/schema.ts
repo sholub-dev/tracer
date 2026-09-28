@@ -52,7 +52,6 @@ export const chatSessions = sqliteTable("chat_sessions", {
     .notNull()
     .$defaultFn(() => unixNow()),
 }, (t) => [
-  index("idx_sessions_updated").on(t.updatedAt),
   index("idx_sessions_status_kind").on(t.status, t.kind, t.id),
   index("idx_sessions_list").on(t.updatedAt, t.kind, t.status, t.id, t.title),
 ]);
@@ -104,7 +103,6 @@ export const monitors = sqliteTable("monitors", {
   lastCheckedAt: integer("last_checked_at"),
   lastStatus: text("last_status").notNull().default("ok"),
   lastError: text("last_error"),
-  chatSessionId: text("chat_session_id"),
   sortOrder: integer("sort_order"),
   cardWidth: integer("card_width"),
   alertEnabled: integer("alert_enabled").notNull().default(1),
@@ -147,26 +145,6 @@ export const memoryOperations = sqliteTable("memory_operations", {
   index("idx_memops_session").on(t.sessionId),
 ]);
 
-export const subAgentRuns = sqliteTable("sub_agent_runs", {
-  id: text("id").primaryKey(),
-  sessionId: text("session_id"),
-  provider: text("provider").notNull(),
-  task: text("task").notNull(),
-  queryCount: integer("query_count").notNull().default(0),
-  errorCount: integer("error_count").notNull().default(0),
-  stepCount: integer("step_count").notNull().default(0),
-  truncated: integer("truncated").notNull().default(0),
-  durationMs: integer("duration_ms").notNull().default(0),
-  finishReason: text("finish_reason"),
-  createdAt: integer("created_at")
-    .notNull()
-    .$defaultFn(() => unixNow()),
-}, (t) => [
-  index("idx_sub_agent_runs_provider").on(t.provider),
-  index("idx_sub_agent_runs_created").on(t.createdAt),
-  index("idx_sub_agent_runs_session").on(t.sessionId),
-]);
-
 export const agentRuns = sqliteTable("agent_runs", {
   id: text("id").primaryKey(),
   sessionId: text("session_id").notNull().references(() => chatSessions.id, { onDelete: "cascade" }),
@@ -183,5 +161,4 @@ export const agentRuns = sqliteTable("agent_runs", {
     .$defaultFn(() => unixNow()),
 }, (t) => [
   index("idx_agent_runs_session").on(t.sessionId),
-  index("idx_agent_runs_type").on(t.agentType),
 ]);

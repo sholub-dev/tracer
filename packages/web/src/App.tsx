@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useSyncExternalStore } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
 import { FEATURES } from "@tracer-sh/shared";
 import { Shell } from "./components/layout/Shell";
 import { Sidebar, type Page } from "./components/layout/Sidebar";
@@ -55,8 +55,9 @@ function subscribe(cb: () => void) {
   return () => window.removeEventListener("popstate", cb);
 }
 
-function pushPath(path: string) {
-  window.history.pushState(null, "", path);
+function pushPath(path: string, replace = false) {
+  if (replace) window.history.replaceState(null, "", path);
+  else window.history.pushState(null, "", path);
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
@@ -78,9 +79,24 @@ export function App() {
     pushPath(`/debug/${id}`);
   }, []);
 
-  const newSession = useCallback(() => {
-    pushPath("/debug");
+  // A brand-new chat skips loading a session that doesn't exist yet; any later visit loads it.
+  const [newSessionId, setNewSessionId] = useState<string | null>(null);
+  const startNewSession = useCallback((replace = false) => {
+    const id = crypto.randomUUID();
+    setNewSessionId(id);
+    pushPath(`/debug/${id}`, replace);
   }, []);
+  useEffect(() => {
+    if (newSessionId && currentSessionId !== newSessionId) setNewSessionId(null);
+  }, [currentSessionId, newSessionId]);
+
+  const newSession = useCallback(() => startNewSession(), [startNewSession]);
+
+  // A bare /debug (or /) visit gets its id before paint, so Debug mounts once.
+  const needsSessionId = currentPage === "debug" && !currentSessionId;
+  useLayoutEffect(() => {
+    if (needsSessionId) startNewSession(true);
+  }, [needsSessionId, startNewSession]);
 
   const selectDashboard = useCallback((id: string) => {
     pushPath(`/dashboard/${id}`);
@@ -123,12 +139,8 @@ export function App() {
             onSelectDashboard={selectDashboard}
           />
         )}
-        {currentPage === "debug" && (
-          <Debug
-            key={currentSessionId ?? "new"}
-            sessionId={currentSessionId}
-            onSessionChange={selectSession}
-          />
+        {currentPage === "debug" && currentSessionId && (
+          <Debug key={currentSessionId} sessionId={currentSessionId} isNew={currentSessionId === newSessionId} />
         )}
         {Monitors && currentPage === "monitors" && (
           <Monitors

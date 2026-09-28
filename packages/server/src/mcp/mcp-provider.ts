@@ -4,11 +4,7 @@ import { dirname, resolve } from "node:path";
 import { createMCPClient } from "@ai-sdk/mcp";
 import { Experimental_StdioMCPTransport } from "@ai-sdk/mcp/mcp-stdio";
 import type {
-  TracerError,
-  TracerLogEntry,
-  TracerTransaction,
   PingResult,
-  TimeRange,
   ChatToolWriter,
   ChatToolMemoryContext,
   ProviderToolKit,
@@ -152,16 +148,6 @@ export class McpProvider extends BaseProvider {
     return { tools: {} };
   }
 
-  // Structured data methods — MCP-backed providers expose data through tool calls, not these typed APIs.
-  async getErrors(_timeRange: TimeRange): Promise<TracerError[]> {
-    return [];
-  }
-  async getTransactions(_timeRange: TimeRange): Promise<TracerTransaction[]> {
-    return [];
-  }
-  async getLogs(_timeRange: TimeRange, _filter?: string): Promise<TracerLogEntry[]> {
-    return [];
-  }
   async executeRawQuery(_query: string): Promise<unknown> {
     return { error: "Raw queries are not supported by MCP-backed providers." };
   }

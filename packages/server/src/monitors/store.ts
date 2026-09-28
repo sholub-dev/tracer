@@ -2,6 +2,7 @@ import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import { unixNow } from "@tracer-sh/shared";
 import type { Db } from "../db/client.js";
 import { chatSessions, monitors, monitorTriggers } from "../db/schema.js";
+import { sessionChanged } from "../lib/session-events.js";
 import type { MonitorDraft } from "./validate.js";
 
 export function saveMonitor(db: Db, id: string, draft: MonitorDraft & { name: string }): void {
@@ -56,5 +57,6 @@ export function deleteMonitor(db: Db, activeStreams: ReadonlyMap<string, unknown
     if (toDelete.length > 0) tx.delete(chatSessions).where(inArray(chatSessions.id, toDelete)).run();
     tx.delete(monitors).where(eq(monitors.id, id)).run();
   });
+  sessionChanged(...toDelete);
   return monitor;
 }

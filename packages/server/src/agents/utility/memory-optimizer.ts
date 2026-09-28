@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { tool, generateText, stepCountIs } from "ai";
+import { tool, generateText, isStepCount } from "ai";
 import { eq } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { toolMemories } from "../../db/schema.js";
@@ -120,10 +120,10 @@ Be conservative. When unsure, keep the memory.`;
     await generateText({
       model: resolved.model,
       temperature: 0,
-      system: SYSTEM_PROMPT,
+      instructions: SYSTEM_PROMPT,
       prompt,
       tools,
-      stopWhen: stepCountIs(30),
+      stopWhen: isStepCount(30),
     });
 
     return { success: true, stats };

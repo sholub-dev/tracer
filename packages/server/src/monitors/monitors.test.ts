@@ -6,7 +6,7 @@ import { substituteWindow } from "@tracer-sh/shared";
 import * as schema from "../db/schema.js";
 import type { Db } from "../db/client.js";
 import { evaluateCondition, extractGroups, parseCondition, sumGroups } from "./condition.js";
-import { byRelevance, classifyGroups } from "./repeats.js";
+import { byRelevance, classifyGroups, readPastSessionTool } from "./repeats.js";
 import { isFailedWindow, nextWindow } from "./scheduler.js";
 import { validateMonitor } from "./validate.js";
 import { saveMonitor, setMonitorToggles } from "./store.js";
@@ -181,7 +181,7 @@ test("setMonitorToggles changes only the given toggles and resets the window whe
   db.$client.exec(`CREATE TABLE monitors (
     id TEXT PRIMARY KEY, name TEXT NOT NULL, provider TEXT NOT NULL, query TEXT NOT NULL, chart_query TEXT, condition TEXT NOT NULL,
     frequency_seconds INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, alert_enabled INTEGER NOT NULL DEFAULT 1,
-    last_status TEXT, last_error TEXT, last_checked_at INTEGER, chat_session_id TEXT, sort_order INTEGER, card_width INTEGER,
+    last_status TEXT, last_error TEXT, last_checked_at INTEGER, sort_order INTEGER, card_width INTEGER,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
   )`);
   saveMonitor(db, "m1", { name: "A", provider: "newrelic", query: "q", chartQuery: null, condition: "> 0", frequencySeconds: 300 });
@@ -191,4 +191,17 @@ test("setMonitorToggles changes only the given toggles and resets the window whe
   assert.deepEqual(setMonitorToggles(db, "m1", { run: true }), { name: "A", run: true, alert: false });
   assert.equal(db.select().from(schema.monitors).get()?.lastCheckedAt, null);
   assert.deepEqual(setMonitorToggles(db, "nope", { run: true }), { error: "Monitor not found", code: "NOT_FOUND" });
+});
+
+test("readPastSessionTool loads the past-session list lazily, once, and only allows listed ids", async () => {
+  let loads = 0;
+  const t = readPastSessionTool(() => {
+    loads++;
+    return [{ sessionId: "s1", triggeredAt: 0, keys: ["a"], analysis: "x" }];
+  });
+  assert.equal(loads, 0);
+  const run = (sessionId: string) => t.execute!({ sessionId }, { toolCallId: "c", messages: [] } as never);
+  assert.equal(((await run("s1")) as { analysis: string }).analysis, "x");
+  assert.ok("error" in ((await run("s2")) as object));
+  assert.equal(loads, 1);
 });

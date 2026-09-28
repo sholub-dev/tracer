@@ -1,13 +1,11 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { trpc } from "../../lib/trpc";
 import { theme } from "../../lib/theme";
-import { usePolling } from "../../lib/hooks";
 import { formatTime, sinceToSeconds } from "../../lib/monitor-utils";
 import { MonitorChart } from "./MonitorChart";
 import { Badge } from "../ui/Badge";
 import { Spinner } from "../ui/Spinner";
 
-const STREAMING_POLL_MS = 5_000;
 const MAX_KEYS_SHOWN = 2;
 
 type Trigger = NonNullable<ReturnType<ReturnType<typeof trpc.useUtils>["monitors"]["triggers"]["getData"]>>[number];
@@ -93,7 +91,6 @@ export const MonitorTriggers = memo(function MonitorTriggers({ monitorId, provid
   const hasTriggers = triggers.length > 0;
   const expanded = open && hasTriggers;
   const toggleOpen = useCallback(() => setOpen((v) => !v), []);
-  const streaming = triggers.some((t) => t.sessionStatus === "streaming");
 
   const seenRunAt = useRef(lastRunAt);
   useEffect(() => {
@@ -101,8 +98,6 @@ export const MonitorTriggers = memo(function MonitorTriggers({ monitorId, provid
     seenRunAt.current = lastRunAt;
     utils.monitors.triggers.invalidate({ monitorId });
   }, [lastRunAt, monitorId, utils]);
-
-  usePolling(() => utils.monitors.triggers.invalidate({ monitorId }), STREAMING_POLL_MS, streaming, false);
 
   const repeatLabels = useMemo(() => {
     const labels = new Map<string, string>();

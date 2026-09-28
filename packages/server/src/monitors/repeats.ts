@@ -1,6 +1,7 @@
 import { and, desc, eq, gte, isNotNull, lt } from "drizzle-orm";
 import { z } from "zod";
-import { tool, type UIMessage } from "ai";
+import { tool, type Tool, type UIMessage } from "ai";
+import { SESSION_KIND } from "@tracer-sh/shared";
 import type { Db } from "../db/client.js";
 import { chatSessions, monitorTriggers } from "../db/schema.js";
 import { extractAnalysis } from "../agents/analysis.js";
@@ -92,11 +93,15 @@ export function pastSessions(db: Db, monitorId: string, currentKeys: string[], b
   return picked.sort((a, b) => b.triggeredAt - a.triggeredAt);
 }
 
-export function readPastSessionTool(sessions: PastSession[]) {
+type PastSessionResult = { error: string } | { sessionId: string; triggeredAt: string; groups: string[]; analysis: string };
+
+export function readPastSessionTool(load: () => PastSession[]): Tool<{ sessionId: string }, PastSessionResult> {
+  let sessions: PastSession[] | undefined;
   return tool({
     description: "Read the full analysis of a past debug session of this monitor. Only the session ids listed in the prompt are allowed.",
     inputSchema: z.object({ sessionId: z.string().describe("Session id from the recent past sessions list") }),
     execute: async ({ sessionId }) => {
+      sessions ??= load();
       const s = sessions.find((p) => p.sessionId === sessionId);
       if (!s) return { error: `Session ${sessionId} is not one of the listed past sessions` };
       return { sessionId, triggeredAt: new Date(s.triggeredAt * 1000).toISOString(), groups: s.keys, analysis: s.analysis };
@@ -106,6 +111,8 @@ export function readPastSessionTool(sessions: PastSession[]) {
 
 /** For follow-up chats in a monitor session: the past sessions as of its firing. */
 export function pastSessionToolFor(db: Db, sessionId: string): ReturnType<typeof readPastSessionTool> | null {
+  const session = db.select({ kind: chatSessions.kind }).from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
+  if (session?.kind !== SESSION_KIND.MONITOR) return null;
   const trigger = db
     .select({ monitorId: monitorTriggers.monitorId, triggeredAt: monitorTriggers.triggeredAt, groups: monitorTriggers.groups })
     .from(monitorTriggers)
@@ -113,5 +120,5 @@ export function pastSessionToolFor(db: Db, sessionId: string): ReturnType<typeof
     .get();
   if (!trigger) return null;
   const keys = parseTriggerGroups(trigger.groups).map((g) => g.key);
-  return readPastSessionTool(pastSessions(db, trigger.monitorId, keys, trigger.triggeredAt));
+  return readPastSessionTool(() => pastSessions(db, trigger.monitorId, keys, trigger.triggeredAt));
 }

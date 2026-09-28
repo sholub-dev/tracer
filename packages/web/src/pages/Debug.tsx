@@ -12,19 +12,9 @@ import { DEFAULT_SESSION_TITLE, SESSION_KIND, UNIFIED_SCOPE, analysisSectionPart
 import { SessionTitle } from "../components/debug/SessionTitle";
 import { CostDisplay, computeCostBreakdown, type CostBreakdown } from "../components/debug/CostDisplay";
 import { EditMessageForm } from "../components/debug/EditMessageForm";
+import { useParsedMessages } from "../lib/chat-utils";
 
-interface DebugProps {
-  sessionId: string | null;
-  onSessionChange: (id: string) => void;
-}
-
-export function Debug({ sessionId, onSessionChange }: DebugProps) {
-  const resolvedId = useMemo(() => sessionId ?? crypto.randomUUID(), [sessionId]);
-
-  useEffect(() => {
-    if (!sessionId) onSessionChange(resolvedId);
-  }, [sessionId, resolvedId, onSessionChange]);
-
+export function Debug({ sessionId, isNew }: { sessionId: string; isNew: boolean }) {
   // Default everyone into the cross-provider "ALL" (unified) scope; a stored preference
   // (set when the user picks a specific provider) overrides it and carries across sessions.
   const [activeProvider, setActiveProviderRaw] = useState<string | null>(
@@ -38,15 +28,11 @@ export function Debug({ sessionId, onSessionChange }: DebugProps) {
   const utils = trpc.useUtils();
   const markViewed = trpc.sessions.markViewed.useMutation();
 
-  const sessionQuery = trpc.sessions.get.useQuery(
-    { id: resolvedId },
-    { enabled: !!sessionId, gcTime: 0 },
-  );
+  const sessionQuery = trpc.sessions.get.useQuery({ id: sessionId }, { gcTime: 0, enabled: !isNew });
   const sessionStatus = sessionQuery.data?.status;
 
   // Mark session as viewed immediately on select — optimistically update caches
   useEffect(() => {
-    if (!sessionId) return;
     const listData = utils.sessions.list.getData();
     const session = listData?.find((s) => s.id === sessionId);
     if (!session || session.status === "idle" || session.status === "streaming") return;
@@ -62,14 +48,11 @@ export function Debug({ sessionId, onSessionChange }: DebugProps) {
     markViewed.mutate({ id: sessionId });
   }, [sessionId, sessionStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const initialMessages = sessionQuery.data?.messages as UIMessage[] | undefined;
+  const initialMessages = useParsedMessages(sessionQuery.data?.messagesJson);
 
   // Separate cost query — decoupled from sessions.get so invalidating cost
   // data after streaming never triggers the loading state that unmounts the chat.
-  const costQuery = trpc.sessions.getCost.useQuery(
-    { id: resolvedId },
-    { enabled: !!sessionId },
-  );
+  const costQuery = trpc.sessions.getCost.useQuery({ id: sessionId });
   const costBreakdown = useMemo(() => {
     const d = costQuery.data;
     if (!d?.agents?.length) return null;
@@ -79,7 +62,7 @@ export function Debug({ sessionId, onSessionChange }: DebugProps) {
 
   // Wait for session data to load when resuming
   let body: React.ReactNode;
-  if (sessionId && sessionQuery.isLoading) {
+  if (sessionQuery.isLoading) {
     body = (
       <div className={theme.chatContainer}>
         <div className="flex items-center justify-center h-full">
@@ -105,13 +88,13 @@ export function Debug({ sessionId, onSessionChange }: DebugProps) {
     }
     body = (
       <LiveStreamView
-        key={resolvedId}
-        sessionId={resolvedId}
+        key={sessionId}
+        sessionId={sessionId}
         initialMessages={liveTail}
         onComplete={() => sessionQuery.refetch()}
         header={
           <>
-            <SessionTitle chatId={resolvedId} hasMessages isLoading={false} onPostMortem={() => {}} streaming />
+            <SessionTitle chatId={sessionId} hasMessages isLoading={false} onPostMortem={() => {}} streaming />
             {liveUpTo > 0 && liveData.summary && (
               <div className="px-10">
                 <SessionSummaryBlock
@@ -130,8 +113,8 @@ export function Debug({ sessionId, onSessionChange }: DebugProps) {
   } else if (sessionQuery.data?.kind === SESSION_KIND.IMPORTED) {
     body = (
       <ImportedView
-        key={resolvedId}
-        sessionId={resolvedId}
+        key={sessionId}
+        sessionId={sessionId}
         sessionTitle={sessionQuery.data.title}
         initialMessages={initialMessages ?? []}
       />
@@ -139,8 +122,8 @@ export function Debug({ sessionId, onSessionChange }: DebugProps) {
   } else {
     body = (
       <DebugChat
-        key={resolvedId}
-        chatId={resolvedId}
+        key={sessionId}
+        chatId={sessionId}
         initialMessages={initialMessages}
         costBreakdown={costBreakdown}
         activeProvider={activeProvider}
@@ -166,7 +149,6 @@ interface ImportedViewProps {
 }
 
 function ImportedView({ sessionId, sessionTitle, initialMessages }: ImportedViewProps) {
-  const coreRef = useRef<ChatCoreRef>(null);
   const first = initialMessages[0] as UIMessage & {
     metadata?: { sourceTitle?: string; sourceCreatedAt?: number };
   } | undefined;
@@ -196,7 +178,6 @@ function ImportedView({ sessionId, sessionTitle, initialMessages }: ImportedView
   return (
     <div className={theme.chatContainer}>
       <ChatCore
-        ref={coreRef}
         chatId={sessionId}
         apiEndpoint="/api/chat"
         initialMessages={initialMessages}
@@ -234,10 +215,6 @@ function DebugChat({ chatId, initialMessages, costBreakdown, activeProvider, set
   const [hasBoundary, setHasBoundary] = useState(
     () => hasCompactBoundary(initialMessages ?? []),
   );
-  const [needsRetry, setNeedsRetry] = useState(() => {
-    if (!initialMessages?.length) return false;
-    return initialMessages[initialMessages.length - 1]?.role === "user";
-  });
   const [showOriginals, setShowOriginals] = useState(false);
   // Compacting is a deliberate two-step flow: the header "Compact" button
   // enters selection mode, then the user picks the boundary message.
@@ -275,29 +252,13 @@ function DebugChat({ chatId, initialMessages, costBreakdown, activeProvider, set
     if (res.summaryCleared) clearSummaryCache();
   };
 
+  const titleQuery = trpc.sessions.getTitle.useQuery({ id: chatId }, { enabled: hasMessages });
+  const liveTitle = titleQuery.data?.title ?? sessionTitle;
+
   const resolveSourceTitle = useCallback(async () => {
-    const fresh = await utils.sessions.get.fetch({ id: chatId });
+    const fresh = await utils.sessions.getTitle.fetch({ id: chatId }, { staleTime: 0 });
     return fresh?.title;
   }, [utils, chatId]);
-
-  const handleRetry = async () => {
-    if (!coreRef.current) return;
-    const msgs = coreRef.current.messages;
-    const last = msgs[msgs.length - 1];
-    if (!last || last.role !== "user") return;
-    const textPart = last.parts.find((p) => p.type === "text");
-    if (!textPart || textPart.type !== "text") return;
-    // The failed user message is already persisted; trim the server copy too
-    // so client and server indices stay aligned for later edits/compaction.
-    try {
-      await truncateTo(msgs.length - 1);
-    } catch {
-      return; // server unreachable — keep state untouched, Retry stays available
-    }
-    coreRef.current.setMessages(msgs.slice(0, -1));
-    coreRef.current.scrollToBottom({ animation: "instant" });
-    coreRef.current.sendMessage({ text: textPart.text });
-  };
 
   const handlePostMortem = () => {
     if (!coreRef.current) return;
@@ -391,16 +352,15 @@ Base the report entirely on the investigation data and findings from this conver
       if (utils.sessions.get.getData({ id: chatId })) {
         utils.sessions.get.setData({ id: chatId }, (prev) => (prev ? { ...prev, ...result } : prev));
       } else {
-        // Session created in this view: the cache holds null from before the
-        // row existed, so a setData merge would no-op and hide the summary.
-        utils.sessions.get.invalidate({ id: chatId });
+        // New chat: the query is disabled and uncached, so invalidate() would not refetch.
+        await utils.sessions.get.fetch({ id: chatId }, { staleTime: 0 }).catch(() => {});
       }
       utils.sessions.getCost.invalidate({ id: chatId });
       setShowOriginals(false);
     } catch (err) {
       setCompactError(err instanceof Error ? err.message : "Failed to summarize the conversation");
       // The server may still have committed (e.g. the response was lost) — re-sync.
-      utils.sessions.get.invalidate({ id: chatId });
+      utils.sessions.get.fetch({ id: chatId }, { staleTime: 0 }).catch(() => {});
     } finally {
       setCompacting(null);
     }
@@ -610,7 +570,7 @@ Base the report entirely on the investigation data and findings from this conver
         placeholder="Ask a debugging question..."
         initialMessages={initialMessages}
         variant="full"
-        sourceTitle={sessionTitle}
+        sourceTitle={liveTitle}
         sourceCreatedAt={sessionUpdatedAt}
         resolveSourceTitle={resolveSourceTitle}
         scrollHeader={sessionTitleHeader}
@@ -646,8 +606,6 @@ Base the report entirely on the investigation data and findings from this conver
           }
           if (msgs.length > 0) setHasMessages(true);
           setHasBoundary(hasCompactBoundary(msgs));
-          const last = msgs[msgs.length - 1];
-          setNeedsRetry(!loading && msgs.length > 0 && last?.role === "user");
           if (status === "submitted") {
             let added = false;
             utils.sessions.list.setData(undefined, (prev) => {
@@ -667,11 +625,6 @@ Base the report entirely on the investigation data and findings from this conver
               markViewed.mutate({ id: chatId });
             }
             utils.sessions.getCost.invalidate({ id: chatId });
-            // Only refetch for a title update while the title is still pending
-            // — avoids a round-trip on every completion of a named session.
-            if (sessionTitle === DEFAULT_SESSION_TITLE) {
-              utils.sessions.get.invalidate({ id: chatId });
-            }
           }
         }}
         extraBody={activeProvider ? { activeProvider } : undefined}
@@ -679,19 +632,6 @@ Base the report entirely on the investigation data and findings from this conver
           costBreakdown && (costBreakdown.totalInput > 0 || costBreakdown.totalOutput > 0)
             ? <CostDisplay breakdown={costBreakdown} activeProvider={activeProvider} onToggle={setActiveProvider} />
             : <div className="px-10 pt-2 flex justify-end"><ProviderToggle activeProvider={activeProvider} onToggle={setActiveProvider} /></div>
-        }
-        afterMessages={
-          needsRetry && !isCompacting ? (
-            <div className="flex justify-center mt-4">
-              <button
-                type="button"
-                onClick={handleRetry}
-                className={theme.chatContinueButton}
-              >
-                Retry
-              </button>
-            </div>
-          ) : undefined
         }
         renderMessage={renderMessage}
       />

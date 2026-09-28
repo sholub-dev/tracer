@@ -116,7 +116,7 @@ export const theme = {
   chatSeparator: "my-6 border-b border-[#e8e6e1]",
   chatInputArea: "px-10 py-5 bg-white border-t border-[#d4d2cd]",
   chatInput:
-    "flex-1 bg-white border border-[#d4d2cd] rounded px-4 py-2.5 text-base text-[#2c2c2c] placeholder-[#9c9890] focus:outline-none focus:border-[#2b5ea7] disabled:opacity-50 font-serif resize-none overflow-y-auto max-h-40",
+    "flex-1 bg-white border border-[#d4d2cd] rounded px-4 py-2.5 text-base text-[#2c2c2c] placeholder-[#9c9890] focus:outline-none focus:border-[#2b5ea7] disabled:opacity-50 font-serif resize-none overflow-y-auto max-h-40 min-w-0 [field-sizing:content]",
   chatButton:
     "px-5 py-2.5 text-sm bg-[#2b5ea7] text-white font-sans font-medium rounded hover:bg-[#234d8a] disabled:opacity-50 disabled:cursor-not-allowed",
   chatThinking: "text-[#2b5ea7] text-base italic",
@@ -252,7 +252,7 @@ export const theme = {
   panelChatSeparator: "my-3 border-b border-[#d4d2cd]",
   panelChatInputArea: "px-4 py-3 bg-white border-t border-[#d4d2cd]",
   panelChatInput: "flex-1 bg-white border border-[#d4d2cd] rounded px-3 py-2 text-sm text-[#2c2c2c] placeholder-[#9c9890] focus:outline-none focus:border-[#2b5ea7] disabled:opacity-50 font-sans",
-  panelChatTextarea: "flex-1 bg-white border border-[#d4d2cd] rounded px-3 py-2 text-sm text-[#2c2c2c] placeholder-[#9c9890] focus:outline-none focus:border-[#2b5ea7] disabled:opacity-50 font-sans resize-none overflow-y-auto max-h-24",
+  panelChatTextarea: "flex-1 bg-white border border-[#d4d2cd] rounded px-3 py-2 text-sm text-[#2c2c2c] placeholder-[#9c9890] focus:outline-none focus:border-[#2b5ea7] disabled:opacity-50 font-sans resize-none overflow-y-auto max-h-24 min-w-0 [field-sizing:content]",
 
   // ── Time range picker ──
   timePickerActive: "bg-[#2b5ea7] text-white",

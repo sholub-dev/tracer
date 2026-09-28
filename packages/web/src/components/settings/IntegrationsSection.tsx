@@ -188,6 +188,43 @@ function IntegrationCard({ label, fields, note, configured, existingConfig, pend
   );
 }
 
+const SKILL_LABELS = { claude: "Claude Code", cursor: "Cursor" } as const;
+const SKILL_STATE_TEXT = { installed: "Installed", outdated: "Update available", missing: "Not installed" } as const;
+
+function AgentSkillCard() {
+  const utils = trpc.useUtils();
+  const status = trpc.skill.status.useQuery();
+  const install = trpc.skill.install.useMutation({ onSettled: () => utils.skill.status.invalidate() });
+
+  return (
+    <div className={theme.settingsCard + " w-80 space-y-3"}>
+      <div>
+        <div className="font-medium">Agent skill</div>
+        <div className="text-xs opacity-60">Let Claude Code or Cursor run Tracer investigations from your editor.</div>
+      </div>
+      {status.error && <div className={theme.errorText}>{status.error.message}</div>}
+      {status.data?.map((s) => (
+        <div key={s.target} className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-sm">
+              {SKILL_LABELS[s.target]} <span className="text-xs opacity-60">{SKILL_STATE_TEXT[s.state]}</span>
+            </div>
+            <div className={theme.metaText + " truncate"}>{s.path}</div>
+          </div>
+          <button
+            onClick={() => install.mutate(s.target)}
+            disabled={s.state === "installed" || install.isPending}
+            className={theme.secondaryBtn}
+          >
+            {s.state === "outdated" ? "Update" : s.state === "installed" ? "Installed" : "Install"}
+          </button>
+        </div>
+      ))}
+      {install.error && <div className={theme.errorText}>{install.error.message}</div>}
+    </div>
+  );
+}
+
 export function IntegrationsSection() {
   const utils = trpc.useUtils();
   const jira = trpc.integrations.getJira.useQuery();
@@ -223,6 +260,7 @@ export function IntegrationsSection() {
         onSave={(v) => saveSlack.mutateAsync({ webhookUrl: v.webhookUrl ?? "", mentions: v.mentions ?? "" })}
         onRemove={() => removeSlack.mutateAsync()}
       />
+      <AgentSkillCard />
     </div>
   );
 }

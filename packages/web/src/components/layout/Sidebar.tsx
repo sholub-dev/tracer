@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DEFAULT_SESSION_TITLE, FEATURES, ImportedAnalysisSchema, SESSION_KIND } from "@tracer-sh/shared";
-import { useFileDrop, usePolling } from "../../lib/hooks";
+import { useFileDrop, useSessionLiveUpdates } from "../../lib/hooks";
 import { theme } from "../../lib/theme";
 import { trpc } from "../../lib/trpc";
 import { WEB_CONFIG } from "../../lib/config";
@@ -40,6 +40,38 @@ const NavIcon = ({ page }: { page: Page }) => {
   }
 };
 
+function SessionRow({ title, active, highlighted, animateIn, onSelect, onDelete }: {
+  title: string;
+  active: boolean;
+  highlighted: boolean;
+  animateIn: boolean;
+  onSelect: () => void;
+  onDelete: (e: React.MouseEvent) => void;
+}) {
+  // Captured at mount so the classes stay stable and each animation plays once.
+  const [enter] = useState(animateIn);
+  const [firstTitle] = useState(title);
+  return (
+    <button
+      onClick={onSelect}
+      className={`${active ? theme.sessionItemActive : theme.sessionItem} ${enter ? "animate-row-in" : ""}`}
+    >
+      <span
+        key={title}
+        className={`truncate flex-1 text-left transition-colors ${highlighted ? "text-[#2b5ea7] underline" : ""} ${
+          title !== firstTitle ? "animate-title-in" : ""
+        }`}
+        title={title}
+      >
+        {title}
+      </span>
+      <span onClick={onDelete} className={theme.sessionDeleteBtn}>
+        ×
+      </span>
+    </button>
+  );
+}
+
 export function Sidebar({
   currentPage,
   onNavigate,
@@ -52,28 +84,24 @@ export function Sidebar({
   currentBuilderSessionId,
   onSelectBuilderChat,
 }: SidebarProps) {
-  const sessionsQuery = trpc.sessions.list.useQuery();
+  // Live updates arrive over the session change stream; focus refetch is only a safety net.
+  const sessionsQuery = trpc.sessions.list.useQuery(undefined, { refetchOnWindowFocus: true });
   const dashboardsQuery = trpc.dashboards.list.useQuery(undefined, {
     enabled: FEATURES.dashboards && currentPage === "dashboard",
   });
   const builderChatsQuery = trpc.monitors.builderChats.useQuery(undefined, {
     enabled: FEATURES.monitors,
+    refetchOnWindowFocus: true,
   });
-  const activeStatusQuery = trpc.sessions.activeCount.useQuery();
+  const activeStatusQuery = trpc.sessions.activeCount.useQuery(undefined, { refetchOnWindowFocus: true });
   const utils = trpc.useUtils();
+  useSessionLiveUpdates();
 
-  // Refresh the active-count (which drives the nav "done" badge) every tick. While
-  // the session list is on screen, also refresh the list itself, so a session
-  // created or updated anywhere shows up without a manual refresh — including a
-  // headless `tracer-sh analyze` API session. The active-count deliberately
-  // excludes API/imported sessions, so a count change can't be used to detect
-  // them; polling the list directly does. `list` is lightweight (a few columns, no
-  // message bodies), and usePolling already pauses while the tab is hidden.
-  usePolling(() => {
-    utils.sessions.activeCount.invalidate();
-    if (currentPage === "debug") utils.sessions.list.invalidate();
-    if (FEATURES.monitors) utils.monitors.builderChats.invalidate();
-  }, WEB_CONFIG.activeStreamPollingMs, true);
+  // Rows present at first load render still; only rows that arrive later animate in.
+  const [sessionsReady, setSessionsReady] = useState(false);
+  const [chatsReady, setChatsReady] = useState(false);
+  useEffect(() => { if (sessionsQuery.data) setSessionsReady(true); }, [sessionsQuery.data]);
+  useEffect(() => { if (builderChatsQuery.data) setChatsReady(true); }, [builderChatsQuery.data]);
 
   const markViewedMutation = trpc.sessions.markViewed.useMutation();
 
@@ -224,25 +252,15 @@ export function Sidebar({
   );
 
   const renderSessionRow = (session: (typeof regularSessions)[number]) => (
-    <button
+    <SessionRow
       key={session.id}
-      onClick={() => onSelectSession(session.id)}
-      className={currentSessionId === session.id ? theme.sessionItemActive : theme.sessionItem}
-    >
-      <span
-        className={`truncate flex-1 text-left ${
-          (session.status === "streaming" || session.status === "done") && session.id !== currentSessionId
-            ? "text-[#2b5ea7] underline"
-            : ""
-        }`}
-        title={session.title}
-      >
-        {session.title}
-      </span>
-      <span onClick={(e) => handleDeleteSession(e, session.id)} className={theme.sessionDeleteBtn}>
-        ×
-      </span>
-    </button>
+      title={session.title}
+      active={currentSessionId === session.id}
+      highlighted={(session.status === "streaming" || session.status === "done") && session.id !== currentSessionId}
+      animateIn={sessionsReady}
+      onSelect={() => onSelectSession(session.id)}
+      onDelete={(e) => handleDeleteSession(e, session.id)}
+    />
   );
 
   return (
@@ -306,23 +324,15 @@ export function Sidebar({
               ) : builderChats.map((s) => {
                 const active = currentPage === "monitors" && currentBuilderSessionId === s.id;
                 return (
-                  <button
+                  <SessionRow
                     key={s.id}
-                    onClick={() => onSelectBuilderChat(s.id)}
-                    className={active ? theme.sessionItemActive : theme.sessionItem}
-                  >
-                    <span
-                      className={`truncate flex-1 text-left ${
-                        (s.status === "streaming" || s.status === "done") && !active ? "text-[#2b5ea7] underline" : ""
-                      }`}
-                      title={s.title}
-                    >
-                      {s.title}
-                    </span>
-                    <span onClick={(e) => handleDeleteSession(e, s.id)} className={theme.sessionDeleteBtn}>
-                      ×
-                    </span>
-                  </button>
+                    title={s.title}
+                    active={active}
+                    highlighted={(s.status === "streaming" || s.status === "done") && !active}
+                    animateIn={chatsReady}
+                    onSelect={() => onSelectBuilderChat(s.id)}
+                    onDelete={(e) => handleDeleteSession(e, s.id)}
+                  />
                 );
               })}
             </div>

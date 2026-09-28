@@ -4,17 +4,18 @@
  */
 
 import { z } from "zod";
-import { tool } from "ai";
+import { tool, type Tool } from "ai";
 import type { makeMemoryExecute } from "./memory-executor.js";
 
 type MemoryExecute = ReturnType<typeof makeMemoryExecute>;
+type MemoryResult = Awaited<ReturnType<MemoryExecute>>;
 
 interface MemoryToolOptions {
   description?: string;
   onSuccess?: () => void;
 }
 
-export function createUpdateMemoryTool(memoryExecute: MemoryExecute, opts?: MemoryToolOptions) {
+export function createUpdateMemoryTool(memoryExecute: MemoryExecute, opts?: MemoryToolOptions): Tool<{ id: number; note: string }, MemoryResult> {
   return tool({
     description: opts?.description ?? "Update an existing memory note by ID.",
     inputSchema: z.object({
@@ -29,7 +30,7 @@ export function createUpdateMemoryTool(memoryExecute: MemoryExecute, opts?: Memo
   });
 }
 
-export function createDeleteMemoryTool(memoryExecute: MemoryExecute, opts?: MemoryToolOptions) {
+export function createDeleteMemoryTool(memoryExecute: MemoryExecute, opts?: MemoryToolOptions): Tool<{ id: number }, MemoryResult> {
   return tool({
     description: opts?.description ?? "Delete a memory note by ID.",
     inputSchema: z.object({

@@ -107,8 +107,7 @@ function MemoryBadge({ sessionId, streaming, onCostDataReady }: { sessionId: str
   );
 }
 
-/** Isolated title component — owns the sessions.list subscription so title polls
- *  don't cascade re-renders to the entire message list. */
+/** Isolated title component so live title updates don't re-render the message list. */
 export function SessionTitle({ chatId, hasMessages, isLoading, onPostMortem, onCompact, streaming, onCostDataReady, onTitleClick }: {
   chatId: string;
   hasMessages: boolean;
@@ -120,22 +119,10 @@ export function SessionTitle({ chatId, hasMessages, isLoading, onPostMortem, onC
   onCostDataReady?: () => void;
   onTitleClick?: () => void;
 }) {
-  const titleQuery = trpc.sessions.getTitle.useQuery({ id: chatId });
+  // No row exists before the first message.
+  const titleQuery = trpc.sessions.getTitle.useQuery({ id: chatId }, { enabled: hasMessages });
   const sessionTitle = titleQuery.data?.title;
   const titlePending = titleQuery.data?.titlePending ?? true; // unknown session = title pending
-  const utils = trpc.useUtils();
-
-  const needsTitlePoll = hasMessages && titlePending;
-
-  // Timeout after 60s to avoid polling forever if title never resolves
-  const [titleTimedOut, setTitleTimedOut] = useState(false);
-  useEffect(() => {
-    if (!needsTitlePoll) { setTitleTimedOut(false); return; }
-    const timer = setTimeout(() => setTitleTimedOut(true), 60_000);
-    return () => clearTimeout(timer);
-  }, [needsTitlePoll]);
-
-  usePolling(() => utils.sessions.getTitle.invalidate({ id: chatId }), 5_000, needsTitlePoll && !titleTimedOut);
 
   // Notify parent when title resolves (for cost data refresh)
   const prevTitlePending = useRef(titlePending);

@@ -3,11 +3,7 @@ import { trpc } from "./trpc";
 import { AVAILABLE_MODELS } from "./models";
 import { WEB_CONFIG } from "./config";
 
-/**
- * Plain-div chat scroll — auto-follows streaming content via ResizeObserver.
- * Stops auto-scroll on deliberate upward wheel gesture; resumes when user
- * scrolls back to the bottom.
- */
+/** Chat scroll that follows content growth; any upward scroll pauses it until the bottom is reached again. */
 export function useChatScroll() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -28,18 +24,22 @@ export function useChatScroll() {
     el.scrollTo({ top: 0, behavior: opts?.animation === "smooth" ? "smooth" : "instant" });
   }, []);
 
-  const handleWheel = useCallback((e: { deltaY: number }) => {
-    if (e.deltaY < 0) shouldAutoScroll.current = false;
-  }, []);
-
   // Track isAtBottom and re-enable auto-scroll when user scrolls back down
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
+    let lastTop = el.scrollTop;
+    let lastHeight = el.scrollHeight;
+    // Any upward move pauses (even near the bottom); a drop from content shrinking is not the user.
     const onScroll = () => {
-      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+      const top = el.scrollTop;
+      const height = el.scrollHeight;
+      const atBottom = height - top - el.clientHeight < 50;
       setIsAtBottom(atBottom);
-      if (atBottom) shouldAutoScroll.current = true;
+      if (top < lastTop && height >= lastHeight) shouldAutoScroll.current = false;
+      else if (atBottom) shouldAutoScroll.current = true;
+      lastTop = top;
+      lastHeight = height;
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
@@ -56,7 +56,7 @@ export function useChatScroll() {
     return () => ro.disconnect();
   }, [scrollToBottom]);
 
-  return { scrollRef, contentRef, isAtBottom, handleWheel, scrollToBottom, scrollToTop };
+  return { scrollRef, contentRef, isAtBottom, scrollToBottom, scrollToTop };
 }
 
 /** Measure container size via ResizeObserver */
@@ -107,6 +107,40 @@ export function usePolling(
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [enabled, intervalMs, immediate]);
+}
+
+/** Keeps session-derived queries fresh from the server's session change stream; bursts are coalesced. */
+export function useSessionLiveUpdates() {
+  const utils = trpc.useUtils();
+  const pending = useRef(new Set<string>());
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const invalidateLists = useCallback(() => {
+    utils.sessions.list.invalidate();
+    utils.sessions.activeCount.invalidate();
+    utils.monitors.builderChats.invalidate();
+    utils.monitors.triggers.invalidate();
+    utils.monitors.list.invalidate();
+  }, [utils]);
+
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+
+  trpc.sessions.onChange.useSubscription(undefined, {
+    // Also fires on every reconnect, covering changes missed while disconnected.
+    onStarted: () => {
+      invalidateLists();
+      utils.sessions.getTitle.invalidate();
+    },
+    onData: ({ id }) => {
+      pending.current.add(id);
+      timer.current ??= setTimeout(() => {
+        timer.current = null;
+        invalidateLists();
+        for (const sessionId of pending.current) utils.sessions.getTitle.invalidate({ id: sessionId });
+        pending.current.clear();
+      }, WEB_CONFIG.sessionEventCoalesceMs);
+    },
+  });
 }
 
 /** Track whether a scrollable element can scroll up/down, for fade indicators */

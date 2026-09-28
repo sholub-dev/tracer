@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { trpc } from "../../lib/trpc";
 import { theme } from "../../lib/theme";
 import { useContainerSize } from "../../lib/hooks";
@@ -20,15 +21,21 @@ interface QueryChartProps {
 }
 
 export function QueryChart({ provider, query, height, className, refreshKey = 0, threshold, chartType, growWithLegend = false }: QueryChartProps) {
-  const executeMutation = trpc.provider.executeQuery.useMutation();
-  const [data, setData] = useState<unknown>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadedQuery, setLoadedQuery] = useState<string | null>(null);
+  const utils = trpc.useUtils();
+  // POST mutation: a GET batch of every chart's query can overflow the URL, and GETs are cross-site triggerable.
+  const result = useQuery({
+    queryKey: ["provider.executeQuery", provider, query],
+    queryFn: () => utils.client.provider.executeQuery.mutate({ provider, query }),
+    placeholderData: keepPreviousData,
+    retry: false,
+    staleTime: 0,
+  });
+  const { refetch } = result;
+  const data = result.data ?? null;
+  const error = result.error?.message ?? null;
   // Refreshes keep the previous result on screen; a new query (e.g. range change) overlays a spinner.
-  const showSpinner = loading && data === null && error === null;
-  const showOverlay = loading && !showSpinner && loadedQuery !== query;
-  const mountedRef = useRef(true);
+  const showSpinner = result.isLoading;
+  const showOverlay = result.isPlaceholderData;
   const { ref, size } = useContainerSize();
   // 36 = the legend + padding reserve ChartContainer subtracts from the given height.
   const boxHeight = growWithLegend && height ? height + 36 : size.height;
@@ -37,22 +44,13 @@ export function QueryChart({ provider, query, height, className, refreshKey = 0,
     [size.width, boxHeight],
   );
 
+  const lastRefreshKey = useRef(refreshKey);
   useEffect(() => {
-    mountedRef.current = true;
-    setLoading(true);
-    executeMutation.mutate(
-      { provider, query },
-      {
-        onSuccess: (result) => {
-          if (mountedRef.current) { setData(result); setError(null); setLoadedQuery(query); setLoading(false); }
-        },
-        onError: (err) => {
-          if (mountedRef.current) { setError(err.message); setLoadedQuery(query); setLoading(false); }
-        },
-      },
-    );
-    return () => { mountedRef.current = false; };
-  }, [provider, query, refreshKey]);
+    if (lastRefreshKey.current === refreshKey) return;
+    lastRefreshKey.current = refreshKey;
+    // Join an in-flight fetch (e.g. the query text changed too) instead of issuing a duplicate.
+    void refetch({ cancelRefetch: false });
+  }, [refreshKey, refetch]);
 
   return (
     <div

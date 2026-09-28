@@ -8,11 +8,6 @@ import { readProviderConfig } from "../../db/config-reader.js";
 import { getGcpAuth } from "../../providers/gcp/gcp-auth.js";
 import { toChartRows } from "../../providers/posthog/posthog-formatter.js";
 
-const timeRangeInput = z.object({
-  since: z.string(),
-  until: z.string().optional(),
-});
-
 export const providerRouter = router({
   list: publicProcedure.query(({ ctx }) => {
     return ctx.providers.getStatus();
@@ -116,59 +111,6 @@ export const providerRouter = router({
         .run();
       await ctx.providers.unregister(input);
       return { success: true };
-    }),
-
-  testConnection: publicProcedure
-    .input(z.string())
-    .mutation(async ({ ctx, input }) => {
-      const provider = ctx.providers.getProvider(input);
-      if (!provider) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: `Provider "${input}" not found`,
-        });
-      }
-
-      try {
-        const success = await provider.testConnection();
-        return { success };
-      } catch (error) {
-        return {
-          success: false,
-          error: error instanceof Error ? error.message : "Unknown error",
-        };
-      }
-    }),
-
-  // Generic data queries — replace the old newrelic-specific router
-  getErrors: publicProcedure
-    .input(z.object({ provider: z.string(), ...timeRangeInput.shape }))
-    .query(async ({ ctx, input }) => {
-      const p = ctx.providers.getProvider(input.provider);
-      if (!p) return [];
-      return p.getErrors(input);
-    }),
-
-  getTransactions: publicProcedure
-    .input(z.object({ provider: z.string(), ...timeRangeInput.shape }))
-    .query(async ({ ctx, input }) => {
-      const p = ctx.providers.getProvider(input.provider);
-      if (!p) return [];
-      return p.getTransactions(input);
-    }),
-
-  getLogs: publicProcedure
-    .input(
-      z.object({
-        provider: z.string(),
-        ...timeRangeInput.shape,
-        filter: z.string().optional(),
-      }),
-    )
-    .query(async ({ ctx, input }) => {
-      const p = ctx.providers.getProvider(input.provider);
-      if (!p) return [];
-      return p.getLogs(input, input.filter);
     }),
 
   executeQuery: publicProcedure

@@ -16,10 +16,28 @@ export class StreamBroadcaster {
 
   emit(part: Record<string, unknown>): void {
     if (this._done) return;
-    this.buffer.push(part);
+    this.bufferPart(part);
     for (const cb of this.subscribers) {
       try { cb(part); } catch (err) { console.warn("[StreamBroadcaster] subscriber error:", err); }
     }
+  }
+
+  // Consecutive deltas of one block are merged so replay is a few parts, not thousands.
+  // The last entry is replaced, never mutated: it may already be held by a subscriber.
+  private bufferPart(part: Record<string, unknown>): void {
+    const last = this.buffer[this.buffer.length - 1];
+    if (
+      last
+      && (part.type === "text-delta" || part.type === "reasoning-delta")
+      && last.type === part.type
+      && last.id === part.id
+      && typeof last.delta === "string"
+      && typeof part.delta === "string"
+    ) {
+      this.buffer[this.buffer.length - 1] = { ...last, delta: last.delta + part.delta };
+      return;
+    }
+    this.buffer.push(part);
   }
 
   /** Subscribe to parts. Replays buffer immediately, then delivers live events. Returns unsubscribe fn. */

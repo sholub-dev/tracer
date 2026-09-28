@@ -1,40 +1,3 @@
-/** Time range for queries */
-export interface TimeRange {
-  since: string;
-  until?: string;
-}
-
-/** Normalized error from any provider */
-export interface TracerError {
-  id: string;
-  appName: string;
-  errorClass: string;
-  message: string;
-  count: number;
-  firstSeen: string;
-  lastSeen: string;
-  transactionName: string;
-  provider: string;
-}
-
-/** Normalized transaction from any provider */
-export interface TracerTransaction {
-  name: string;
-  avgDuration: number;
-  throughput: number;
-  errorRate: number;
-  provider: string;
-}
-
-/** Normalized log entry from any provider */
-export interface TracerLogEntry {
-  timestamp: string;
-  level: string;
-  message: string;
-  attributes: Record<string, unknown>;
-  provider: string;
-}
-
 /** Provider runtime status */
 export interface ProviderStatus {
   name: string;
@@ -109,9 +72,6 @@ export interface IProvider {
   ping(): Promise<PingResult>;
   dispose(): Promise<void>;
 
-  getErrors(timeRange: TimeRange): Promise<TracerError[]>;
-  getTransactions(timeRange: TimeRange): Promise<TracerTransaction[]>;
-  getLogs(timeRange: TimeRange, filter?: string): Promise<TracerLogEntry[]>;
   executeRawQuery(query: string): Promise<unknown>;
 
   /** Return chat tools and prompt fragments for this provider */

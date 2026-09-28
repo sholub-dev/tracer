@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { Streamdown } from "streamdown";
+import { MD_CONTROLS, MD_LINK_SAFETY } from "../../lib/markdown";
 import type { UIMessage } from "ai";
 import { theme } from "../../lib/theme";
 import { CopyMessageButton } from "./CopyMessageButton";
@@ -151,7 +152,7 @@ export function SessionSummaryBlock({
       ) : (
         expanded && (
           <div ref={bodyRef} className="mt-2 text-sm text-[#2c2c2c] leading-relaxed">
-            <Streamdown isAnimating={false} controls={{ code: true }} linkSafety={{ enabled: false }}>
+            <Streamdown isAnimating={false} controls={MD_CONTROLS} linkSafety={MD_LINK_SAFETY}>
               {summary}
             </Streamdown>
           </div>

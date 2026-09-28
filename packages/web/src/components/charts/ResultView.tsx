@@ -1,10 +1,60 @@
-import { memo, useState, type ReactNode } from "react";
+import { lazy, memo, Suspense, useState, type ComponentProps, type ReactNode } from "react";
 import { Streamdown } from "streamdown";
 import { theme } from "../../lib/theme";
-import { TimeseriesChart, HistogramChart, type Threshold } from "./ChartView";
-import { JsonTree } from "../ui/JsonTree";
+import { MD_LINK_SAFETY } from "../../lib/markdown";
+import type { Threshold } from "./ChartView";
 import { HIDDEN_KEYS, formatValue, isPercentileResult, buildColumns, pivotCompareWith, coerceNumeric, type Column } from "../../lib/result-utils";
 import { ScalarCards } from "./ScalarCards";
+
+// Lazy so recharts and react-json-view-lite stay out of the chat entry chunk.
+const LazyTimeseriesChart = lazy(() => import("./ChartView").then((m) => ({ default: m.TimeseriesChart })));
+const LazyHistogramChart = lazy(() => import("./ChartView").then((m) => ({ default: m.HistogramChart })));
+const LazyJsonTree = lazy(() => import("../ui/JsonTree").then((m) => ({ default: m.JsonTree })));
+
+type ContainerSize = { width: number; height: number };
+
+// Reserves the chart's rendered height (plot + legend inside the card) so loading causes no layout jump.
+function ChartFallback({ containerSize, plotHeight }: { containerSize?: ContainerSize; plotHeight: number }) {
+  if (containerSize) return <div style={{ height: Math.max(containerSize.height - 8, 80) }} />;
+  return (
+    <div className={theme.chartContainer}>
+      <div style={{ height: plotHeight + 36 }} />
+    </div>
+  );
+}
+
+function TimeseriesChart(props: ComponentProps<typeof LazyTimeseriesChart>) {
+  return (
+    <Suspense fallback={<ChartFallback containerSize={props.containerSize} plotHeight={280} />}>
+      <LazyTimeseriesChart {...props} />
+    </Suspense>
+  );
+}
+
+function HistogramChart(props: ComponentProps<typeof LazyHistogramChart>) {
+  return (
+    <Suspense fallback={<ChartFallback containerSize={props.containerSize} plotHeight={260} />}>
+      <LazyHistogramChart {...props} />
+    </Suspense>
+  );
+}
+
+export function preloadResultChunks() {
+  const load = () => {
+    void import("./ChartView");
+    void import("../ui/JsonTree");
+  };
+  if ("requestIdleCallback" in window) window.requestIdleCallback(load);
+  else setTimeout(load, 200);
+}
+
+export function JsonTree(props: ComponentProps<typeof LazyJsonTree>) {
+  return (
+    <Suspense fallback={<div className="h-5" />}>
+      <LazyJsonTree {...props} />
+    </Suspense>
+  );
+}
 
 function CellText({ value }: { value: string }) {
   return (
@@ -82,7 +132,7 @@ export default memo(function ResultView({ data, containerSize, threshold, chartT
   if (typeof data === "string") {
     return (
       <div className={theme.analysisBlock}>
-        <Streamdown linkSafety={{ enabled: false }}>{data}</Streamdown>
+        <Streamdown linkSafety={MD_LINK_SAFETY}>{data}</Streamdown>
       </div>
     );
   }

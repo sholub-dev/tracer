@@ -14,7 +14,7 @@ export function EditMessageForm({ initialText, onSave, onCancel }: {
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSave(text); }
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); onSave(text); }
           if (e.key === "Escape") onCancel();
         }}
         rows={Math.max(2, text.split("\n").length)}

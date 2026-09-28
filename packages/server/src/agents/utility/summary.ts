@@ -144,7 +144,7 @@ export async function generateSessionSummary(
     const { text, usage } = await generateText({
       model: resolved.model,
       temperature: 0,
-      system: SUMMARY_SYSTEM_PROMPT,
+      instructions: SUMMARY_SYSTEM_PROMPT,
       messages: [{ role: "user", content: userContent }],
       providerOptions: resolved.providerOptions,
       abortSignal: AbortSignal.timeout(GENERATION_TIMEOUT_MS),

@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import type { UIMessage } from "ai";
 import { theme } from "../../lib/theme";
 import { trpc } from "../../lib/trpc";
 import { WEB_CONFIG } from "../../lib/config";
+import { useParsedMessages } from "../../lib/chat-utils";
 import { ChatCore, type ChatCoreRef } from "./ChatCore";
 import { Spinner } from "../ui/Spinner";
 
@@ -43,6 +43,7 @@ export function PanelChat({
   }, [chatId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sessionQuery = trpc.sessions.get.useQuery({ id: chatId }, { enabled: persist, gcTime: 0 });
+  const persistedMessages = useParsedMessages(sessionQuery.data?.messagesJson);
 
   const panelWidthRef = useRef(panelWidth);
   panelWidthRef.current = panelWidth;
@@ -110,7 +111,7 @@ export function PanelChat({
           key={persist ? chatId : undefined}
           ref={coreRef}
           chatId={chatId}
-          initialMessages={persist ? (sessionQuery.data?.messages as UIMessage[] | undefined) : undefined}
+          initialMessages={persist ? persistedMessages : undefined}
           apiEndpoint={apiEndpoint}
           placeholder={placeholder}
           extraBody={extraBody}

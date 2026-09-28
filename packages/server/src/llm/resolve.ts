@@ -1,5 +1,5 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { createGoogle } from "@ai-sdk/google";
 import { createVertex } from "@ai-sdk/google-vertex";
 import type { LanguageModel, streamText } from "ai";
 import { readProviderConfig, readAppSetting } from "../db/config-reader.js";
@@ -26,7 +26,7 @@ const LLM_FACTORIES: Record<string, (config: Record<string, string> | null) => M
   },
   google: (config) => {
     if (!config?.apiKey) return { error: "google API key not configured" };
-    return createGoogleGenerativeAI({ apiKey: config.apiKey });
+    return createGoogle({ apiKey: config.apiKey });
   },
   "google-vertex": (config) => {
     if (!config?.projectId) return { error: "Vertex AI project not configured" };
@@ -36,6 +36,7 @@ const LLM_FACTORIES: Record<string, (config: Record<string, string> | null) => M
 
 interface ResolvedModel {
   model: LanguageModel;
+  provider: string;
   modelId: string;
   providerOptions?: ProviderOptions;
 }
@@ -64,5 +65,5 @@ export function resolveModel(db: Db): ResolvedModel | { error: string } {
   if (!factory) return { error: `Unknown LLM provider: ${config.provider}` };
   const builder = factory(readProviderConfig(db, config.provider));
   if (typeof builder !== "function") return builder;
-  return { model: builder(config.modelId), modelId: config.modelId, providerOptions: getProviderOptions(db, config.provider, config.modelId) };
+  return { model: builder(config.modelId), provider: config.provider, modelId: config.modelId, providerOptions: getProviderOptions(db, config.provider, config.modelId) };
 }

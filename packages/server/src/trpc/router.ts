@@ -8,6 +8,7 @@ import { dashboardsRouter } from "./routers/dashboards.router.js";
 import { monitorsRouter } from "./routers/monitors.router.js";
 import { updateRouter } from "./routers/update.router.js";
 import { integrationsRouter } from "./routers/integrations.router.js";
+import { skillRouter } from "./routers/skill.router.js";
 
 export const appRouter = router({
   provider: providerRouter,
@@ -19,6 +20,7 @@ export const appRouter = router({
   dashboards: dashboardsRouter,
   monitors: monitorsRouter,
   update: updateRouter,
+  skill: skillRouter,
 });
 
 export type AppRouter = typeof appRouter;

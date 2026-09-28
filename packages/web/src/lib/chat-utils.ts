@@ -1,10 +1,9 @@
+import { useMemo } from "react";
+import type { UIMessage } from "ai";
 import type { ProgressStore } from "./progress-store";
 import type { ProgressPart } from "@tracer-sh/shared";
 
-/**
- * Shared onData handler for progress store updates.
- * Identical logic used in both Debug.tsx and PanelChat.tsx.
- */
+/** Shared onData handler for progress store updates (ChatCore and LiveStreamView). */
 export function handleProgressData(
   progressStore: ProgressStore,
   data: { toolCallId: string; part: { type: string; [key: string]: unknown } },
@@ -53,6 +52,15 @@ export function handleProgressData(
   });
 }
 
+/** Ask the server to abort a session's in-flight stream. */
+export function stopChat(sessionId: string): Promise<void> {
+  return fetch("/api/chat/stop", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId }),
+  }).then(() => {}, () => {});
+}
+
 /**
  * Normalize clipboard on copy: provides clean plain text only.
  * Fixes two issues:
@@ -66,4 +74,16 @@ export function normalizeClipboard(e: React.ClipboardEvent) {
 
   e.clipboardData.setData("text/plain", selection.toString().trimEnd());
   e.preventDefault();
+}
+
+export function useParsedMessages(json: string | undefined): UIMessage[] | undefined {
+  return useMemo(() => {
+    if (json === undefined) return undefined;
+    try {
+      return JSON.parse(json) as UIMessage[];
+    } catch {
+      console.warn("[sessions] Corrupted messages JSON");
+      return [];
+    }
+  }, [json]);
 }

@@ -70,21 +70,11 @@ export function runSetup(): void {
       last_checked_at INTEGER,
       last_status TEXT NOT NULL DEFAULT 'ok',
       last_error TEXT,
-      chat_session_id TEXT,
       sort_order INTEGER,
       card_width INTEGER,
       alert_enabled INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-    );
-
-    CREATE TABLE IF NOT EXISTS monitor_alerts (
-      id TEXT PRIMARY KEY,
-      monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
-      triggered_at INTEGER NOT NULL,
-      resolved_at INTEGER,
-      result_snapshot TEXT NOT NULL,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
 
     CREATE TABLE IF NOT EXISTS monitor_triggers (
@@ -99,27 +89,10 @@ export function runSetup(): void {
       session_id TEXT
     );
 
-    CREATE TABLE IF NOT EXISTS sub_agent_runs (
-      id TEXT PRIMARY KEY,
-      provider TEXT NOT NULL,
-      task TEXT NOT NULL,
-      query_count INTEGER NOT NULL DEFAULT 0,
-      error_count INTEGER NOT NULL DEFAULT 0,
-      step_count INTEGER NOT NULL DEFAULT 0,
-      truncated INTEGER NOT NULL DEFAULT 0,
-      duration_ms INTEGER NOT NULL DEFAULT 0,
-      finish_reason TEXT,
-      session_id TEXT,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch())
-    );
-
     CREATE INDEX IF NOT EXISTS idx_widgets_dashboard ON dashboard_widgets(dashboard_id);
     CREATE INDEX IF NOT EXISTS idx_memories_tool ON tool_memories(tool_name);
-    CREATE INDEX IF NOT EXISTS idx_sessions_updated ON chat_sessions(updated_at);
     CREATE INDEX IF NOT EXISTS idx_dashboards_updated ON dashboards(updated_at);
     CREATE INDEX IF NOT EXISTS idx_monitors_enabled ON monitors(enabled);
-    CREATE INDEX IF NOT EXISTS idx_alerts_monitor ON monitor_alerts(monitor_id);
-    CREATE INDEX IF NOT EXISTS idx_alerts_unresolved ON monitor_alerts(resolved_at) WHERE resolved_at IS NULL;
     CREATE INDEX IF NOT EXISTS idx_triggers_monitor ON monitor_triggers(monitor_id, triggered_at);
     CREATE INDEX IF NOT EXISTS idx_triggers_session ON monitor_triggers(session_id);
     CREATE INDEX IF NOT EXISTS idx_triggers_recent_session ON monitor_triggers(triggered_at) WHERE session_id IS NOT NULL;
@@ -146,23 +119,18 @@ export function runSetup(): void {
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
 
-    CREATE INDEX IF NOT EXISTS idx_sub_agent_runs_provider ON sub_agent_runs(provider);
-    CREATE INDEX IF NOT EXISTS idx_sub_agent_runs_created ON sub_agent_runs(created_at);
     CREATE INDEX IF NOT EXISTS idx_memops_session ON memory_operations(session_id);
     CREATE INDEX IF NOT EXISTS idx_agent_runs_session ON agent_runs(session_id);
-    CREATE INDEX IF NOT EXISTS idx_agent_runs_type ON agent_runs(agent_type);
   `);
 
   // Back-compat: columns added after initial release.
   for (const ddl of [
-    `ALTER TABLE sub_agent_runs ADD COLUMN session_id TEXT`,
     `ALTER TABLE tool_memories ADD COLUMN review_note TEXT`,
     `ALTER TABLE chat_sessions ADD COLUMN kind TEXT`,
     `ALTER TABLE chat_sessions ADD COLUMN summary TEXT`,
     `ALTER TABLE chat_sessions ADD COLUMN summary_up_to INTEGER`,
     `ALTER TABLE chat_sessions ADD COLUMN summary_created_at INTEGER`,
     `ALTER TABLE monitors ADD COLUMN last_error TEXT`,
-    `ALTER TABLE monitors ADD COLUMN chat_session_id TEXT`,
     `ALTER TABLE monitors ADD COLUMN sort_order INTEGER`,
     `ALTER TABLE monitors ADD COLUMN card_width INTEGER`,
     `ALTER TABLE monitors ADD COLUMN alert_enabled INTEGER NOT NULL DEFAULT 1`,
@@ -173,11 +141,11 @@ export function runSetup(): void {
     try { sqlite.exec(ddl); } catch { /* column already exists */ }
   }
 
-  // Index on session_id must be created after the ALTER TABLE migration above
-  sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_sub_agent_runs_session ON sub_agent_runs(session_id)`);
   sqlite.exec(`
     CREATE INDEX IF NOT EXISTS idx_sessions_status_kind ON chat_sessions(status, kind, id);
     CREATE INDEX IF NOT EXISTS idx_sessions_list ON chat_sessions(updated_at, kind, status, id, title);
+    DROP INDEX IF EXISTS idx_sessions_updated;
+    DROP INDEX IF EXISTS idx_agent_runs_type;
   `);
 
   // 0.3.7: one model setting for everything — clear old per-provider overrides and
@@ -211,8 +179,6 @@ function migrateForeignKeys(): void {
     sqlite.exec(`
       DELETE FROM dashboard_widgets
         WHERE dashboard_id != '' AND dashboard_id NOT IN (SELECT id FROM dashboards);
-      DELETE FROM monitor_alerts
-        WHERE monitor_id NOT IN (SELECT id FROM monitors);
       DELETE FROM memory_operations
         WHERE session_id NOT IN (SELECT id FROM chat_sessions);
     `);
@@ -239,21 +205,6 @@ function migrateForeignKeys(): void {
       DROP TABLE _dashboard_widgets_old;
     `);
 
-    // Recreate monitor_alerts with FK
-    sqlite.exec(`
-      ALTER TABLE monitor_alerts RENAME TO _monitor_alerts_old;
-      CREATE TABLE monitor_alerts (
-        id TEXT PRIMARY KEY,
-        monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
-        triggered_at INTEGER NOT NULL,
-        resolved_at INTEGER,
-        result_snapshot TEXT NOT NULL,
-        created_at INTEGER NOT NULL DEFAULT (unixepoch())
-      );
-      INSERT INTO monitor_alerts SELECT * FROM _monitor_alerts_old;
-      DROP TABLE _monitor_alerts_old;
-    `);
-
     // Recreate memory_operations with FK
     sqlite.exec(`
       ALTER TABLE memory_operations RENAME TO _memory_operations_old;
@@ -272,8 +223,6 @@ function migrateForeignKeys(): void {
     // Recreate indexes on the new tables
     sqlite.exec(`
       CREATE INDEX IF NOT EXISTS idx_widgets_dashboard ON dashboard_widgets(dashboard_id);
-      CREATE INDEX IF NOT EXISTS idx_alerts_monitor ON monitor_alerts(monitor_id);
-      CREATE INDEX IF NOT EXISTS idx_alerts_unresolved ON monitor_alerts(resolved_at) WHERE resolved_at IS NULL;
       CREATE INDEX IF NOT EXISTS idx_memops_session ON memory_operations(session_id);
     `);
 

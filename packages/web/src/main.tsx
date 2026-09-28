@@ -1,7 +1,7 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { httpBatchLink } from "@trpc/client";
+import { httpBatchStreamLink, httpSubscriptionLink, splitLink } from "@trpc/client";
 import superjson from "superjson";
 import { trpc } from "./lib/trpc";
 import { WEB_CONFIG } from "./lib/config";
@@ -23,9 +23,10 @@ function Root() {
   const [trpcClient] = useState(() =>
     trpc.createClient({
       links: [
-        httpBatchLink({
-          url: "/api/trpc",
-          transformer: superjson,
+        splitLink({
+          condition: (op) => op.type === "subscription",
+          true: httpSubscriptionLink({ url: "/api/trpc", transformer: superjson }),
+          false: httpBatchStreamLink({ url: "/api/trpc", transformer: superjson }),
         }),
       ],
     }),

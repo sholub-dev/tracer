@@ -19,14 +19,23 @@ function generateKeyHex(): string {
   return randomBytes(32).toString("hex");
 }
 
-/**
- * Resolve the 64-hex DB encryption key with a layered, never-bricks strategy:
- *   1. TRACER_DB_KEY env var (explicit; for CI / headless / no-keychain hosts).
- *   2. OS keychain (user-scoped, machine-bound) — generated and stored on first run.
- *   3. A key file next to the data, with a warning, when the keychain is
- *      unavailable (e.g. a headless Linux box with no Secret Service).
- */
-export function resolveDbKey(tracerHome: string): string {
+type KeychainEntry = { getPassword(): string | null; setPassword(password: string): void };
+
+function loadKeychain(): KeychainEntry | null {
+  try {
+    const { Entry } = requireCjs("@napi-rs/keyring") as typeof import("@napi-rs/keyring");
+    // Linux otherwise falls back to in-memory keyutils, which loses the key on reboot.
+    return new Entry(SERVICE, ACCOUNT, { linux: { store: "secret-service" } });
+  } catch {
+    return null;
+  }
+}
+
+// Env key, then keychain, then key file. A keychain read error is never treated as "no key".
+export function resolveDbKey(
+  tracerHome: string,
+  { hasEncryptedDb = false, keychain }: { hasEncryptedDb?: boolean; keychain?: KeychainEntry | null } = {},
+): string {
   const envKey = process.env.TRACER_DB_KEY?.trim();
   if (envKey) {
     if (!isValidKeyHex(envKey)) {
@@ -35,40 +44,54 @@ export function resolveDbKey(tracerHome: string): string {
     return envKey.toLowerCase();
   }
 
-  return tryKeychain() ?? resolveKeyFile(tracerHome);
-}
+  const keyPath = join(tracerHome, "db-key");
+  const entry = keychain === undefined ? loadKeychain() : keychain;
+  if (!entry) return readKeyFile(keyPath) ?? createKeyFile(keyPath, hasEncryptedDb);
 
-function tryKeychain(): string | null {
+  let existing: string | null;
   try {
-    const { Entry } = requireCjs("@napi-rs/keyring") as typeof import("@napi-rs/keyring");
-    const entry = new Entry(SERVICE, ACCOUNT);
+    existing = entry.getPassword();
+  } catch (err) {
+    const fileKey = readKeyFile(keyPath);
+    if (fileKey) return fileKey;
+    // No keychain service (e.g. headless Linux) and no data yet: a key file is safe.
+    if (!hasEncryptedDb) return createKeyFile(keyPath, false);
+    throw new Error(
+      `Could not read the database encryption key from the OS keychain (${err instanceof Error ? err.message : String(err)}). ` +
+        `Unlock the keychain and restart, or set TRACER_DB_KEY.`,
+    );
+  }
+  if (existing && isValidKeyHex(existing)) return existing.toLowerCase();
+  const fileKey = readKeyFile(keyPath);
+  if (fileKey) return fileKey;
+  if (hasEncryptedDb) throw missingKeyError();
 
-    let existing: string | null = null;
-    try {
-      existing = entry.getPassword();
-    } catch {
-      existing = null; // not found
-    }
-    if (existing && isValidKeyHex(existing)) return existing.toLowerCase();
-
-    const fresh = generateKeyHex();
+  const fresh = generateKeyHex();
+  try {
     entry.setPassword(fresh);
     return fresh;
   } catch {
-    // Keychain backend missing/unavailable — fall through to the file fallback.
-    return null;
+    return createKeyFile(keyPath, hasEncryptedDb);
   }
 }
 
-function resolveKeyFile(tracerHome: string): string {
-  const keyPath = join(tracerHome, "db-key");
-  if (existsSync(keyPath)) {
-    const fromFile = readFileSync(keyPath, "utf8").trim();
-    if (isValidKeyHex(fromFile)) {
-      warnKeyFile(keyPath);
-      return fromFile.toLowerCase();
-    }
-  }
+function missingKeyError(): Error {
+  return new Error(
+    "The database is encrypted but its key was not found in the OS keychain, a key file, or TRACER_DB_KEY. " +
+      "Refusing to generate a new key, which would make the existing database unreadable.",
+  );
+}
+
+function readKeyFile(keyPath: string): string | null {
+  if (!existsSync(keyPath)) return null;
+  const fromFile = readFileSync(keyPath, "utf8").trim();
+  if (!isValidKeyHex(fromFile)) return null;
+  warnKeyFile(keyPath);
+  return fromFile.toLowerCase();
+}
+
+function createKeyFile(keyPath: string, hasEncryptedDb: boolean): string {
+  if (hasEncryptedDb) throw missingKeyError();
   const fresh = generateKeyHex();
   writeFileSync(keyPath, fresh, { mode: 0o600 });
   warnKeyFile(keyPath);

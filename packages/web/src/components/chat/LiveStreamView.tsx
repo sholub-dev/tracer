@@ -2,8 +2,9 @@ import { useState, useEffect, useRef } from "react";
 import { readUIMessageStream, type UIMessage, type UIMessageChunk } from "ai";
 import { theme } from "../../lib/theme";
 import { ProgressStore } from "../../lib/progress-store";
-import { MessageParts, ThinkingDots, ScrollToBottomButton } from "./MessageParts";
-import { handleProgressData, normalizeClipboard } from "../../lib/chat-utils";
+import { MessageParts } from "./MessageParts";
+import { ThinkingDots, ScrollToBottomButton } from "./ChatIndicators";
+import { handleProgressData, normalizeClipboard, stopChat } from "../../lib/chat-utils";
 import { useChatScroll } from "../../lib/hooks";
 import { WEB_CONFIG } from "../../lib/config";
 
@@ -30,7 +31,7 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
 
-  const { scrollRef, contentRef, isAtBottom, handleWheel, scrollToBottom } = useChatScroll();
+  const { scrollRef, contentRef, isAtBottom, scrollToBottom } = useChatScroll();
 
   useEffect(() => {
     let cancelled = false;
@@ -114,16 +115,6 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
     };
   }, [sessionId, progressStore]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleStop = async () => {
-    try {
-      await fetch("/api/chat/stop", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId }),
-      });
-    } catch { /* ignore */ }
-  };
-
   const showThinking =
     messages.length > 0 && messages[messages.length - 1]?.role === "user";
 
@@ -135,7 +126,6 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
         <div
           ref={scrollRef}
           className="overflow-y-auto overflow-x-hidden h-full"
-          onWheel={handleWheel}
           onCopy={normalizeClipboard}
         >
           <div ref={contentRef}>
@@ -186,7 +176,7 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
           />
           <button
             type="button"
-            onClick={handleStop}
+            onClick={() => stopChat(sessionId)}
             aria-label="Stop generating"
             className={theme.chatStopButton}
           >

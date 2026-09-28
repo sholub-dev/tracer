@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { on } from "node:events";
 import { eq, desc, notLike, and, or, ne, sql, isNull } from "drizzle-orm";
 import type { UIMessage } from "ai";
 import {
@@ -16,6 +17,7 @@ import {
 import { publicProcedure, router } from "../trpc.js";
 import { chatSessions, agentRuns, monitorTriggers } from "../../db/schema.js";
 import { generateSessionSummary } from "../../agents/utility/summary.js";
+import { sessionChanged, sessionEvents } from "../../lib/session-events.js";
 
 const AGENT_TYPE_LABELS: Record<string, string> = {
   chat: "Chat",
@@ -68,14 +70,9 @@ export const sessionsRouter = router({
         .where(eq(chatSessions.id, input.id))
         .get();
       if (!row) return null;
-      let messages: unknown[] = [];
-      try {
-        messages = JSON.parse(row.messages);
-      } catch {
-        console.warn(`[sessions] Corrupted messages for session ${row.id}`);
-      }
+      // Raw JSON string: superjson-walking a large message tree blocks the event loop; the client parses it.
       return {
-        id: row.id, title: row.title, status: row.status, kind: row.kind, messages, updatedAt: row.updatedAt,
+        id: row.id, title: row.title, status: row.status, kind: row.kind, messagesJson: row.messages, updatedAt: row.updatedAt,
         summary: row.summary, summaryUpTo: row.summaryUpTo, summaryCreatedAt: row.summaryCreatedAt,
       };
     }),
@@ -110,6 +107,10 @@ export const sessionsRouter = router({
 
       return { agents };
     }),
+
+  onChange: publicProcedure.subscription(async function* ({ signal }) {
+    for await (const [id] of on(sessionEvents, "changed", { signal })) yield { id: id as string };
+  }),
 
   activeCount: publicProcedure.query(({ ctx }) => {
     const rows = ctx.db
@@ -149,6 +150,7 @@ export const sessionsRouter = router({
         .set({ status: "idle" })
         .where(and(eq(chatSessions.id, input.id), ne(chatSessions.status, "streaming")))
         .run();
+      sessionChanged(input.id);
       return { success: true };
     }),
 
@@ -161,6 +163,7 @@ export const sessionsRouter = router({
         .run();
       // Keep the firing in monitor history; it just loses its session link.
       ctx.db.update(monitorTriggers).set({ sessionId: null }).where(eq(monitorTriggers.sessionId, input.id)).run();
+      sessionChanged(input.id);
       return { success: true };
     }),
 
@@ -175,6 +178,7 @@ export const sessionsRouter = router({
         })
         .where(eq(chatSessions.id, input.id))
         .run();
+      sessionChanged(input.id);
       return { success: true };
     }),
 
@@ -211,6 +215,7 @@ export const sessionsRouter = router({
           messages: JSON.stringify([assistantMessage]),
         })
         .run();
+      sessionChanged(id);
       return { id };
     }),
 
@@ -251,6 +256,7 @@ export const sessionsRouter = router({
         })
         .where(eq(chatSessions.id, input.id))
         .run();
+      sessionChanged(input.id);
       return { success: true, summaryCleared: summaryStale };
     }),
 

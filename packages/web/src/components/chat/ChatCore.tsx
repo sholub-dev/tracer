@@ -7,18 +7,23 @@ import {
   useImperativeHandle,
   forwardRef,
   memo,
+  startTransition,
   type ReactNode,
 } from "react";
 import { useChat, Chat } from "@ai-sdk/react";
-import { DefaultChatTransport, type UIMessage } from "ai";
+import { DefaultChatTransport, type FileUIPart, type UIMessage } from "ai";
 import { analysisSectionParts } from "@tracer-sh/shared";
 import { theme } from "../../lib/theme";
 import { ProgressStore } from "../../lib/progress-store";
 import { useChatScroll, useFileDrop } from "../../lib/hooks";
-import { MessageParts, ThinkingDots, ScrollToBottomButton } from "./MessageParts";
-import { handleProgressData, normalizeClipboard } from "../../lib/chat-utils";
+import { MessageParts } from "./MessageParts";
+import { ThinkingDots, ScrollToBottomButton } from "./ChatIndicators";
+import { handleProgressData, normalizeClipboard, stopChat } from "../../lib/chat-utils";
 import { CopyMessageButton } from "./CopyMessageButton";
 import { WEB_CONFIG } from "../../lib/config";
+import { preloadResultChunks } from "../charts/ResultView";
+
+const INITIAL_ROWS = 6;
 
 // ── Variant theme maps ──
 
@@ -109,13 +114,11 @@ export interface ChatCoreProps {
     defaults: { label: ReactNode; content: ReactNode },
   ) => ReactNode;
 
-  /** When true, hide the composer, Continue button, and error-banner Retry. */
+  /** When true, hide the composer, Continue button, and Retry. */
   readOnly?: boolean;
   /** When true, keep the composer visible but block all sending (e.g. while compacting). */
   inputDisabled?: boolean;
-  /** Called before the error-banner Retry re-sends, with the index the client
-   *  list is cut to — lets the owner truncate the persisted copy in lockstep
-   *  (the failed user message is usually already stored server-side). */
+  /** Truncates the persisted copy to the kept count before Retry re-sends; without it the no-reply Retry is hidden. */
   onRetryTruncate?: (keepCount: number) => Promise<unknown>;
 
   /** Threaded into MessageParts so the "Download as image" action can embed them. */
@@ -129,16 +132,11 @@ export interface ChatCoreProps {
 }
 
 export interface ChatCoreRef {
-  messages: UIMessage[];
+  readonly messages: UIMessage[];
   setMessages: (msgs: UIMessage[]) => void;
   sendMessage: (msg: { text: string }) => void;
-  stop: () => void;
   scrollToBottom: (opts?: { animation?: "instant" | "smooth" }) => void;
   scrollToTop: (opts?: { animation?: "instant" | "smooth" }) => void;
-  progressStore: ProgressStore;
-  status: string;
-  isLoading: boolean;
-  error?: Error | undefined;
 }
 
 // Memoized so a streaming chunk only re-renders the row whose message object
@@ -147,6 +145,7 @@ const MessageRow = memo(function MessageRow({
   msg,
   msgIndex,
   showSeparator,
+  isLast,
   isAnimating,
   progressStore,
   variant,
@@ -158,6 +157,7 @@ const MessageRow = memo(function MessageRow({
   msg: UIMessage;
   msgIndex: number;
   showSeparator: boolean;
+  isLast: boolean;
   isAnimating: boolean;
   progressStore: ProgressStore;
   variant: "full" | "panel";
@@ -199,8 +199,9 @@ const MessageRow = memo(function MessageRow({
       </div>
     </div>
   );
+  // Off-screen rows skip layout/paint; the last row stays live for streaming and auto-follow.
   return (
-    <div className={pad}>
+    <div className={isLast ? pad : `${pad} [content-visibility:auto] [contain-intrinsic-size:auto_600px]`}>
       {showSeparator && <div className={v.separator} />}
       {renderMessage ? renderMessage(msg, msgIndex, { label, content }) : defaultRendering}
     </div>
@@ -245,6 +246,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
     const progressStore = useRef(new ProgressStore()).current;
     const v = VARIANT_CLASSES[variant];
     const pad = variant === "panel" ? "px-4" : "px-10";
+    const rootRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -274,7 +276,22 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
 
     const { dragActive, dropProps } = useFileDrop(addFiles, !readOnly && !inputDisabled);
 
-    const { scrollRef, contentRef, isAtBottom, handleWheel, scrollToBottom, scrollToTop } = useChatScroll();
+    const { scrollRef, contentRef, isAtBottom, scrollToBottom, scrollToTop } = useChatScroll();
+
+    // Long sessions paint the last rows first; older rows follow right after (auto-follow keeps the bottom anchored).
+    const [showAll, setShowAll] = useState(() => (initialMessages?.length ?? 0) <= INITIAL_ROWS);
+    useEffect(() => {
+      preloadResultChunks();
+      if (showAll) return;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const raf = requestAnimationFrame(() => {
+        timer = setTimeout(() => startTransition(() => setShowAll(true)), 0);
+      });
+      return () => {
+        cancelAnimationFrame(raf);
+        clearTimeout(timer);
+      };
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Stable refs for callbacks used inside Chat constructor
     const onDataRef = useRef(onData);
@@ -316,7 +333,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
 
     const { messages, setMessages, status, sendMessage, stop, error } = useChat({
       chat,
-      experimental_throttle: WEB_CONFIG.chatThrottleMs,
+      throttle: WEB_CONFIG.chatThrottleMs,
     });
     const sendMessageRef = useRef(sendMessage);
     sendMessageRef.current = sendMessage;
@@ -328,6 +345,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
     // Render-only collapse; ignore a boundary that exceeds the actual list
     // (stale summary from a concurrent truncation) rather than hiding everything.
     const collapse = collapseCount <= messages.length ? collapseCount : 0;
+    const firstRow = showAll ? collapse : Math.max(collapse, messages.length - INITIAL_ROWS);
 
     // Analysis-only view of a kept compaction boundary. Null when the message
     // at the index has no analysis section (normal boundary, stale index) —
@@ -349,12 +367,16 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
       if (prevStatus.current !== status) {
         if (status === "ready") {
           progressStore.clear();
-          textareaRef.current?.focus();
+          // Don't steal focus from elsewhere on the page (sidebar, settings, another input).
+          const active = document.activeElement;
+          if (!active || active === document.body || rootRef.current?.contains(active)) {
+            textareaRef.current?.focus();
+          }
         }
-        onStatusChangeRef.current?.(status, messages);
+        onStatusChangeRef.current?.(status, messagesRef.current);
       }
       prevStatus.current = status;
-    }, [status, messages]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Continue / retry detection. `messages.length > collapse` keeps the banner
     // from rendering for an interrupted message that is collapsed out of view.
@@ -375,14 +397,11 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
       (status === "streaming" && !isContentStreaming && !isSubAgentRunning);
 
     const lastId = status === "streaming" ? messages[messages.length - 1]?.id : null;
+    const canRetry = !readOnly && !inputDisabled && !isLoading;
 
     const handleStop = () => {
       onBeforeStop?.({ messages, progressStore });
-      fetch("/api/chat/stop", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: chatId }),
-      }).catch(() => {});
+      void stopChat(chatId);
       stop();
     };
 
@@ -394,7 +413,8 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
     useEffect(() => {
       if (!isLoading) return;
       const onKeyDown = (e: KeyboardEvent) => {
-        if (e.key === "Escape") handleStopRef.current();
+        // An overlay (e.g. attachment preview) that handled Escape marks it prevented.
+        if (e.key === "Escape" && !e.defaultPrevented) handleStopRef.current();
       };
       document.addEventListener("keydown", onKeyDown);
       return () => document.removeEventListener("keydown", onKeyDown);
@@ -433,7 +453,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
       sendMessageRef.current({ text: "Continue" });
     }, [scrollToBottom]);
 
-    // Retry last user message (used for error recovery)
+    // Retry the last user message: after an error, or when a turn ended with no reply.
     const onRetryTruncateRef = useRef(onRetryTruncate);
     onRetryTruncateRef.current = onRetryTruncate;
     const handleRetry = useCallback(async () => {
@@ -454,30 +474,27 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
       } catch {
         return; // server truncate failed — leave state untouched, banner stays
       }
+      const files = msg.parts.filter((p): p is FileUIPart => p.type === "file");
       setMessages(msgs.slice(0, userIdx));
-      sendMessageRef.current({ text: textPart.text });
-    }, [setMessages]);
+      scrollToBottom({ animation: "instant" });
+      sendMessageRef.current({ text: textPart.text, files });
+    }, [setMessages, scrollToBottom]);
 
     // Expose imperative API
     useImperativeHandle(
       ref,
       () => ({
-        messages,
+        get messages() { return messagesRef.current; },
         setMessages,
-        sendMessage,
-        stop,
+        sendMessage: (msg) => sendMessageRef.current(msg),
         scrollToBottom,
         scrollToTop,
-        progressStore,
-        status,
-        isLoading,
-        error,
       }),
-      [messages, setMessages, sendMessage, stop, scrollToBottom, scrollToTop, progressStore, status, isLoading, error],
+      [setMessages, scrollToBottom, scrollToTop],
     );
 
     return (
-      <div className={`relative flex flex-col h-full ${className ?? ""}`} {...dropProps}>
+      <div ref={rootRef} className={`relative flex flex-col h-full ${className ?? ""}`} {...dropProps}>
         {dragActive && (
           <div className="absolute inset-0 z-40 pointer-events-none flex items-center justify-center bg-[#2b5ea7]/10 border-2 border-dashed border-[#2b5ea7] rounded">
             <span className="text-sm font-medium text-[#2b5ea7] bg-white/90 px-4 py-2 rounded shadow-sm">Drop to attach</span>
@@ -489,7 +506,6 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
           <div
             ref={scrollRef}
             className={`overflow-y-auto overflow-x-hidden h-full${variant === "panel" ? " py-4" : ""}`}
-            onWheel={handleWheel}
             onCopy={normalizeClipboard}
           >
             <div ref={contentRef} className="min-h-full flex flex-col">
@@ -503,12 +519,13 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
                 </div>
               )}
 
-              {messages.map((msg, msgIndex) => msgIndex < collapse ? null : (
+              {messages.map((msg, msgIndex) => msgIndex < firstRow ? null : (
                 <MessageRow
                   key={msg.id || `msg-${msgIndex}`}
                   msg={msgIndex === analysisOnlyIndex && analysisOnlyMsg ? analysisOnlyMsg : msg}
                   msgIndex={msgIndex}
-                  showSeparator={msgIndex > collapse}
+                  showSeparator={msgIndex > firstRow}
+                  isLast={msgIndex === messages.length - 1}
                   isAnimating={msg.id === lastId}
                   progressStore={progressStore}
                   variant={variant}
@@ -541,7 +558,15 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
 
               {afterMessages && <div className={pad}>{afterMessages}</div>}
 
-              {!readOnly && !inputDisabled && error && (
+              {canRetry && !error && onRetryTruncate && lastMessage?.role === "user" && (
+                <div className={`flex justify-center ${v.continueMargin} ${pad}`}>
+                  <button type="button" onClick={handleRetry} className={theme.chatContinueButton}>
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              {canRetry && error && (
                 <div className={pad}>
                   <div className="mt-3 text-sm text-[#b33a2a] bg-[#b33a2a]/5 border border-[#b33a2a]/20 rounded px-4 py-3 flex items-center gap-3">
                     <span className="flex-1">{error.message}</span>
@@ -614,17 +639,11 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
             <textarea
               ref={textareaRef}
               value={input}
-              onChange={(e) => {
-                setInput(e.target.value);
-                e.target.style.height = "auto";
-                e.target.style.height = `${e.target.scrollHeight}px`;
-              }}
+              onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
+                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
                   handleSubmit(e);
-                  const ta = e.target as HTMLTextAreaElement;
-                  ta.style.height = "auto";
                 }
               }}
               onPaste={(e) => {

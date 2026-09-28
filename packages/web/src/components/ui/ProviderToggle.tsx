@@ -48,7 +48,14 @@ export function ProviderToggle({ activeProvider, onToggle }: ProviderToggleProps
     if (!valid) onToggle(UNIFIED_SCOPE);
   }, [activeProvider, connectedTypes]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!data && isLoading) return null;
+  // Same-height invisible chip so the row does not jump when the ping resolves.
+  if (!data && isLoading) {
+    return (
+      <div className="flex items-center gap-1.5" aria-hidden>
+        <span className="invisible flex items-center px-2 py-0.5 text-[10px] font-sans rounded border">ALL</span>
+      </div>
+    );
+  }
   if (connected.length === 0) return null;
 
   const showGcpPicker = connected.some((p) => p.type === "gcp") && gcpConfig !== null;

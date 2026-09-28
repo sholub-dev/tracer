@@ -8,7 +8,8 @@ export const WEB_CONFIG = {
 
   /** Also the global react-query staleTime default (main.tsx). */
   sessionStaleTimeMs: 30_000,
-  activeStreamPollingMs: 5_000,
+  /** Coalesces bursts of live session change events into one refetch. */
+  sessionEventCoalesceMs: 100,
   monitorPollingMs: 60_000,
   updateCheckStaleTimeMs: 5 * 60 * 1000,
   // ── Self-update restart: poll for the restarted server, then reload ──

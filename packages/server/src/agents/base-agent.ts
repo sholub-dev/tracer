@@ -1,13 +1,15 @@
-import { streamText, smoothStream, convertToModelMessages, stepCountIs, createUIMessageStream, type UIMessage, type ToolSet } from "ai";
+import { streamText, convertToModelMessages, isStepCount, createUIMessageStream, toUIMessageStream, type UIMessage, type ToolSet } from "ai";
 import { eq, sql } from "drizzle-orm";
 import { DEFAULT_SESSION_TITLE, unixNow, splitAtAnalysis, type AfterCompleteParams } from "@tracer-sh/shared";
 import { chatSessions } from "../db/schema.js";
+import { sessionChanged } from "../lib/session-events.js";
 import { resolveModel, type ProviderOptions } from "../llm/resolve.js";
 import { extractUsage, recordAgentRun } from "../llm/usage.js";
 import { StreamBroadcaster } from "../lib/stream-broadcaster.js";
 import type { Context } from "../trpc/context.js";
 import type { ChatToolWriter as StreamWriter } from "@tracer-sh/shared";
-import { getCurrentDateBlock } from "../lib/current-context.js";
+import { getCurrentDateBlock, getCurrentTimeText } from "../lib/current-context.js";
+import { stampSentTime, withPromptCaching, withSentTimes } from "../llm/prompt-cache.js";
 import { EVIDENCE_GROUNDING, PLAIN_LANGUAGE } from "../lib/shared-prompts.js";
 import { CONFIG } from "../config.js";
 
@@ -95,6 +97,7 @@ function finalizeSession(sessionId: string, context: Context, broadcaster: Strea
     .set({ status: "done", updatedAt: unixNow() })
     .where(eq(chatSessions.id, sessionId))
     .run();
+  sessionChanged(sessionId);
   broadcaster.finish();
   context.activeStreams.delete(sessionId);
 }
@@ -112,6 +115,7 @@ async function processLLMStream(
   collectTools: ChatAgentConfig["collectTools"],
   sessionTitle: ChatAgentConfig["sessionTitle"],
   model: Parameters<typeof streamText>[0]["model"],
+  provider: string,
   modelId: string,
   providerOptions: ProviderOptions,
   compaction: { summary?: string | null; summaryUpTo?: number | null },
@@ -165,7 +169,8 @@ async function processLLMStream(
     console.warn(`[chat] Ignoring stale compaction boundary for ${sessionId} (summaryUpTo=${compaction.summaryUpTo}, messages=${messages.length})`);
   }
 
-  const modelMessages = await convertToModelMessages(modelInput, {
+  // Clock time rides on user turns, not the system prompt, so the prompt stays cacheable.
+  const modelMessages = await convertToModelMessages(withSentTimes(modelInput), {
     tools: tools as ToolSet | undefined,
     convertDataPart: () => undefined,
   });
@@ -195,34 +200,34 @@ When the user's question spans multiple providers, query each relevant provider 
     systemPrompt += `\n\n## Earlier conversation summary\nThe earlier part of this conversation was compacted to save context. The summary below replaces those messages and is authoritative: the work it describes is already done — do NOT redo it. Reuse its recorded results, identifiers, queries, and conclusions.\n\n<conversation_summary>\n${summaryForPrompt}\n</conversation_summary>`;
   }
 
+  const cached = withPromptCaching(provider, systemPrompt, providerOptions);
   const result = streamText({
     model,
     temperature: 0,
-    system: systemPrompt,
+    instructions: cached.instructions,
     messages: modelMessages,
     tools: tools as Parameters<typeof streamText>[0]["tools"],
-    stopWhen: tools ? stepCountIs(collected.maxSteps ?? 15) : undefined,
-    providerOptions,
-    experimental_transform: smoothStream({ chunking: "word" }),
+    stopWhen: tools ? isStepCount(collected.maxSteps ?? 15) : undefined,
+    providerOptions: cached.providerOptions,
     abortSignal: serverAbort.signal,
   });
 
-  // Promise that resolves when the detached persistence IIFE in onFinish completes.
+  // Promise that resolves when the detached persistence IIFE in onEnd completes.
   // Gates the fallback cleanup so processLLMStream doesn't return prematurely.
   let resolveFinish!: () => void;
   const finishPromise = new Promise<void>((r) => { resolveFinish = r; });
 
-  const uiStream = result.toUIMessageStream({
+  const uiStream = toUIMessageStream({
+    stream: result.stream,
+    tools: tools as ToolSet | undefined,
     sendStart: false,
     originalMessages: messages,
-    onFinish: ({ messages: updatedMessages }) => {
-      finalizeSession(sessionId, context, broadcaster);
-
-      // onFinish is synchronous but totalUsage requires an await, so full
+    onEnd: ({ messages: updatedMessages }) => {
+      // onEnd is synchronous but usage requires an await, so full
       // persistence runs in a detached IIFE to avoid blocking the stream close.
       (async () => {
         try {
-          const rawUsage = await result.totalUsage;
+          const rawUsage = await result.usage;
           const chatUsage = extractUsage(rawUsage, modelId);
 
           const enrichedMessages = updatedMessages.map((msg, i) => {
@@ -265,6 +270,7 @@ When the user's question spans multiple providers, query each relevant provider 
               },
             })
             .run();
+          sessionChanged(sessionId);
 
           if (collected.afterComplete) {
             let lastUserText = "";
@@ -284,6 +290,8 @@ When the user's question spans multiple providers, query each relevant provider 
         } catch (err) {
           console.warn(`[chat] Failed to save session ${sessionId}:`, err);
         } finally {
+          // After the DB write so clients reloading on "done" read the final messages.
+          finalizeSession(sessionId, context, broadcaster);
           resolveFinish();
         }
       })();
@@ -319,21 +327,22 @@ When the user's question spans multiple providers, query each relevant provider 
     reader.releaseLock();
   }
 
-  // Wait for onFinish persistence to complete.
-  // If the stream was aborted before onFinish could fire, use a timeout fallback.
+  // Wait for onEnd persistence to complete.
+  // If the stream was aborted before onEnd could fire, use a timeout fallback.
   let timeoutId: ReturnType<typeof setTimeout>;
   const timeout = new Promise<void>((r) => { timeoutId = setTimeout(r, 5000); });
   await Promise.race([finishPromise, timeout]);
   clearTimeout(timeoutId!);
 
-  // Fallback cleanup if onFinish never ran (e.g. abort before stream completes)
+  // Fallback cleanup if onEnd never ran (e.g. abort before stream completes)
   finalizeSession(sessionId, context, broadcaster);
 }
 
-export async function runChatAgent({ sessionId, messages, summary, summaryUpTo, context, collectTools, sessionTitle }: ChatAgentConfig) {
+export async function runChatAgent({ sessionId, messages: incoming, summary, summaryUpTo, context, collectTools, sessionTitle }: ChatAgentConfig) {
+  const messages = stampSentTime(incoming, getCurrentTimeText(context.db));
   const resolved = resolveModel(context.db);
   if ("error" in resolved) return { error: resolved.error };
-  const { model, modelId, providerOptions } = resolved;
+  const { model, provider, modelId, providerOptions } = resolved;
 
   // Prevent concurrent streams on the same session
   if (context.activeStreams.has(sessionId)) {
@@ -346,27 +355,29 @@ export async function runChatAgent({ sessionId, messages, summary, summaryUpTo, 
   context.activeStreams.set(sessionId, { broadcaster, controller: serverAbort });
 
   const now = unixNow();
+  const messagesJson = JSON.stringify(messages);
   context.db
     .insert(chatSessions)
     .values({
       id: sessionId,
       title: DEFAULT_SESSION_TITLE,
-      messages: JSON.stringify(messages),
+      messages: messagesJson,
       status: "streaming",
       createdAt: now,
       updatedAt: now,
     })
     .onConflictDoUpdate({
       target: chatSessions.id,
-      set: { messages: JSON.stringify(messages), status: "streaming", updatedAt: now },
+      set: { messages: messagesJson, status: "streaming", updatedAt: now },
     })
     .run();
+  sessionChanged(sessionId);
 
   // Start LLM processing in background — completely decoupled from HTTP lifecycle.
   // If the HTTP response is cancelled (client navigates away), this continues running.
   processLLMStream(
     sessionId, messages, context, broadcaster, serverAbort,
-    collectTools, sessionTitle, model, modelId, providerOptions,
+    collectTools, sessionTitle, model, provider, modelId, providerOptions,
     { summary, summaryUpTo },
   ).catch((err) => {
     console.error(`[chat] Unhandled error in LLM processing for ${sessionId}:`, err);

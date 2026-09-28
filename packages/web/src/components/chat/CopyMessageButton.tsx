@@ -5,22 +5,25 @@ import { ANALYSIS_MARKER } from "@tracer-sh/shared";
 
 /** Strip markdown syntax to produce clean plain text for pasting into Slack etc. */
 function stripMarkdown(text: string): string {
+  // Code is stashed first so emphasis/list rules never touch identifiers like error_rate_by_host.
+  const code: string[] = [];
+  const stash = (s: string) => `\u0000${code.push(s) - 1}\u0000`;
   return text
-    .replace(/^#{1,6}\s+/gm, "")           // headers
-    .replace(/\*\*(.+?)\*\*/g, "$1")       // bold
-    .replace(/__(.+?)__/g, "$1")
-    .replace(/\*(.+?)\*/g, "$1")           // italic
-    .replace(/_(.+?)_/g, "$1")
-    .replace(/~~(.+?)~~/g, "$1")           // strikethrough
-    .replace(/`([^`]+)`/g, "$1")           // inline code
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1") // links
-    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1") // images
-    .replace(/^>\s+/gm, "")               // blockquotes
-    .replace(/^(\s*)[-*+]\s+/gm, "$1")   // unordered list markers
-    .replace(/^(\s*)\d+\.\s+/gm, "$1")   // ordered list markers
-    .replace(/^```\w*\n?/gm, "")          // code fences
-    .replace(/^```$/gm, "")
-    .replace(/^[-*_]{3,}\s*$/gm, "");      // horizontal rules
+    .replace(/^```[^\n]*\n([\s\S]*?)\n?^```[ \t]*$/gm, (_, body: string) => stash(body)) // code fences
+    .replace(/`([^`\n]+)`/g, (_, c: string) => stash(c))   // inline code
+    .replace(/^[-*_]{3,}\s*$/gm, "")                       // horizontal rules
+    .replace(/^#{1,6}\s+/gm, "")                           // headers
+    .replace(/\*\*(.+?)\*\*/g, "$1")                         // bold
+    .replace(/(?<!\w)__(.+?)__(?!\w)/g, "$1")
+    .replace(/(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])/g, "$1") // italic
+    .replace(/(?<!\w)_(?!\s)(.+?)(?<!\s)_(?!\w)/g, "$1")
+    .replace(/~~(.+?)~~/g, "$1")                           // strikethrough
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")              // images
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")               // links
+    .replace(/^>\s+/gm, "")                               // blockquotes
+    .replace(/^(\s*)[-*+]\s+/gm, "$1")                    // unordered list markers
+    .replace(/^(\s*)\d+\.\s+/gm, "$1")                    // ordered list markers
+    .replace(/\u0000(\d+)\u0000/g, (_, i: string) => code[Number(i)]);
 }
 
 /** Extract text from message parts: includes text + tool inputs, skips tool results. */

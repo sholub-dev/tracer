@@ -1,3 +1,4 @@
+import "./node-version.js";
 import { serve } from "@hono/node-server";
 import { eq } from "drizzle-orm";
 import { FEATURES, unixNow } from "@tracer-sh/shared";

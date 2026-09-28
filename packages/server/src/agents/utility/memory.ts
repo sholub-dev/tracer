@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { tool, generateText, stepCountIs } from "ai";
+import { tool, generateText, isStepCount } from "ai";
 import type { Db } from "../../db/client.js";
 import { resolveModel } from "../../llm/resolve.js";
 import { extractUsage, recordAgentRun } from "../../llm/usage.js";
@@ -154,10 +154,10 @@ ${tailInstruction}`;
     const result = await generateText({
       model: resolved.model,
       temperature: 0,
-      system: SYSTEM_PROMPT,
+      instructions: SYSTEM_PROMPT,
       prompt,
       tools,
-      stopWhen: stepCountIs(10),
+      stopWhen: isStepCount(10),
     });
 
     if (sessionId && result.usage) {

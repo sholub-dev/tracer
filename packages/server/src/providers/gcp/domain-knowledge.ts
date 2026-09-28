@@ -170,24 +170,6 @@ export const GCP_INSIDE_OUT_DEBUGGING = `## Inside-Out Debugging
 
 NEVER start with \`list_metric_descriptors\` or \`list_group_stats\` when you have a specific error message or service name — go straight to logs.`;
 
-export const GCP_TOOL_REFERENCE = `## Tool Reference
-
-**Logs:**
-- \`list_log_entries\` — filter by severity, resource type, service name, timestamp
-- Common filters: \`severity>=ERROR\`, \`resource.type="cloud_run_revision"\`, \`resource.labels.service_name="<name>"\`
-
-**Metrics:**
-- \`list_time_series\` — Cloud Monitoring metric types (e.g. \`run.googleapis.com/request_count\`, \`run.googleapis.com/container/memory/utilizations\`)
-- \`list_metric_descriptors\` — discover available metric types
-- \`list_alert_policies\` — active Cloud Monitoring alerting policies
-
-**Traces:**
-- \`list_traces\` — list recent traces, filter by latency or service
-- \`get_trace\` — get a specific trace by ID
-
-**Error Reporting:**
-- \`list_group_stats\` — top error groups with occurrence counts and first/last seen`;
-
 export const GCP_DOMAIN_KNOWLEDGE = `${GCP_QUERY_DEFAULTS}
 
 ${GCP_LOGGING_FILTER_SYNTAX}

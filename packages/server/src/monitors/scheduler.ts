@@ -3,6 +3,7 @@ import { SESSION_KIND, substituteWindow, unixNow } from "@tracer-sh/shared";
 import type { Context } from "../trpc/context.js";
 import { chatSessions, monitors, monitorTriggers } from "../db/schema.js";
 import { startAgentSession } from "../agents/start-session.js";
+import { sessionChanged } from "../lib/session-events.js";
 import { CONFIG } from "../config.js";
 import { evaluateCondition, extractGroups, parseCondition, sumGroups, type Group } from "./condition.js";
 import { classifyGroups, pastSessions, readAnalysis, readPastSessionTool, type PastSession, type TriggerGroup } from "./repeats.js";
@@ -209,12 +210,13 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
       kind: SESSION_KIND.MONITOR,
       title: sessionTitle(monitor.name, classified),
       message,
-      tools: { read_past_session: readPastSessionTool(past) },
+      tools: { read_past_session: readPastSessionTool(() => past) },
       onComplete: () => void notifySlack(context, monitor, classified, now, sessionId),
     });
     if ("error" in started) {
       context.db.delete(monitorTriggers).where(eq(monitorTriggers.id, triggerId)).run();
       context.db.delete(chatSessions).where(eq(chatSessions.id, sessionId)).run();
+      sessionChanged(sessionId);
       fail(context, monitor.id, window.end, `Could not start session: ${started.error}`);
       return;
     }

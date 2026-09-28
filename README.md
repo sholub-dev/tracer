@@ -81,7 +81,7 @@ monitor alerts are posted to one channel through an incoming webhook.
 
 ## Install
 
-Requires [Node.js 20+](https://nodejs.org/).
+Requires [Node.js 22.12+](https://nodejs.org/).
 
 **Run the latest, no install:**
 
@@ -119,7 +119,8 @@ tracer-sh analyze "Why did checkout error rate spike after 14:00 UTC?"
 - `--json` — full response envelope (session id, queries, usage)
 - `tracer-sh --help` — usage for every subcommand
 
-Requires a running server.
+Requires a running server. To let Claude Code or Cursor use it, install the
+Tracer skill from **Settings > Integrations**.
 
 ## Security
 

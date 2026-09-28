@@ -8,4 +8,3 @@ export const TIME_RANGE_PRESETS = [
 ] as const;
 
 export const DEFAULT_SINCE = "24 hours ago";
-export const DEFAULT_UNTIL = "NOW";

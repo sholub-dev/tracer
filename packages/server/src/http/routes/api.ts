@@ -28,15 +28,11 @@ export function registerApiRoutes(app: Hono, context: Context): void {
 
     const sessionId = body.sessionId ?? crypto.randomUUID();
 
-    // Resolved by onComplete, which fires after the final messages have been persisted to the DB.
-    let resolveDone: () => void = () => {};
-
     const result = await startAgentSession(context, {
       sessionId,
       kind: SESSION_KIND.API,
       message,
       provider: body.provider,
-      onComplete: () => resolveDone(),
     });
 
     if ("error" in result) {
@@ -44,27 +40,9 @@ export function registerApiRoutes(app: Hono, context: Context): void {
       return c.json({ sessionId, status: "error", error: result.error }, status);
     }
 
-    // Wait for the run to complete. Fast path: resolveDone (the wrapped afterComplete)
-    // fires only after the enriched messages are persisted, so it is safe to read the
-    // DB immediately. Fallback: the session leaving activeStreams means the run ended
-    // even when afterComplete never fires (error/abort path); the grace then lets any
-    // in-flight success-path persistence land before we read, so we never return a
-    // "done" status with an empty analysis. On success resolveDone wins long before the
-    // grace elapses, so the grace only adds latency on the rare error path.
-    const PERSIST_GRACE_MS = 2000;
-    let pollHandle: ReturnType<typeof setInterval>;
-    let graceHandle: ReturnType<typeof setTimeout> | undefined;
-    await new Promise<void>((resolve) => {
-      resolveDone = resolve;
-      pollHandle = setInterval(() => {
-        if (!context.activeStreams.has(sessionId)) {
-          clearInterval(pollHandle);
-          graceHandle = setTimeout(resolve, PERSIST_GRACE_MS);
-        }
-      }, 200);
-    });
-    clearInterval(pollHandle!);
-    clearTimeout(graceHandle);
+    // The broadcaster finishes only after final messages are persisted, on success, error and abort alike.
+    const active = context.activeStreams.get(sessionId);
+    if (active) await new Promise<void>((resolve) => active.broadcaster.onDone(resolve));
 
     const row = context.db
       .select()

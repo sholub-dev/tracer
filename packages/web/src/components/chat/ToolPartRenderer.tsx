@@ -1,13 +1,13 @@
 import React, { memo, useRef } from "react";
 import { Streamdown } from "streamdown";
+import { MD_CONTROLS, MD_LINK_SAFETY } from "../../lib/markdown";
 import { CLIENT_TOOL_NAMES } from "@tracer-sh/shared";
-import { JsonTree } from "../ui/JsonTree";
 import { Spinner } from "../ui/Spinner";
 import type { ProgressPart } from "@tracer-sh/shared";
 import { theme } from "../../lib/theme";
-import ResultView from "../charts/ResultView";
+import ResultView, { JsonTree } from "../charts/ResultView";
 import { useProgress, type ProgressStore } from "../../lib/progress-store";
-import { ThinkingDots } from "./MessageParts";
+import { ThinkingDots } from "./ChatIndicators";
 import { ReasoningBlock } from "./ReasoningBlock";
 import { AnalysisContainer } from "./AnalysisContainer";
 import { MonitorSavedCard, type MonitorSavedOutput } from "../monitors/MonitorSavedCard";
@@ -257,7 +257,7 @@ const ToolCallItem = memo(function ToolCallItem({ toolName }: { toolName: string
 const TextItem = memo(function TextItem({ content, isAnimating }: { content: string; isAnimating: boolean }) {
   return (
     <div className={theme.analysisBlock}>
-      <Streamdown isAnimating={isAnimating} controls={{ code: true }} linkSafety={{ enabled: false }}>{content}</Streamdown>
+      <Streamdown isAnimating={isAnimating} controls={MD_CONTROLS} linkSafety={MD_LINK_SAFETY}>{content}</Streamdown>
     </div>
   );
 });
@@ -266,7 +266,7 @@ const SummaryItem = memo(function SummaryItem({ content }: { content: string }) 
   return (
     <div className={theme.summaryBlock}>
       <div className={theme.summaryLabel}>Analysis</div>
-      <Streamdown isAnimating={false} controls={{ code: true }} linkSafety={{ enabled: false }}>{content}</Streamdown>
+      <Streamdown isAnimating={false} controls={MD_CONTROLS} linkSafety={MD_LINK_SAFETY}>{content}</Streamdown>
     </div>
   );
 });
@@ -306,7 +306,7 @@ function renderProgressPart(
     if (inAnalysis) {
       if (!p.content.trim()) return null;
       return (
-        <Streamdown key={key} isAnimating={isAnimating} controls={{ code: true }} linkSafety={{ enabled: false }}>
+        <Streamdown key={key} isAnimating={isAnimating} controls={MD_CONTROLS} linkSafety={MD_LINK_SAFETY}>
           {p.content}
         </Streamdown>
       );
@@ -347,7 +347,23 @@ const ProgressPartsList = memo(function ProgressPartsList({ parts, isAnimating }
   );
 });
 
-export const ToolPartRenderer = memo(function ToolPartRenderer({ part, progressStore }: { part: ToolPart; progressStore: ProgressStore }) {
+type ToolPartRendererProps = { part: ToolPart; progressStore: ProgressStore };
+
+// The AI SDK clones the streaming message per chunk, so part identity changes
+// even when nothing this component reads did.
+function toolPartPropsEqual(prev: ToolPartRendererProps, next: ToolPartRendererProps): boolean {
+  if (prev.progressStore !== next.progressStore) return false;
+  const a = prev.part;
+  const b = next.part;
+  if (a === b) return true;
+  if (a.toolCallId !== b.toolCallId || a.type !== b.type || a.state !== b.state) return false;
+  // Output and errorText are immutable once a final state is reached.
+  if (a.state === "output-available" || a.state === "output-error") return true;
+  return a.output === b.output && a.errorText === b.errorText &&
+    a.input?.task === b.input?.task && a.input?.query === b.input?.query;
+}
+
+export const ToolPartRenderer = memo(function ToolPartRenderer({ part, progressStore }: ToolPartRendererProps) {
   // begin_analysis is an invisible marker — never render it
   if (part.type === CLIENT_TOOL_NAMES.BEGIN_ANALYSIS) return null;
   // Drafts from the removed propose_monitor tool in older chats.
@@ -509,4 +525,4 @@ export const ToolPartRenderer = memo(function ToolPartRenderer({ part, progressS
 
   // Unknown tool types — skip
   return null;
-});
+}, toolPartPropsEqual);

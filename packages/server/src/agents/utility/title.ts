@@ -5,6 +5,7 @@ import { chatSessions } from "../../db/schema.js";
 import { resolveModel } from "../../llm/resolve.js";
 import { extractUsage, recordAgentRun } from "../../llm/usage.js";
 import type { Db } from "../../db/client.js";
+import { sessionChanged } from "../../lib/session-events.js";
 
 export function generateSessionTitle(db: Db, sessionId: string, userMessage: string): Promise<string | null> {
   const resolved = resolveModel(db);
@@ -16,7 +17,7 @@ export function generateSessionTitle(db: Db, sessionId: string, userMessage: str
   return generateText({
     model: resolved.model,
     temperature: 0,
-    system: "Generate a short title (3-8 words) for the user's request. Preserve any IDs, error names, service names, or specific identifiers from the message — these make the title useful. Focus on WHAT is being asked, not how. Output only the title, nothing else.",
+    instructions: "Generate a short title (3-8 words) for the user's request. Preserve any IDs, error names, service names, or specific identifiers from the message — these make the title useful. Focus on WHAT is being asked, not how. Output only the title, nothing else.",
     messages: [{ role: "user", content: userMessage }],
   })
     .then(({ text, usage }) => {
@@ -33,6 +34,7 @@ export function generateSessionTitle(db: Db, sessionId: string, userMessage: str
           .set({ title, updatedAt: unixNow() })
           .where(eq(chatSessions.id, sessionId))
           .run();
+        sessionChanged(sessionId);
         return title;
       }
       return null;

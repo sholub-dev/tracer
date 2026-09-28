@@ -15,23 +15,6 @@ export function extractUsage(usage: LanguageModelUsage, model: string): TokenUsa
   };
 }
 
-/** Zero-valued TokenUsage for use as an accumulator seed. */
-export function emptyUsage(model = ""): TokenUsage {
-  return { model, inputTokens: 0, outputTokens: 0, reasoningTokens: 0, cachedInputTokens: 0, cacheWriteTokens: 0 };
-}
-
-/** Sum two TokenUsage objects (keeps model from `a`). */
-export function addTokenUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
-  return {
-    model: a.model,
-    inputTokens: a.inputTokens + b.inputTokens,
-    outputTokens: a.outputTokens + b.outputTokens,
-    reasoningTokens: a.reasoningTokens + b.reasoningTokens,
-    cachedInputTokens: a.cachedInputTokens + b.cachedInputTokens,
-    cacheWriteTokens: a.cacheWriteTokens + b.cacheWriteTokens,
-  };
-}
-
 /** Record a single LLM call's token usage in the agent_runs table. Best-effort. */
 export function recordAgentRun(db: Db, opts: {
   sessionId: string;

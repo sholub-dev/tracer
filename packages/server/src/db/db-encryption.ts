@@ -1,3 +1,4 @@
+/// <reference path="../types/better-sqlite3-multiple-ciphers.d.ts" />
 import { renameSync, rmSync, existsSync, copyFileSync, openSync, readSync, closeSync } from "node:fs";
 import Database, { type Database as DatabaseType } from "better-sqlite3-multiple-ciphers";
 

@@ -8,6 +8,7 @@ import {
 } from "@tracer-sh/shared";
 import type { Context } from "../trpc/context.js";
 import { chatSessions } from "../db/schema.js";
+import { sessionChanged } from "../lib/session-events.js";
 import { firstUserMessageTitle, loadSessionMessages, runChatAgent } from "./base-agent.js";
 import { collectChatTools } from "../tools/chat-tools.js";
 import { generateSessionTitle } from "./utility/title.js";
@@ -45,6 +46,7 @@ export async function startAgentSession(
     })
     .onConflictDoNothing()
     .run();
+  sessionChanged(sessionId);
 
   const userMessage: UIMessage = {
     id: crypto.randomUUID(),

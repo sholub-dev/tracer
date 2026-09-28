@@ -1,10 +1,6 @@
 import type {
   IProvider,
-  TracerError,
-  TracerLogEntry,
-  TracerTransaction,
   PingResult,
-  TimeRange,
 } from "@tracer-sh/shared";
 
 export abstract class BaseProvider implements IProvider {
@@ -18,8 +14,5 @@ export abstract class BaseProvider implements IProvider {
   abstract testConnection(): Promise<boolean>;
   abstract ping(): Promise<PingResult>;
   abstract dispose(): Promise<void>;
-  abstract getErrors(timeRange: TimeRange): Promise<TracerError[]>;
-  abstract getTransactions(timeRange: TimeRange): Promise<TracerTransaction[]>;
-  abstract getLogs(timeRange: TimeRange, filter?: string): Promise<TracerLogEntry[]>;
   abstract executeRawQuery(query: string): Promise<unknown>;
 }

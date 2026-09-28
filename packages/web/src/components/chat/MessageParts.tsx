@@ -1,5 +1,7 @@
 import React, { useRef, useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Streamdown } from "streamdown";
+import { MD_CONTROLS, MD_LINK_SAFETY } from "../../lib/markdown";
 import { ANALYSIS_MARKER, findAnalysisMarker } from "@tracer-sh/shared";
 import { ToolPartRenderer } from "./ToolPartRenderer";
 import { ReasoningBlock } from "./ReasoningBlock";
@@ -140,14 +142,20 @@ function FileAttachment({ part }: { part: FilePartLike }) {
 }
 
 function AttachmentOverlay({ part, onClose }: { part: FilePartLike; onClose: () => void }) {
+  // Capture phase + preventDefault so ChatCore's Escape-to-stop skips this press.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      onClose();
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
   }, [onClose]);
 
   const label = part.filename ?? part.mediaType ?? "attachment";
-  return (
+  // Portaled: message rows use content-visibility, which confines fixed descendants to the row.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex flex-col bg-black/70" onClick={onClose}>
       <div className="flex items-center justify-between gap-4 px-4 py-2.5 text-white text-sm font-sans">
         <span className="truncate">{label}</span>
@@ -165,7 +173,8 @@ function AttachmentOverlay({ part, onClose }: { part: FilePartLike; onClose: () 
           <iframe src={part.url} title={label} className="w-full h-full bg-white rounded" onClick={(e) => e.stopPropagation()} />
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -206,7 +215,7 @@ export const MessageParts = React.memo(
         const text = textOverride ?? part.text;
         if (!text.trim()) return null;
         return (
-          <Streamdown key={i} isAnimating={isAnimating} controls={{ code: true }} linkSafety={{ enabled: false }}>
+          <Streamdown key={i} isAnimating={isAnimating} controls={MD_CONTROLS} linkSafety={MD_LINK_SAFETY}>
             {text}
           </Streamdown>
         );
@@ -288,53 +297,3 @@ export const MessageParts = React.memo(
     return true;
   },
 );
-
-/** Animated bouncing dots shown while waiting for a response. */
-export function ThinkingDots({ className }: { className: string }) {
-  return (
-    <div className={className}>
-      <span className="inline-flex items-center gap-1">
-        {THINKING_DELAYS.map((delay) => (
-          <span
-            key={delay}
-            className="inline-block w-1.5 h-1.5 rounded-full bg-current"
-            style={THINKING_DOT_STYLES[delay]}
-          />
-        ))}
-      </span>
-    </div>
-  );
-}
-const THINKING_DELAYS = [0, 150, 300] as const;
-const THINKING_DOT_STYLES: Record<number, React.CSSProperties> = {
-  0:   { animation: "dot-bounce 1.2s ease-in-out infinite", animationDelay: "0ms" },
-  150: { animation: "dot-bounce 1.2s ease-in-out infinite", animationDelay: "150ms" },
-  300: { animation: "dot-bounce 1.2s ease-in-out infinite", animationDelay: "300ms" },
-};
-
-/**
- * Floating button that appears when the user scrolls away from the bottom.
- */
-export function ScrollToBottomButton({
-  isAtBottom,
-  scrollToBottom,
-}: {
-  isAtBottom: boolean;
-  scrollToBottom: (opts?: { animation?: "instant" | "smooth" }) => void;
-}) {
-  if (isAtBottom) return null;
-
-  return (
-    <button
-      type="button"
-      onClick={() => scrollToBottom({ animation: "instant" })}
-      className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 bg-[#2b5ea7] text-white rounded-full p-2 shadow-lg hover:bg-[#1e4a8a] transition-colors"
-      title="Scroll to bottom"
-      aria-label="Scroll to bottom"
-    >
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-        <polyline points="6 9 12 15 18 9" />
-      </svg>
-    </button>
-  );
-}

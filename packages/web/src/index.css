@@ -16,6 +16,21 @@
   90%, 100% { clip-path: inset(0 0 0 100%); }
 }
 
+@keyframes row-in {
+  from { opacity: 0; transform: translateY(-3px); }
+}
+
+@keyframes title-in {
+  from { opacity: 0; filter: blur(3px); }
+}
+
+.animate-row-in { animation: row-in 220ms ease-out; }
+.animate-title-in { animation: title-in 350ms ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-row-in, .animate-title-in { animation: none; }
+}
+
 .react-grid-placeholder {
   background: #d4d2cd !important;
   opacity: 0.2 !important;

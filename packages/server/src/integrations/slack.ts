@@ -53,6 +53,8 @@ const MAX_GROUPS = 5;
 export function redact(text: string): string {
   return text
     .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, "[email]")
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "[id]")
+    .replace(/(\/[^\s?]*)\?\S+/g, "$1?[query]")
     .replace(/\b\d{3}-\d{2}-\d{4}\b/g, "[ssn]")
     .replace(/\+?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b/g, "[phone]")
     .replace(/\b\d{9,}\b/g, "[number]");
@@ -75,22 +77,30 @@ export function mentionPrefix(mentions: string[]): string {
   return mentions.length > 0 ? `${mentions.join(" ")} ` : "";
 }
 
-/** Reads the agent's closing "Severity:" and "TL;DR:" lines; falls back to the first sentence. */
-export function parseVerdict(analysis: string): { severity: string; summary: string } {
+const DETAIL_MAX_CHARS = 200;
+const DETAIL_LABELS = ["Why", "Affected", "Seen before", "Next step"];
+
+const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max)} …` : s);
+const clean = (s: string) => s.replace(/\*\*|`/g, "").trim();
+
+/** Reads the agent's closing "Severity:", "TL;DR:" and detail lines; falls back to the first sentence. */
+export function parseVerdict(analysis: string): { severity: string; summary: string; details: [string, string][] } {
   const severity = [...analysis.matchAll(/^\W*severity\W*(critical|high|medium|low)\b/gim)].pop()?.[1]?.toLowerCase() ?? "unknown";
   let summary = [...analysis.matchAll(/^\W*tl;?dr\W*(.+)$/gim)].pop()?.[1] ?? "";
   if (!summary) {
     const prose = analysis.split("\n").find((l) => /[a-z]/i.test(l) && !/^\s*(#|```|\||severity)/i.test(l)) ?? "";
     summary = prose.split(/(?<=[.!?])\s/)[0] ?? "";
   }
-  summary = summary.replace(/\*\*|`/g, "").trim();
-  return { severity, summary: summary.length > SUMMARY_MAX_CHARS ? `${summary.slice(0, SUMMARY_MAX_CHARS)} …` : summary };
+  const details: [string, string][] = [];
+  for (const label of DETAIL_LABELS) {
+    const text = clean([...analysis.matchAll(new RegExp(`^\\W*${label}\\**\\s*:\\**\\s*(.+)$`, "gim"))].pop()?.[1] ?? "");
+    if (text) details.push([label, clip(text, DETAIL_MAX_CHARS)]);
+  }
+  return { severity, summary: clip(clean(summary), SUMMARY_MAX_CHARS), details };
 }
 
 export interface MonitorAlert {
   name: string;
-  condition: string;
-  value: number;
   groups: string[];
   triggeredAt: number;
   analysis: string;
@@ -102,13 +112,15 @@ export function monitorAlertText(a: MonitorAlert): string {
   const time = new Date(a.triggeredAt * 1000).toLocaleString("en-US", {
     timeZone: a.timeZone, month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
   });
-  const { severity, summary } = parseVerdict(a.analysis);
+  const { severity, summary, details } = parseVerdict(a.analysis);
   const parsed = parseMentions(a.mentions ?? "");
   const headline = redact(summary) || `Monitor "${a.name}" fired; no root cause found`;
   const lines = [`${"mentions" in parsed ? mentionPrefix(parsed.mentions) : ""}*[${severity.toUpperCase()}] ${escape(headline)}*`];
+  for (const [label, text] of details) lines.push(`${label}: ${escape(redact(text))}`);
   const keys = a.groups.filter(Boolean).map(redact);
   const more = keys.length > MAX_GROUPS ? ` +${keys.length - MAX_GROUPS} more` : "";
-  if (keys.length > 0) lines.push(`Affected: ${escape(keys.slice(0, MAX_GROUPS).join(", "))}${more}`);
-  lines.push(`_Found by monitor "${escape(a.name)}" (count ${a.value}, condition ${escape(a.condition)}) at ${time}_`);
+  const footer = [`monitor "${a.name}"`, time];
+  if (keys.length > 0) footer.unshift(`${keys.slice(0, MAX_GROUPS).join(", ")}${more}`);
+  lines.push(`_${escape(footer.join(" · "))}_`);
   return lines.join("\n");
 }

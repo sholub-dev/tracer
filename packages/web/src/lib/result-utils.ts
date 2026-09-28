@@ -33,7 +33,10 @@ export function coerceNumeric(value: unknown): number | null {
     const inner = Object.values(value as object)[0];
     return typeof inner === "number" && Number.isFinite(inner) ? inner : null;
   }
-  if (value != null && typeof value === "object" && "score" in value) return coerceNumeric((value as { score: unknown }).score);
+  if (value != null && typeof value === "object" && "score" in value) {
+    const apdex = value as { score: unknown; count?: unknown };
+    return apdex.count === 0 ? null : coerceNumeric(apdex.score);
+  }
   return null;
 }
 

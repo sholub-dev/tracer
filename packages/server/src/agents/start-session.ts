@@ -22,11 +22,13 @@ export interface StartSessionOptions {
   provider?: string;
   /** Fires after the final messages are persisted. */
   onComplete?: () => void;
+  /** Extra tools for this session only. */
+  tools?: Record<string, unknown>;
 }
 
 export async function startAgentSession(
   context: Context,
-  { sessionId, kind, message, title, provider, onComplete }: StartSessionOptions,
+  { sessionId, kind, message, title, provider, onComplete, tools }: StartSessionOptions,
 ): Promise<{ ok: true } | { error: string }> {
   // runChatAgent's upserts never touch `kind`, so it survives the run; resumed sessions keep theirs.
   const now = unixNow();
@@ -70,6 +72,7 @@ export async function startAgentSession(
       const orig = collected.afterComplete;
       return {
         ...collected,
+        tools: collected.tools && tools ? { ...collected.tools, ...tools } : collected.tools,
         afterComplete: (params) => {
           orig?.(params);
           onComplete?.();

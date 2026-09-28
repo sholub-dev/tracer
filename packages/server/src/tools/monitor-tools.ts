@@ -108,7 +108,7 @@ If a tool call fails, retry with a corrected approach. If you fail the same tool
 - The query must return a count: use count(*), sum(...) or uniqueCount(...).
 - It must end with SINCE {{SINCE}} UNTIL {{UNTIL}}. Tracer replaces them with epoch-millisecond times. Each check covers exactly one window equal to the frequency, and windows never overlap, so each event is counted once.
 - Never use literal times (SINCE 5 minutes ago), TIMESERIES or COMPARE WITH.
-- Optional: FACET <identity field> LIMIT 100 when the user cares about distinct things (service, entity, alert condition). Facet keys drive repeat detection: a key already investigated in the last 24h is not investigated again. Without FACET, every trigger is investigated.
+- Optional: FACET <identity field> LIMIT 100 when the user cares about distinct things (service, entity, alert condition). Facet keys drive repeat detection: a key investigated in the last 24h is marked as a repeat and still investigated, with access to past sessions of the same key.
 - Example: SELECT count(*) FROM NrAiIncident WHERE event = 'open' AND policyName LIKE '%foundations%' FACET conditionName LIMIT 100 SINCE {{SINCE}} UNTIL {{UNTIL}}
 
 ## Query Rules (PostHog HogQL)

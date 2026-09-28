@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, isNotNull } from "drizzle-orm";
+import { and, desc, eq, gte, isNotNull, lt } from "drizzle-orm";
 import { z } from "zod";
 import { tool, type UIMessage } from "ai";
 import type { Db } from "../db/client.js";
@@ -72,11 +72,11 @@ export function readAnalysis(db: Db, sessionId: string): string {
   }
 }
 
-export function pastSessions(db: Db, monitorId: string, currentKeys: string[]): PastSession[] {
+export function pastSessions(db: Db, monitorId: string, currentKeys: string[], before = Number.MAX_SAFE_INTEGER): PastSession[] {
   const triggers = db
     .select({ sessionId: monitorTriggers.sessionId, triggeredAt: monitorTriggers.triggeredAt, groups: monitorTriggers.groups })
     .from(monitorTriggers)
-    .where(and(eq(monitorTriggers.monitorId, monitorId), isNotNull(monitorTriggers.sessionId)))
+    .where(and(eq(monitorTriggers.monitorId, monitorId), isNotNull(monitorTriggers.sessionId), lt(monitorTriggers.triggeredAt, before)))
     .orderBy(desc(monitorTriggers.triggeredAt))
     .limit(PAST_SESSIONS_SCAN)
     .all()
@@ -102,4 +102,16 @@ export function readPastSessionTool(sessions: PastSession[]) {
       return { sessionId, triggeredAt: new Date(s.triggeredAt * 1000).toISOString(), groups: s.keys, analysis: s.analysis };
     },
   });
+}
+
+/** For follow-up chats in a monitor session: the past sessions as of its firing. */
+export function pastSessionToolFor(db: Db, sessionId: string): ReturnType<typeof readPastSessionTool> | null {
+  const trigger = db
+    .select({ monitorId: monitorTriggers.monitorId, triggeredAt: monitorTriggers.triggeredAt, groups: monitorTriggers.groups })
+    .from(monitorTriggers)
+    .where(eq(monitorTriggers.sessionId, sessionId))
+    .get();
+  if (!trigger) return null;
+  const keys = parseTriggerGroups(trigger.groups).map((g) => g.key);
+  return readPastSessionTool(pastSessions(db, trigger.monitorId, keys, trigger.triggeredAt));
 }

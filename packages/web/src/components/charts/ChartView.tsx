@@ -40,7 +40,7 @@ function formatYAxis(value: unknown): string {
 
 // NerdGraph also flattens apdex fields (score, s, t, f, count) next to the apdex object; skip those copies.
 function getMetricKeys(row: Record<string, unknown>): string[] {
-  const nested = Object.values(row).filter((v): v is Record<string, unknown> => v != null && typeof v === "object" && !Array.isArray(v));
+  const nested = Object.values(row).filter((v): v is Record<string, unknown> => v != null && typeof v === "object" && "score" in v);
   return Object.keys(row).filter((k) => !SKIP_KEYS.has(k) && !isFacetDupe(row, k) && !nested.some((o) => o[k] === row[k]));
 }
 

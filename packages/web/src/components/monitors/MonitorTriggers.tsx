@@ -47,7 +47,7 @@ const TriggerRow = memo(function TriggerRow({ trigger: t, repeatLabels, onNaviga
       <span className="text-[#666666] w-28 shrink-0">{formatTime(t.triggeredAt)}</span>
       <span title={fired.full} className="flex-1 min-w-0 truncate text-[#444444]">{fired.short}</span>
       {t.sessionStatus === "streaming" && <Spinner size="sm" />}
-      {repeatOf ? (
+      {repeatOf && (
         <button
           type="button"
           onClick={(e) => { e.stopPropagation(); onNavigate(repeatOf); }}
@@ -55,15 +55,16 @@ const TriggerRow = memo(function TriggerRow({ trigger: t, repeatLabels, onNaviga
         >
           Repeat of {repeatLabels.get(repeatOf) ?? "earlier run"}
         </button>
-      ) : sessionId ? (
+      )}
+      {sessionId ? (
         <span className="shrink-0 text-[#2b5ea7]">Open session</span>
       ) : t.status === "investigating" ? (
         <span className="shrink-0 text-[#999999]">Session deleted</span>
-      ) : (
+      ) : t.status === "muted" ? (
         <span className="shrink-0">
-          <Badge variant="default">{t.status === "muted" ? "Alert off" : "Repeat"}</Badge>
+          <Badge variant="default">Alert off</Badge>
         </span>
-      )}
+      ) : null}
       <span
         title={t.sessionStatus === "done" ? "Unread" : undefined}
         className={`h-2 w-2 shrink-0 rounded-full ${t.sessionStatus === "done" ? "bg-[#2b5ea7]" : ""}`}

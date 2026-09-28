@@ -5,11 +5,10 @@ import { chatSessions, monitors, monitorTriggers } from "../db/schema.js";
 import { startAgentSession } from "../agents/start-session.js";
 import { CONFIG } from "../config.js";
 import { evaluateCondition, extractGroups, parseCondition, sumGroups, type Group } from "./condition.js";
-import { classifyGroups, pastSummaries, type TriggerGroup } from "./repeats.js";
+import { classifyGroups, pastSessions, readAnalysis, readPastSessionTool, type PastSession, type TriggerGroup } from "./repeats.js";
 import { withTimeout } from "./validate.js";
-import { extractAnalysis } from "../agents/analysis.js";
 import { getTimezone } from "../lib/current-context.js";
-import { monitorAlertText, postSlack, readSlackConfig } from "../integrations/slack.js";
+import { monitorAlertText, parseVerdict, postSlack, readSlackConfig } from "../integrations/slack.js";
 
 type Monitor = typeof monitors.$inferSelect;
 
@@ -41,20 +40,18 @@ function groupLabel(g: Group): string {
 }
 
 function sessionTitle(name: string, classified: TriggerGroup[]): string {
-  const keys = classified.filter((g) => !g.repeat && g.key).map((g) => g.key).join(", ");
+  const keys = classified.filter((g) => g.key).map((g) => g.key).join(", ");
   const title = keys ? `${name}: ${keys}` : name;
   return title.length > 80 ? `${title.slice(0, 77)}...` : title;
 }
 
 function buildMessage(
-  context: Context,
   monitor: Monitor,
   value: number,
   window: { start: number; end: number },
   classified: TriggerGroup[],
+  past: PastSession[],
 ): string {
-  const fresh = classified.filter((g) => !g.repeat);
-  const repeats = classified.filter((g) => g.repeat);
   const lines = [
     `Monitor "${monitor.name}" triggered.`,
     "",
@@ -65,46 +62,39 @@ function buildMessage(
     `Value: ${value} (condition: value ${monitor.condition})`,
     `Window: ${iso(window.start)} to ${iso(window.end)} (the query's {{SINCE}}/{{UNTIL}} are this window in epoch ${monitor.provider === "posthog" ? "seconds" : "ms"})`,
     "",
-    "New groups to investigate:",
-    ...fresh.map((g) => `- ${groupLabel(g)}`),
+    "Groups that fired:",
+    ...classified.map((g) => `- ${groupLabel(g)}${g.repeat ? " (fired before)" : ""}`),
   ];
-  if (repeats.length > 0) {
-    lines.push("", "Already investigated recently (skip these):", ...repeats.map((g) => `- ${groupLabel(g)}`));
-  }
-  const past = pastSummaries(context.db, monitor.id, 3);
   if (past.length > 0) {
-    lines.push("", "Past investigations of this monitor:");
+    lines.push("", "Recent past sessions of this monitor (open one with read_past_session if it helps):");
     for (const p of past) {
-      const keys = p.keys.filter(Boolean).join(", ");
-      lines.push("", `### ${iso(p.triggeredAt)}${keys ? ` (groups: ${keys})` : ""} session ${p.sessionId}`, p.summary);
+      lines.push(`- ${iso(p.triggeredAt)} groups: ${p.keys.join(", ") || "none"} session ${p.sessionId}: ${parseVerdict(p.analysis).summary || "no summary"}`);
     }
   }
   lines.push(
     "",
-    "If this matches a past issue, confirm with the fewest queries possible and say which one; otherwise investigate fully.",
-    "Find the root cause and end with a short summary. Its last two lines must be exactly:",
+    "If this looks like a past issue, read the most relevant past session, confirm with the fewest queries possible and say which one; otherwise investigate fully.",
+    "Find the root cause and end with a short summary. Its last six lines must be exactly these, each one short plain sentence with no personal data such as emails, names or account numbers:",
     "Severity: <critical|high|medium|low> (critical: outage or users blocked; high: a key flow degraded; medium: limited impact; low: noise or no user impact)",
-    "TL;DR: <one sentence: the actual issue and its root cause, not a restatement of the monitor; no personal data such as emails, names or account numbers>",
+    "TL;DR: <the actual issue and its root cause with the key number, not a restatement of the monitor>",
+    "Why: <the evidence for the cause: which pages, endpoints, errors or numbers show it; name endpoints by route pattern such as /loans/{id}, never raw URLs or IDs>",
+    "Affected: <which part and how many requests or users; say if nothing else is affected>",
+    "Seen before: <yes or no; when, and whether the cause was the same, from the past sessions above or the provider's alert history>",
+    "Next step: <the single most useful action, or none>",
   );
   return lines.join("\n");
 }
 
 /** Never throws: a Slack failure is only logged. */
-async function notifySlack(context: Context, monitor: Monitor, value: number, classified: TriggerGroup[], triggeredAt: number, sessionId: string): Promise<void> {
+async function notifySlack(context: Context, monitor: Monitor, classified: TriggerGroup[], triggeredAt: number, sessionId: string): Promise<void> {
   let error: string;
   try {
     const slack = readSlackConfig(context.db);
     if (!slack) return;
-    const row = context.db.select({ messages: chatSessions.messages }).from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
-    let analysis = "";
-    try {
-      analysis = row ? extractAnalysis(JSON.parse(row.messages)).analysis : "";
-    } catch { /* post without a summary */ }
+    const analysis = readAnalysis(context.db, sessionId);
     const result = await postSlack(slack.webhookUrl, monitorAlertText({
       name: monitor.name,
-      condition: monitor.condition,
-      value,
-      groups: classified.filter((g) => !g.repeat).map((g) => g.key),
+      groups: classified.map((g) => g.key),
       triggeredAt,
       analysis,
       timeZone: getTimezone(context.db),
@@ -191,11 +181,10 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
   const classified = alerting
     ? classifyGroups(context.db, monitor.id, groups, now)
     : groups.map((g) => ({ ...g, sessionId: null, repeat: false }));
-  const hasNew = alerting && classified.some((g) => !g.repeat);
-
-  const sessionId = hasNew ? crypto.randomUUID() : null;
+  const sessionId = alerting ? crypto.randomUUID() : null;
   const triggerId = crypto.randomUUID();
-  const message = sessionId ? buildMessage(context, monitor, value, window, classified) : "";
+  const past = alerting ? pastSessions(context.db, monitor.id, classified.map((g) => g.key)) : [];
+  const message = alerting ? buildMessage(monitor, value, window, classified, past) : "";
   try {
     // Insert first: the monitor_id FK fails if the monitor was deleted mid-check.
     context.db.insert(monitorTriggers).values({
@@ -205,7 +194,7 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
       value,
       windowStart: window.start,
       windowEnd: window.end,
-      status: !alerting ? "muted" : hasNew ? "investigating" : "repeat",
+      status: alerting ? "investigating" : "muted",
       groups: JSON.stringify(classified.map((g) => (g.repeat ? g : { ...g, sessionId }))),
       sessionId,
     }).run();
@@ -220,7 +209,8 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
       kind: SESSION_KIND.MONITOR,
       title: sessionTitle(monitor.name, classified),
       message,
-      onComplete: () => void notifySlack(context, monitor, value, classified, now, sessionId),
+      tools: { read_past_session: readPastSessionTool(past) },
+      onComplete: () => void notifySlack(context, monitor, classified, now, sessionId),
     });
     if ("error" in started) {
       context.db.delete(monitorTriggers).where(eq(monitorTriggers.id, triggerId)).run();
@@ -230,7 +220,7 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
     }
   }
 
-  console.log(`[monitor] "${monitor.name}" triggered (value ${value}${hasNew ? `, session ${sessionId}` : alerting ? ", repeat" : ", alerts off"})`);
+  console.log(`[monitor] "${monitor.name}" triggered (value ${value}${sessionId ? `, session ${sessionId}` : ", alerts off"})`);
   succeed(context, monitor.id, "triggered", window.end);
 }
 

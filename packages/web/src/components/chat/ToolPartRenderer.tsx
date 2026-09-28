@@ -32,6 +32,7 @@ const CRUD_LABELS: Record<string, { done: string; loading: string; errorLabel: s
   [CLIENT_TOOL_NAMES.CREATE_WIDGET]: { done: "Widget Created", loading: "Creating widget...", errorLabel: "Widget Error" },
   [CLIENT_TOOL_NAMES.UPDATE_WIDGET]: { done: "Widget Updated", loading: "Updating widget...", errorLabel: "Widget Error" },
   [CLIENT_TOOL_NAMES.DELETE_WIDGET]: { done: "Widget Deleted", loading: "Deleting widget...", errorLabel: "Widget Error" },
+  "tool-read_past_session": { done: "Read past session", loading: "Reading past session...", errorLabel: "Past session not available" },
 };
 
 /** Provider labels by query-tool part type. `tool-execute_*` are the direct query tools a single

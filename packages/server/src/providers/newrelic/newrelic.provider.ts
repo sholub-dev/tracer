@@ -115,7 +115,10 @@ export class NewRelicProvider extends BaseProvider {
 
   async executeRawQuery(query: string): Promise<unknown> {
     const response = await this.client.query(query);
-    return response.data?.actor.account.nrql.results ?? [];
+    const results = response.data?.actor.account.nrql.results ?? [];
+    // An UNTIL in the future returns empty buckets that read as a drop to zero.
+    const now = Date.now() / 1000;
+    return results.filter((r: NrqlResult) => !(typeof r.beginTimeSeconds === "number" && r.beginTimeSeconds > now));
   }
 
   getChatTools(options: {

@@ -32,7 +32,7 @@ interface TriggerRowProps {
 
 const TriggerRow = memo(function TriggerRow({ trigger: t, repeatLabels, onNavigate }: TriggerRowProps) {
   const fired = describeFired(t);
-  const repeatOf = t.status === "repeat" ? t.groups.find((g) => g.repeat && g.sessionId)?.sessionId ?? null : null;
+  const repeatOf = t.groups.find((g) => g.repeat && g.sessionId)?.sessionId ?? null;
   const sessionId = t.sessionId;
   return (
     <div

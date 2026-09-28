@@ -6,7 +6,7 @@ import { substituteWindow } from "@tracer-sh/shared";
 import * as schema from "../db/schema.js";
 import type { Db } from "../db/client.js";
 import { evaluateCondition, extractGroups, parseCondition, sumGroups } from "./condition.js";
-import { classifyGroups } from "./repeats.js";
+import { byRelevance, classifyGroups } from "./repeats.js";
 import { isFailedWindow, nextWindow } from "./scheduler.js";
 import { validateMonitor } from "./validate.js";
 import { saveMonitor, setMonitorToggles } from "./store.js";
@@ -128,6 +128,17 @@ test("classifyGroups never treats an unfaceted group as a repeat", () => {
   addTrigger(db, now - 60, "investigating", [{ key: "", count: 1, sessionId: "s1", repeat: false }], "s1");
   const out = classifyGroups(db, "m1", [{ key: "", count: 1 }], now);
   assert.deepEqual(out, [{ key: "", count: 1, sessionId: null, repeat: false }]);
+});
+
+test("byRelevance puts sessions sharing a key first, each part newest first", () => {
+  const past = [
+    { id: "a", keys: ["x"] },
+    { id: "b", keys: ["svc"] },
+    { id: "c", keys: [] },
+    { id: "d", keys: ["svc", "x"] },
+  ];
+  assert.deepEqual(byRelevance(past, ["svc"]).map((p) => p.id), ["b", "d", "a", "c"]);
+  assert.deepEqual(byRelevance(past, [""]).map((p) => p.id), ["a", "b", "c", "d"]);
 });
 
 test("nextWindow aligns runs to clock boundaries, applies lag, and never overlaps", () => {

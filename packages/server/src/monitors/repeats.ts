@@ -1,5 +1,6 @@
-import { and, desc, eq, gte, inArray, isNotNull } from "drizzle-orm";
-import type { UIMessage } from "ai";
+import { and, desc, eq, gte, isNotNull } from "drizzle-orm";
+import { z } from "zod";
+import { tool, type UIMessage } from "ai";
 import type { Db } from "../db/client.js";
 import { chatSessions, monitorTriggers } from "../db/schema.js";
 import { extractAnalysis } from "../agents/analysis.js";
@@ -11,14 +12,16 @@ export interface TriggerGroup extends Group {
   repeat: boolean;
 }
 
-export interface PastSummary {
+export interface PastSession {
   sessionId: string;
   triggeredAt: number;
   keys: string[];
-  summary: string;
+  analysis: string;
 }
 
-const SUMMARY_MAX_CHARS = 1500;
+const PAST_SESSIONS_LIMIT = 5;
+const PAST_SESSIONS_SCAN = 30;
+const ANALYSIS_MAX_CHARS = 6000;
 
 export function parseTriggerGroups(json: string): TriggerGroup[] {
   try {
@@ -53,43 +56,50 @@ export function classifyGroups(db: Db, monitorId: string, groups: Group[], now: 
   });
 }
 
-export function pastSummaries(db: Db, monitorId: string, limit = 3): PastSummary[] {
+export function byRelevance<T extends { keys: string[] }>(newestFirst: T[], currentKeys: string[]): T[] {
+  const current = new Set(currentKeys.filter(Boolean));
+  const shares = (p: T) => p.keys.some((k) => current.has(k));
+  return [...newestFirst.filter(shares), ...newestFirst.filter((p) => !shares(p))];
+}
+
+export function readAnalysis(db: Db, sessionId: string): string {
+  const row = db.select({ messages: chatSessions.messages }).from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
+  if (!row) return "";
+  try {
+    return extractAnalysis(JSON.parse(row.messages) as UIMessage[]).analysis;
+  } catch {
+    return "";
+  }
+}
+
+export function pastSessions(db: Db, monitorId: string, currentKeys: string[]): PastSession[] {
   const triggers = db
-    .select()
+    .select({ sessionId: monitorTriggers.sessionId, triggeredAt: monitorTriggers.triggeredAt, groups: monitorTriggers.groups })
     .from(monitorTriggers)
-    .where(and(
-      eq(monitorTriggers.monitorId, monitorId),
-      eq(monitorTriggers.status, "investigating"),
-      isNotNull(monitorTriggers.sessionId),
-    ))
+    .where(and(eq(monitorTriggers.monitorId, monitorId), isNotNull(monitorTriggers.sessionId)))
     .orderBy(desc(monitorTriggers.triggeredAt))
-    .limit(limit)
-    .all();
-  if (triggers.length === 0) return [];
+    .limit(PAST_SESSIONS_SCAN)
+    .all()
+    .map((t) => ({ sessionId: t.sessionId!, triggeredAt: t.triggeredAt, keys: parseTriggerGroups(t.groups).map((g) => g.key).filter(Boolean) }));
 
-  const sessions = db
-    .select({ id: chatSessions.id, messages: chatSessions.messages })
-    .from(chatSessions)
-    .where(inArray(chatSessions.id, triggers.map((t) => t.sessionId!)))
-    .all();
-  const byId = new Map(sessions.map((s) => [s.id, s.messages]));
+  // Parse session messages lazily: they can be large and only a few are kept.
+  const picked: PastSession[] = [];
+  for (const t of byRelevance(triggers, currentKeys)) {
+    if (picked.length === PAST_SESSIONS_LIMIT) break;
+    const analysis = readAnalysis(db, t.sessionId);
+    if (analysis) picked.push({ ...t, analysis: analysis.length > ANALYSIS_MAX_CHARS ? `${analysis.slice(0, ANALYSIS_MAX_CHARS)} …[truncated]` : analysis });
+  }
+  return picked.sort((a, b) => b.triggeredAt - a.triggeredAt);
+}
 
-  return triggers.flatMap((t) => {
-    const raw = byId.get(t.sessionId!);
-    if (!raw) return [];
-    let messages: UIMessage[] = [];
-    try {
-      messages = JSON.parse(raw);
-    } catch {
-      return [];
-    }
-    const { analysis } = extractAnalysis(messages);
-    if (!analysis) return [];
-    return [{
-      sessionId: t.sessionId!,
-      triggeredAt: t.triggeredAt,
-      keys: parseTriggerGroups(t.groups).filter((g) => !g.repeat).map((g) => g.key),
-      summary: analysis.length > SUMMARY_MAX_CHARS ? `${analysis.slice(0, SUMMARY_MAX_CHARS)} …[truncated]` : analysis,
-    }];
+export function readPastSessionTool(sessions: PastSession[]) {
+  return tool({
+    description: "Read the full analysis of a past debug session of this monitor. Only the session ids listed in the prompt are allowed.",
+    inputSchema: z.object({ sessionId: z.string().describe("Session id from the recent past sessions list") }),
+    execute: async ({ sessionId }) => {
+      const s = sessions.find((p) => p.sessionId === sessionId);
+      if (!s) return { error: `Session ${sessionId} is not one of the listed past sessions` };
+      return { sessionId, triggeredAt: new Date(s.triggeredAt * 1000).toISOString(), groups: s.keys, analysis: s.analysis };
+    },
   });
 }

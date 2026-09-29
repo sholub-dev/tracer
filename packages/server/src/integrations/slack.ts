@@ -28,13 +28,18 @@ export function isSlackWebhook(url: string): boolean {
   return url.startsWith("https://hooks.slack.com/services/");
 }
 
-export async function postSlack(webhookUrl: string, text: string): Promise<{ ok: true } | { error: string }> {
+export interface SlackPayload {
+  text: string;
+  blocks?: object[];
+}
+
+export async function postSlack(webhookUrl: string, payload: SlackPayload): Promise<{ ok: true } | { error: string }> {
   if (!isSlackWebhook(webhookUrl)) return { error: "Webhook URL must start with https://hooks.slack.com/services/" };
   try {
     const res = await fetch(webhookUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) return { error: `Slack returned ${res.status}: ${(await res.text()).slice(0, 200)}` };
@@ -47,9 +52,8 @@ export async function postSlack(webhookUrl: string, text: string): Promise<{ ok:
 const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 const SUMMARY_MAX_CHARS = 300;
-const MAX_GROUPS = 5;
 
-// Slack is outside Tracer's access controls: mask emails, SSNs, phone-like and long numbers.
+// Slack is outside Tracer's access controls: mask emails, SSNs, phone-like and long numbers, card numbers and path IDs.
 export function redact(text: string): string {
   return text
     .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, "[email]")
@@ -57,7 +61,9 @@ export function redact(text: string): string {
     .replace(/(\/[^\s?]*)\?\S+/g, "$1?[query]")
     .replace(/\b\d{3}-\d{2}-\d{4}\b/g, "[ssn]")
     .replace(/\+?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b/g, "[phone]")
-    .replace(/\b\d{9,}\b/g, "[number]");
+    .replace(/\b(?:\d[ -]?){12,18}\d\b/g, "[number]")
+    .replace(/\b\d{9,}\b/g, "[number]")
+    .replace(/(?<=\/[A-Za-z][\w-]*\/)\d+\b/g, "{id}");
 }
 
 // Webhooks can't resolve names, so Slack only notifies for member/group IDs and @here/@channel.
@@ -77,50 +83,82 @@ export function mentionPrefix(mentions: string[]): string {
   return mentions.length > 0 ? `${mentions.join(" ")} ` : "";
 }
 
-const DETAIL_MAX_CHARS = 200;
-const DETAIL_LABELS = ["Why", "Affected", "Seen before", "Next step"];
+const DETAIL_MAX_CHARS = 300;
+const MAX_ISSUES = 5;
+const SECTION_MAX_CHARS = 2900; // Slack rejects section text over 3000.
+const FACT_LABELS = ["Policy", "Started", "Count"];
 
 const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max)} …` : s);
-const clean = (s: string) => s.replace(/\*\*|`/g, "").trim();
+// Redact before clipping: a cut value may no longer match the redact patterns.
+const tidy = (s: string, max = DETAIL_MAX_CHARS) => clip(redact(s.replace(/\*\*|`/g, "").trim()), max);
+const known = (s: string) => (/^(unknown|n\/a|none)?\.?$/i.test(s) ? "" : s);
+const labelLines = (text: string, label: string) =>
+  [...text.matchAll(new RegExp(`^\\W*${label}\\**\\s*:\\**\\s*(.+)$`, "gim"))].map((m) => m[1]);
+const lastLine = (text: string, label: string) => known(tidy(labelLines(text, label).at(-1) ?? ""));
 
-/** Reads the agent's closing "Severity:", "TL;DR:" and detail lines; falls back to the first sentence. */
-export function parseVerdict(analysis: string): { severity: string; summary: string; details: [string, string][] } {
-  const severity = [...analysis.matchAll(/^\W*severity\W*(critical|high|medium|low)\b/gim)].pop()?.[1]?.toLowerCase() ?? "unknown";
-  let summary = [...analysis.matchAll(/^\W*tl;?dr\W*(.+)$/gim)].pop()?.[1] ?? "";
+export interface Verdict {
+  severity: string;
+  summary: string;
+  facts: [string, string][];
+  /** Each issue: service, endpoint, error, user experience, funnel step ("" when unknown). */
+  issues: string[][];
+  seenBefore: string;
+}
+
+/** Reads the agent's closing "Severity:", "TL;DR:", fact and "Issue:" lines, redacted; falls back to the first sentence. */
+export function parseVerdict(analysis: string): Verdict {
+  const severities = [...analysis.matchAll(/^\W*severity\W*(critical|high|medium|low)\b/gim)];
+  const severity = severities.at(-1)?.[1]?.toLowerCase() ?? "unknown";
+  let summary = labelLines(analysis, "tl;?dr").at(-1) ?? "";
   if (!summary) {
     const prose = analysis.split("\n").find((l) => /[a-z]/i.test(l) && !/^\s*(#|```|\||severity)/i.test(l)) ?? "";
     summary = prose.split(/(?<=[.!?])\s/)[0] ?? "";
   }
-  const details: [string, string][] = [];
-  for (const label of DETAIL_LABELS) {
-    const text = clean([...analysis.matchAll(new RegExp(`^\\W*${label}\\**\\s*:\\**\\s*(.+)$`, "gim"))].pop()?.[1] ?? "");
-    if (text) details.push([label, clip(text, DETAIL_MAX_CHARS)]);
-  }
-  return { severity, summary: clip(clean(summary), SUMMARY_MAX_CHARS), details };
+  const facts = FACT_LABELS.map((l): [string, string] => [l, lastLine(analysis, l)]).filter(([, v]) => v);
+  // Only the closing block when there is one, so "Issue:" lines in the body are ignored.
+  const closing = analysis.slice(severities.at(-1)?.index ?? 0);
+  const issues = labelLines(closing, "issue")
+    .map((line) => line.split("|").map((p) => known(tidy(p))))
+    .filter((parts) => parts.some(Boolean));
+  return { severity, summary: tidy(summary, SUMMARY_MAX_CHARS), facts, issues, seenBefore: lastLine(analysis, "Seen before") };
 }
 
 export interface MonitorAlert {
   name: string;
-  groups: string[];
   triggeredAt: number;
   analysis: string;
   timeZone: string;
   mentions?: string;
 }
 
-export function monitorAlertText(a: MonitorAlert): string {
+function issueLine([service = "", endpoint = "", error = "", experience = "", funnel = ""]: string[]): string {
+  const where = [service && `*${escape(service)}*`, endpoint && `\`${escape(endpoint)}\``].filter(Boolean).join(" ");
+  const what = [error, experience].filter(Boolean).map(escape);
+  if (funnel) what.push(`Funnel: ${escape(funnel)}`);
+  return `• ${[where, what.join(". ")].filter(Boolean).join(": ")}`;
+}
+
+export function monitorAlert(a: MonitorAlert): Required<SlackPayload> {
   const time = new Date(a.triggeredAt * 1000).toLocaleString("en-US", {
     timeZone: a.timeZone, month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
   });
-  const { severity, summary, details } = parseVerdict(a.analysis);
+  const { severity, summary, facts, issues, seenBefore } = parseVerdict(a.analysis);
   const parsed = parseMentions(a.mentions ?? "");
-  const headline = redact(summary) || `Monitor "${a.name}" fired; no root cause found`;
-  const lines = [`${"mentions" in parsed ? mentionPrefix(parsed.mentions) : ""}*[${severity.toUpperCase()}] ${escape(headline)}*`];
-  for (const [label, text] of details) lines.push(`${label}: ${escape(redact(text))}`);
-  const keys = a.groups.filter(Boolean).map(redact);
-  const more = keys.length > MAX_GROUPS ? ` +${keys.length - MAX_GROUPS} more` : "";
-  const footer = [`monitor "${a.name}"`, time];
-  if (keys.length > 0) footer.unshift(`${keys.slice(0, MAX_GROUPS).join(", ")}${more}`);
-  lines.push(`_${escape(footer.join(" · "))}_`);
-  return lines.join("\n");
+  const mentions = "mentions" in parsed ? mentionPrefix(parsed.mentions) : "";
+  const name = redact(a.name);
+  const text = `${mentions}*[${severity.toUpperCase()}] ${escape(summary || `Monitor "${name}" fired; no root cause found`)}*`;
+  const lines = [text];
+  if (facts.length > 0) lines.push(facts.map(([l, v]) => `*${l}:* ${escape(v)}`).join("  ·  "));
+  lines.push(...issues.slice(0, MAX_ISSUES).map(issueLine));
+  if (issues.length > MAX_ISSUES) lines.push(`+${issues.length - MAX_ISSUES} more`);
+  if (seenBefore) lines.push(`*Seen before:* ${escape(seenBefore)}`);
+  // Drop whole lines, not mid-span, so Slack formatting stays closed.
+  while (lines.length > 1 && lines.join("\n").length > SECTION_MAX_CHARS) lines.pop();
+  return {
+    text,
+    blocks: [
+      { type: "section", text: { type: "mrkdwn", text: lines.join("\n") } },
+      { type: "context", elements: [{ type: "mrkdwn", text: escape(`monitor "${name}" · ${time}`) }] },
+    ],
+  };
 }

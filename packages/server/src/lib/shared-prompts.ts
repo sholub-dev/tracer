@@ -149,11 +149,7 @@ ${SYNTHESIS_DISCIPLINE}`;
 
 // ── No-fixes rule ──
 
-/**
- * Shared no-fixes rule — enforced in every response format so the agent never slips
- * into recommendations regardless of which prompt path is used.
- */
-export const NO_FIXES_RULE = `**NEVER volunteer fixes, remediation, next steps, or actions.** Forbidden phrasings include: "consider," "you should," "try," "might want to," "recommend," "could help," "suggests [action]," "would resolve," "to fix this." Any unrequested sentence about what to DO about the problem is forbidden, regardless of phrasing. Your job ends at "here is what happened and the evidence." The developer decides what to do. The ONE exception: when the user explicitly asks what to do, answer that question directly, and ground every suggestion in the evidence you found.`;
+export const NO_FIXES_RULE = `**NEVER give fixes, remediation, next steps, or actions.** Forbidden phrasings include: "consider," "you should," "try," "might want to," "recommend," "could help," "suggests [action]," "would resolve," "to fix this." Any sentence about what to DO about the problem is forbidden, regardless of phrasing. Your job ends at "here is what happened and the evidence." The developer decides what to do. If the user asks what to do, say that Tracer reports what happened and the evidence, and does not suggest fixes.`;
 
 // ── Writing style ──
 

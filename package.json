@@ -1,6 +1,6 @@
 {
   "name": "tracer-sh",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "type": "module",
   "description": "Local-first debugging & analysis platform",
   "license": "SEE LICENSE IN LICENSE",
@@ -20,7 +20,7 @@
     "skills/"
   ],
   "scripts": {
-    "preinstall": "node -e \"const [a,b]=process.versions.node.split('.').map(Number);if(a<22||(a===22&&b<12)){console.error('tracer-sh needs Node.js 22.12 or newer (found '+process.version+'). Upgrade Node, or keep the previous version: npm i -g tracer-sh@0.4');process.exit(1)}\"",
+    "preinstall": "node -e \"const [a,b]=process.versions.node.split('.').map(Number);if(a<22||(a===22&&b<12)){const m='\\ntracer-sh needs Node.js 22.12 or newer (found '+process.version+'). Run nvm use 22 (or install Node 22), then try again. To keep the previous version: npm i -g tracer-sh@0.4\\n\\n';console.error(m);try{require('fs').writeFileSync('/dev/tty',m)}catch{}process.exit(1)}\"",
     "predev": "pnpm install --frozen-lockfile 2>/dev/null || pnpm install",
     "dev": "concurrently --kill-others -n server,web -c blue,green \"pnpm --filter @tracer-sh/server dev\" \"pnpm --filter @tracer-sh/web dev\"",
     "build": "pnpm --filter @tracer-sh/shared build && pnpm --filter @tracer-sh/server build && pnpm --filter @tracer-sh/web build",

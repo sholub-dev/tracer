@@ -41,6 +41,7 @@ test("redact masks personal data, keeps normal text", () => {
     redact("GET /api/loans/7?token=abc&x=1 by 3f2b1c9e-1a2b-4c3d-9e8f-0a1b2c3d4e5f"),
     "GET /api/loans/{id}?[query] by [id]",
   );
+  assert.equal(redact("yes, 08:30 PDT (session 3f2b1c9e-1a2b-4c3d-9e8f-0a1b2c3d4e5f), same cause"), "yes, 08:30 PDT, same cause");
   assert.equal(redact("card 4111 1111 1111 1111 on /v1/loans/12345678/pay at 9/29"), "card [number] on /v1/loans/{id}/pay at 9/29");
 });
 
@@ -48,7 +49,7 @@ test("monitorAlert builds one compact section and a footer, escapes", () => {
   const { text, blocks } = monitorAlert({
     name: "Errors <prod>",
     triggeredAt: 1_767_225_600,
-    analysis: "Long analysis.\nSeverity: critical\nTL;DR: Checkout is down & failing.\nPolicy: Errors\nCount: 40 failed\nIssue: pay-api | /pay | 40 × Timeout | Pay fails | Checkout\nIssue: unknown | /cart | 1 × <Err>\nSeen before: No.",
+    analysis: "Long analysis.\nSeverity: critical\nTL;DR: Checkout is down & failing.\nPolicy: Errors\nStarted: 10:02 UTC\nStatus: stopped (last error at 10:09 UTC)\nCount: 40 failed\nIssue: pay-api | /pay | 40 × Timeout | Pay fails | Checkout\nIssue: unknown | /cart | 1 × <Err>\nSeen before: No.",
     timeZone: "UTC",
     mentions: "U0123ABCD",
   });
@@ -56,7 +57,7 @@ test("monitorAlert builds one compact section and a footer, escapes", () => {
   assert.deepEqual(blocks, [
     { type: "section", text: { type: "mrkdwn", text: [
       text,
-      "*Policy:* Errors  ·  *Count:* 40 failed",
+      "*Policy:* Errors  ·  *Started:* 10:02 UTC  ·  *Status:* stopped (last error at 10:09 UTC)",
       "• *pay-api* `/pay`: 40 × Timeout. Pay fails. Funnel: Checkout",
       "• `/cart`: 1 × &lt;Err&gt;",
       "*Seen before:* No.",

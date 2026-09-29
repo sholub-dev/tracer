@@ -76,15 +76,15 @@ function buildMessage(
     "",
     "If this looks like a past issue, read the most relevant past session, confirm with the fewest queries possible and say which one; otherwise investigate fully.",
     "Find the root cause and end with a short summary. Its last lines must be exactly these labels, in this order, each on one line.",
-    "Use only facts from query results; write \"unknown\" when the data does not show it, never guess. Name endpoints by route pattern such as /loans/{id}, never raw URLs or IDs. No personal data such as emails, names or account numbers. Never suggest fixes or actions.",
+    "Use only facts from query results; write \"unknown\" when the data does not show it, never guess. Name endpoints by route pattern such as /loans/{id}, never raw URLs or IDs. No personal data such as emails, names or account numbers. Never suggest fixes or actions. Never add counts across endpoints. These lines must stand alone: facts only, never mention sessions, session ids or Tracer.",
     "Severity: <critical|high|medium|low> (critical: outage or users blocked; high: a key flow degraded; medium: limited impact; low: noise or no user impact)",
     "TL;DR: <the actual issue and its proven root cause with the key number, not a restatement of the monitor; say \"cause not confirmed\" if it is not>",
     "Policy: <the alert policy or condition that fired>",
     "Started: <the first bad minute in the data, with time zone>",
-    "Count: <total failed or slow requests, with the HTTP status if one>",
+    "Status: <one of: stopped (last error at <time>); ongoing (errors in the latest minutes up to now); recurring (the repeat pattern the data shows, e.g. every hour since 06:00)>. Check the data up to the current time.",
     "Issue: <service> | <endpoint> | <count> × <error class and code> (<error rate>) | <what the user sees> | <user journey step, or none (background)>",
     "(one Issue line per endpoint, at most 5, largest first)",
-    "Seen before: <yes or no, when, and whether the cause was the same, from the past sessions above or the provider's alert history>",
+    "Seen before: <yes or no; the date and time it happened before, and whether the cause was the same>",
   );
   return lines.join("\n");
 }

@@ -53,10 +53,11 @@ const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").rep
 
 const SUMMARY_MAX_CHARS = 300;
 
-// Slack is outside Tracer's access controls: mask emails, SSNs, phone-like and long numbers, card numbers and path IDs.
+// Slack is outside Tracer's access controls: mask emails, SSNs, phone-like and long numbers, card numbers and path IDs; drop session references.
 export function redact(text: string): string {
   return text
     .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, "[email]")
+    .replace(/\s*\(?\bsession:?\s+[0-9a-f]{8}-[0-9a-f-]{27}\)?/gi, "")
     .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "[id]")
     .replace(/(\/[^\s?]*)\?\S+/g, "$1?[query]")
     .replace(/\b\d{3}-\d{2}-\d{4}\b/g, "[ssn]")
@@ -86,7 +87,7 @@ export function mentionPrefix(mentions: string[]): string {
 const DETAIL_MAX_CHARS = 300;
 const MAX_ISSUES = 5;
 const SECTION_MAX_CHARS = 2900; // Slack rejects section text over 3000.
-const FACT_LABELS = ["Policy", "Started", "Count"];
+const FACT_LABELS = ["Policy", "Started", "Status"];
 
 const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max)} …` : s);
 // Redact before clipping: a cut value may no longer match the redact patterns.

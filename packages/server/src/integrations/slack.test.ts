@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isSlackWebhook, monitorAlertText, parseMentions, parseVerdict, postSlack, redact } from "./slack.js";
+import { isSlackWebhook, monitorAlert, parseMentions, parseVerdict, postSlack, redact } from "./slack.js";
 
 test("isSlackWebhook accepts only Slack webhook URLs", () => {
   assert.equal(isSlackWebhook("https://hooks.slack.com/services/T0/B0/x"), true);
@@ -9,7 +9,7 @@ test("isSlackWebhook accepts only Slack webhook URLs", () => {
 });
 
 test("postSlack refuses non-Slack URLs without a request", async () => {
-  assert.ok("error" in (await postSlack("https://example.com/hook", "hi")));
+  assert.ok("error" in (await postSlack("https://example.com/hook", { text: "hi" })));
 });
 
 test("parseMentions maps IDs and specials, rejects names", () => {
@@ -18,12 +18,18 @@ test("parseMentions maps IDs and specials, rejects names", () => {
   assert.ok("error" in parseMentions("@sholub"));
 });
 
-test("parseVerdict reads closing lines, falls back to first sentence", () => {
+test("parseVerdict reads closing lines and issues, hides unknowns, falls back to first sentence", () => {
   assert.deepEqual(
-    parseVerdict("## Why it failed\nDetails.\n\n**Severity:** High\n**TL;DR:** DB timeouts after the 1.2 deploy.\n**Why:** Pool maxed at 10:02.\nSeen before: No.\nNext step: `Roll back` 1.2."),
-    { severity: "high", summary: "DB timeouts after the 1.2 deploy.", details: [["Why", "Pool maxed at 10:02."], ["Seen before", "No."], ["Next step", "Roll back 1.2."]] },
+    parseVerdict("Issue: body line\n**Severity:** High\n**TL;DR:** DB timeouts after the 1.2 deploy.\nPolicy: Errors\nStarted: unknown\nIssue: `pay-api` | /pay | 3 × Timeout | unknown | Checkout\nIssue: unknown | /cart | 1 × Timeout\nSeen before: No.\nNext step: Roll back."),
+    {
+      severity: "high",
+      summary: "DB timeouts after the 1.2 deploy.",
+      facts: [["Policy", "Errors"]],
+      issues: [["pay-api", "/pay", "3 × Timeout", "", "Checkout"], ["", "/cart", "1 × Timeout"]],
+      seenBefore: "No.",
+    },
   );
-  assert.deepEqual(parseVerdict("## Root cause\nThe `db` pool ran out. More text."), { severity: "unknown", summary: "The db pool ran out.", details: [] });
+  assert.deepEqual(parseVerdict("## Root cause\nThe `db` pool ran out. More text."), { severity: "unknown", summary: "The db pool ran out.", facts: [], issues: [], seenBefore: "" });
 });
 
 test("redact masks personal data, keeps normal text", () => {
@@ -33,23 +39,40 @@ test("redact masks personal data, keeps normal text", () => {
   );
   assert.equal(
     redact("GET /api/loans/7?token=abc&x=1 by 3f2b1c9e-1a2b-4c3d-9e8f-0a1b2c3d4e5f"),
-    "GET /api/loans/7?[query] by [id]",
+    "GET /api/loans/{id}?[query] by [id]",
   );
+  assert.equal(redact("card 4111 1111 1111 1111 on /v1/loans/12345678/pay at 9/29"), "card [number] on /v1/loans/{id}/pay at 9/29");
 });
 
-test("monitorAlertText tags, shows severity, root cause and details, escapes", () => {
-  const text = monitorAlertText({
+test("monitorAlert builds one compact section and a footer, escapes", () => {
+  const { text, blocks } = monitorAlert({
     name: "Errors <prod>",
-    groups: ["svc-a", ""],
     triggeredAt: 1_767_225_600,
-    analysis: "Long analysis.\nSeverity: critical\nTL;DR: Checkout is down & failing.\nWhy: 500s from pay-api.\nAffected: All checkouts.",
+    analysis: "Long analysis.\nSeverity: critical\nTL;DR: Checkout is down & failing.\nPolicy: Errors\nCount: 40 failed\nIssue: pay-api | /pay | 40 × Timeout | Pay fails | Checkout\nIssue: unknown | /cart | 1 × <Err>\nSeen before: No.",
     timeZone: "UTC",
     mentions: "U0123ABCD",
   });
-  assert.deepEqual(text.split("\n"), [
-    "<@U0123ABCD> *[CRITICAL] Checkout is down &amp; failing.*",
-    "Why: 500s from pay-api.",
-    "Affected: All checkouts.",
-    '_svc-a · monitor "Errors &lt;prod&gt;" · Jan 1, 12:00 AM UTC_',
+  assert.equal(text, "<@U0123ABCD> *[CRITICAL] Checkout is down &amp; failing.*");
+  assert.deepEqual(blocks, [
+    { type: "section", text: { type: "mrkdwn", text: [
+      text,
+      "*Policy:* Errors  ·  *Count:* 40 failed",
+      "• *pay-api* `/pay`: 40 × Timeout. Pay fails. Funnel: Checkout",
+      "• `/cart`: 1 × &lt;Err&gt;",
+      "*Seen before:* No.",
+    ].join("\n") } },
+    { type: "context", elements: [{ type: "mrkdwn", text: 'monitor "Errors &lt;prod&gt;" · Jan 1, 12:00 AM UTC' }] },
   ]);
+});
+
+test("monitorAlert stays under Slack's section limit", () => {
+  const long = "x".repeat(400);
+  const analysis = `Severity: high\nTL;DR: ${long}\n${Array.from({ length: 6 }, () => `Issue: ${Array(5).fill(long).join(" | ")}`).join("\n")}`;
+  const section = monitorAlert({ name: "m", triggeredAt: 0, analysis, timeZone: "UTC" }).blocks[0] as { text: { text: string } };
+  assert.ok(section.text.text.length <= 3000);
+});
+
+test("parseVerdict redacts before clipping", () => {
+  const issue = parseVerdict(`Severity: low\nIssue: ${"x".repeat(290)} jo.doe@corp.com`).issues[0][0];
+  assert.ok(issue.endsWith("[email]"), issue);
 });

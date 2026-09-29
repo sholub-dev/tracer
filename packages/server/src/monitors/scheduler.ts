@@ -9,7 +9,7 @@ import { evaluateCondition, extractGroups, parseCondition, sumGroups, type Group
 import { classifyGroups, pastSessions, readAnalysis, readPastSessionTool, type PastSession, type TriggerGroup } from "./repeats.js";
 import { withTimeout } from "./validate.js";
 import { getTimezone } from "../lib/current-context.js";
-import { monitorAlertText, parseVerdict, postSlack, readSlackConfig } from "../integrations/slack.js";
+import { monitorAlert, parseVerdict, postSlack, readSlackConfig } from "../integrations/slack.js";
 
 type Monitor = typeof monitors.$inferSelect;
 
@@ -75,27 +75,29 @@ function buildMessage(
   lines.push(
     "",
     "If this looks like a past issue, read the most relevant past session, confirm with the fewest queries possible and say which one; otherwise investigate fully.",
-    "Find the root cause and end with a short summary. Its last six lines must be exactly these, each one short plain sentence with no personal data such as emails, names or account numbers:",
+    "Find the root cause and end with a short summary. Its last lines must be exactly these labels, in this order, each on one line.",
+    "Use only facts from query results; write \"unknown\" when the data does not show it, never guess. Name endpoints by route pattern such as /loans/{id}, never raw URLs or IDs. No personal data such as emails, names or account numbers. Never suggest fixes or actions.",
     "Severity: <critical|high|medium|low> (critical: outage or users blocked; high: a key flow degraded; medium: limited impact; low: noise or no user impact)",
-    "TL;DR: <the actual issue and its root cause with the key number, not a restatement of the monitor>",
-    "Why: <the evidence for the cause: which pages, endpoints, errors or numbers show it; name endpoints by route pattern such as /loans/{id}, never raw URLs or IDs>",
-    "Affected: <which part and how many requests or users; say if nothing else is affected>",
-    "Seen before: <yes or no; when, and whether the cause was the same, from the past sessions above or the provider's alert history>",
-    "Next step: <the single most useful action, or none>",
+    "TL;DR: <the actual issue and its proven root cause with the key number, not a restatement of the monitor; say \"cause not confirmed\" if it is not>",
+    "Policy: <the alert policy or condition that fired>",
+    "Started: <the first bad minute in the data, with time zone>",
+    "Count: <total failed or slow requests, with the HTTP status if one>",
+    "Issue: <service> | <endpoint> | <count> × <error class and code> (<error rate>) | <what the user sees> | <user journey step, or none (background)>",
+    "(one Issue line per endpoint, at most 5, largest first)",
+    "Seen before: <yes or no, when, and whether the cause was the same, from the past sessions above or the provider's alert history>",
   );
   return lines.join("\n");
 }
 
 /** Never throws: a Slack failure is only logged. */
-async function notifySlack(context: Context, monitor: Monitor, classified: TriggerGroup[], triggeredAt: number, sessionId: string): Promise<void> {
+async function notifySlack(context: Context, monitor: Monitor, triggeredAt: number, sessionId: string): Promise<void> {
   let error: string;
   try {
     const slack = readSlackConfig(context.db);
     if (!slack) return;
     const analysis = readAnalysis(context.db, sessionId);
-    const result = await postSlack(slack.webhookUrl, monitorAlertText({
+    const result = await postSlack(slack.webhookUrl, monitorAlert({
       name: monitor.name,
-      groups: classified.map((g) => g.key),
       triggeredAt,
       analysis,
       timeZone: getTimezone(context.db),
@@ -211,7 +213,7 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
       title: sessionTitle(monitor.name, classified),
       message,
       tools: { read_past_session: readPastSessionTool(() => past) },
-      onComplete: () => void notifySlack(context, monitor, classified, now, sessionId),
+      onComplete: () => void notifySlack(context, monitor, now, sessionId),
     });
     if ("error" in started) {
       context.db.delete(monitorTriggers).where(eq(monitorTriggers.id, triggerId)).run();

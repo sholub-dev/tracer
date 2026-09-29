@@ -71,7 +71,7 @@ export const integrationsRouter = router({
       const mentions = input.mentions?.trim() ?? "";
       const parsed = parseMentions(mentions);
       if ("error" in parsed) return { success: false, error: parsed.error };
-      const result = await postSlack(webhookUrl, `${mentionPrefix(parsed.mentions)}Tracer is connected. Monitor alerts will be posted here.`);
+      const result = await postSlack(webhookUrl, { text: `${mentionPrefix(parsed.mentions)}Tracer is connected. Monitor alerts will be posted here.` });
       if ("error" in result) return { success: false, error: result.error };
       writeSlackConfig(ctx.db, { webhookUrl, mentions });
       return { success: true };

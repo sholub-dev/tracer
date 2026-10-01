@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { appSettings } from "../db/schema.js";
 import { formatLocalTime } from "../lib/current-context.js";
+import { firstSentence, type AlertSummary } from "../monitors/alert-summary.js";
 import { readAppSetting, writeAppSetting } from "../db/config-reader.js";
 
 export const SLACK_CONFIG_KEY = "integration:slack";
@@ -86,49 +87,48 @@ export function mentionPrefix(mentions: string[]): string {
 }
 
 const DETAIL_MAX_CHARS = 300;
+const ROOT_CAUSE_MAX_CHARS = 600;
 const MAX_ISSUES = 5;
+const SEVERITY_DOTS: Record<string, string> = { high: ":red_circle:", medium: ":large_orange_circle:", low: ":large_green_circle:" };
 const SECTION_MAX_CHARS = 2900; // Slack rejects section text over 3000.
-const FACT_LABELS = ["Policy", "Started", "Status"];
 
 export const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max)} …` : s);
 // Redact before clipping: a cut value may no longer match the redact patterns.
 const tidy = (s: string, max = DETAIL_MAX_CHARS) => clip(redact(s.replace(/\*\*|`/g, "").trim()), max);
 const known = (s: string) => (/^(unknown|n\/a|none)?\.?$/i.test(s) ? "" : s);
-const labelLines = (text: string, label: string) =>
-  [...text.matchAll(new RegExp(`^\\W*${label}\\**\\s*:\\**\\s*(.+)$`, "gim"))].map((m) => m[1]);
-const lastLine = (text: string, label: string) => known(tidy(labelLines(text, label).at(-1) ?? ""));
 
 export interface Verdict {
   severity: string;
   summary: string;
+  rootCause: string;
   facts: [string, string][];
-  /** Each issue: service, endpoint, error, user experience, funnel step ("" when unknown). */
+  /** Each issue: service, endpoint, errors, user impact, journey step ("" when unknown). */
   issues: string[][];
   seenBefore: string;
 }
 
-/** Reads the agent's closing "Severity:", "TL;DR:", fact and "Issue:" lines, redacted; falls back to the first sentence. */
-export function parseVerdict(analysis: string): Verdict {
-  const severities = [...analysis.matchAll(/^\W*severity\W*(critical|high|medium|low)\b/gim)];
-  const severity = severities.at(-1)?.[1]?.toLowerCase() ?? "unknown";
-  let summary = labelLines(analysis, "tl;?dr").at(-1) ?? "";
-  if (!summary) {
-    const prose = analysis.split("\n").find((l) => /[a-z]/i.test(l) && !/^\s*(#|```|\||severity)/i.test(l)) ?? "";
-    summary = prose.split(/(?<=[.!?])\s/)[0] ?? "";
-  }
-  const facts = FACT_LABELS.map((l): [string, string] => [l, lastLine(analysis, l)]).filter(([, v]) => v);
-  // Only the closing block when there is one, so "Issue:" lines in the body are ignored.
-  const closing = analysis.slice(severities.at(-1)?.index ?? 0);
-  const issues = labelLines(closing, "issue")
-    .map((line) => line.split("|").map((p) => known(tidy(p))))
-    .filter((parts) => parts.some(Boolean));
-  return { severity, summary: tidy(summary, SUMMARY_MAX_CHARS), facts, issues, seenBefore: lastLine(analysis, "Seen before") };
+/** The agent's reported summary, redacted and clipped, with unknowns hidden. */
+export function verdictOf(summary: AlertSummary | null, analysis = ""): Verdict {
+  if (!summary) return { severity: "unknown", summary: tidy(firstSentence(analysis), SUMMARY_MAX_CHARS), rootCause: "", facts: [], issues: [], seenBefore: "" };
+  const field = (s: string, max?: number) => known(tidy(s, max));
+  return {
+    severity: summary.severity,
+    summary: tidy(summary.tldr, SUMMARY_MAX_CHARS),
+    rootCause: field(summary.rootCause, ROOT_CAUSE_MAX_CHARS),
+    facts: ([["Policy", summary.policy], ["Started", summary.started], ["Status", summary.status]] as [string, string][])
+      .map(([l, v]): [string, string] => [l, field(v)]).filter(([, v]) => v),
+    issues: summary.issues.map((i) => [i.service, i.endpoint, i.errors, i.userImpact, i.journeyStep].map((v) => field(v)))
+      .filter((parts) => parts.some(Boolean)),
+    seenBefore: field(summary.seenBefore),
+  };
 }
 
 export interface MonitorAlert {
   name: string;
   triggeredAt: number;
-  analysis: string;
+  summary: AlertSummary | null;
+  /** Fallback text when the agent reported no summary. */
+  analysis?: string;
   timeZone: string;
   mentions?: string;
   /** Triage outcome, shown after the facts. */
@@ -152,11 +152,12 @@ function issueLine([service = "", endpoint = "", error = "", experience = "", fu
 
 export function monitorAlert(a: MonitorAlert): Required<SlackPayload> {
   const time = formatLocalTime(a.triggeredAt, a.timeZone);
-  const { severity, summary, facts, issues, seenBefore } = parseVerdict(a.analysis);
+  const { severity, summary, rootCause, facts, issues, seenBefore } = verdictOf(a.summary, a.analysis);
   const mentions = mentionsFor(a.mentions, a.ping);
   const name = redact(a.name);
-  const text = `${mentions}*[${severity.toUpperCase()}] ${escape(summary || `Monitor "${name}" fired; no root cause found`)}*`;
+  const text = `${mentions}*[${[severity.toUpperCase(), SEVERITY_DOTS[severity]].filter(Boolean).join(" ")}] ${escape(summary || `Monitor "${name}" fired; no root cause found`)}*`;
   const lines = [text];
+  if (rootCause) lines.push(`*Root cause:* ${escape(rootCause)}`);
   if (facts.length > 0) lines.push(facts.map(([l, v]) => `*${l}:* ${escape(v)}`).join("  ·  "));
   lines.push(...issues.slice(0, MAX_ISSUES).map(issueLine));
   if (issues.length > MAX_ISSUES) lines.push(`+${issues.length - MAX_ISSUES} more`);

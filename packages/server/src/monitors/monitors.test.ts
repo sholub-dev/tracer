@@ -9,6 +9,8 @@ import { evaluateCondition, extractGroups, parseCondition, sumGroups } from "./c
 import { byRelevance, classifyGroups, readPastSessionTool } from "./repeats.js";
 import { isFailedWindow, nextWindow } from "./scheduler.js";
 import { validateMonitor } from "./validate.js";
+import { summaryFromMessages } from "./alert-summary.js";
+import type { UIMessage } from "ai";
 import { saveMonitor, setMonitorToggles } from "./store.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 
@@ -199,11 +201,22 @@ test("readPastSessionTool loads the past-session list lazily, once, and only all
   let loads = 0;
   const t = readPastSessionTool(() => {
     loads++;
-    return [{ sessionId: "s1", triggeredAt: 0, keys: ["a"], analysis: "x" }];
+    return [{ sessionId: "s1", triggeredAt: 0, keys: ["a"], analysis: "x", report: null }];
   });
   assert.equal(loads, 0);
   const run = (sessionId: string) => t.execute!({ sessionId }, { toolCallId: "c", messages: [] } as never);
   assert.equal(((await run("s1")) as { analysis: string }).analysis, "x");
   assert.ok("error" in ((await run("s2")) as object));
   assert.equal(loads, 1);
+});
+
+test("summaryFromMessages takes the last successful report_alert_summary call", () => {
+  const base = { severity: "low", tldr: "a", rootCause: "b", policy: "", started: "", status: "", issues: [], seenBefore: "" };
+  const call = (input: object, state = "output-available") => ({ type: "tool-report_alert_summary", toolCallId: "c", state, input, output: {} });
+  const messages = [
+    { id: "1", role: "assistant", parts: [call(base), call({ ...base, tldr: "latest" }), { type: "text", text: "done" }] },
+    { id: "2", role: "assistant", parts: [call({ ...base, tldr: "failed" }, "output-error")] },
+  ] as unknown as UIMessage[];
+  assert.deepEqual(summaryFromMessages(messages), { ...base, tldr: "latest" });
+  assert.equal(summaryFromMessages([]), null);
 });

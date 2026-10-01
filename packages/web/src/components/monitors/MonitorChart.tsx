@@ -22,14 +22,23 @@ export const MonitorChart = memo(function MonitorChart({ provider, query: monito
   const sinceSeconds = sinceToSeconds(since);
   const bucketSeconds = BUCKET_SECONDS[sinceSeconds] ?? Math.max(300, Math.ceil(sinceSeconds / WEB_CONFIG.maxBuckets / 60) * 60);
   const refreshKey = lastRunAt ?? 0;
-  const chartQuery = useMemo(() => {
+  const { chartQuery, transform } = useMemo(() => {
     // Buckets end on local clock boundaries, so the last point is the current bucket, not one hours old.
+    const now = unixNow();
     const offset = new Date().getTimezoneOffset() * 60;
-    const until = Math.ceil((unixNow() - offset) / bucketSeconds) * bucketSeconds + offset;
-    if (provider !== "posthog") {
-      return `${substituteWindow(provider, monitorQuery, until - sinceSeconds, until)} TIMESERIES ${bucketSeconds / 60} minutes`;
-    }
-    return substituteWindow(provider, monitorChartQuery ?? monitorQuery, until - sinceSeconds, until);
+    const until = Math.ceil((now - offset) / bucketSeconds) * bucketSeconds + offset;
+    const from = until - sinceSeconds;
+    // Plot each bucket at its end (the current one at now), so the line reaches the latest run.
+    const atEnd = (r: Record<string, unknown>) =>
+      typeof r.endTimeSeconds === "number" ? { ...r, beginTimeSeconds: Math.min(r.endTimeSeconds, now) } : r;
+    // No events (e.g. a FACET query with no matches) is a flat zero line, not an empty chart.
+    const zeros = () => Array.from({ length: sinceSeconds / bucketSeconds }, (_, i) =>
+      ({ beginTimeSeconds: from + i * bucketSeconds, endTimeSeconds: from + (i + 1) * bucketSeconds, events: 0 }));
+    const transform = (rows: Record<string, unknown>[]) => (rows.length > 0 ? rows : zeros()).map(atEnd);
+    const query = provider !== "posthog"
+      ? `${substituteWindow(provider, monitorQuery, from, until)} TIMESERIES ${bucketSeconds / 60} minutes`
+      : substituteWindow(provider, monitorChartQuery ?? monitorQuery, from, until);
+    return { chartQuery: query, transform };
   }, [provider, monitorQuery, monitorChartQuery, since, sinceSeconds, bucketSeconds, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const threshold = useMemo(() => parseThreshold(condition), [condition]);
@@ -43,6 +52,7 @@ export const MonitorChart = memo(function MonitorChart({ provider, query: monito
         refreshKey={refreshKey}
         threshold={threshold}
         growWithLegend
+        transform={transform}
         className="[&_.chart-legend]:max-h-[88px] [&_.chart-legend]:overflow-y-auto"
       />
     </div>

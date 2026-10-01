@@ -7,7 +7,7 @@ import type {
 } from "@tracer-sh/shared";
 import type { NewRelicProviderConfig, NrqlResult } from "./types.js";
 import { BaseProvider } from "../base.provider.js";
-import { NerdGraphClient } from "./nerdgraph.client.js";
+import { NerdGraphClient, type AiIssue, type AiIssuesFilter } from "./nerdgraph.client.js";
 import {
   createNewRelicDirectTools,
   nrUnifiedFragment,
@@ -65,6 +65,18 @@ export class NewRelicProvider extends BaseProvider {
     // An UNTIL in the future returns empty buckets that read as a drop to zero.
     const now = Date.now() / 1000;
     return results.filter((r: NrqlResult) => !(typeof r.beginTimeSeconds === "number" && r.beginTimeSeconds > now));
+  }
+
+  aiIssues(filter: AiIssuesFilter, startMs: number, endMs: number): Promise<AiIssue[]> {
+    return this.client.aiIssues(filter, startMs, endMs);
+  }
+
+  ackIssue(issueId: string): Promise<{ ok: true } | { error: string }> {
+    return this.client.ackIssue(issueId);
+  }
+
+  resolveIssue(issueId: string): Promise<{ ok: true } | { error: string }> {
+    return this.client.resolveIssue(issueId);
   }
 
   getChatTools(options: {

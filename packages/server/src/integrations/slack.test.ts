@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isSlackWebhook, monitorAlert, parseMentions, parseVerdict, postSlack, redact } from "./slack.js";
+import { isSlackWebhook, monitorAlert, parseMentions, parseVerdict, postSlack, redact, triageUpdate } from "./slack.js";
 
 test("isSlackWebhook accepts only Slack webhook URLs", () => {
   assert.equal(isSlackWebhook("https://hooks.slack.com/services/T0/B0/x"), true);
@@ -76,4 +76,27 @@ test("monitorAlert stays under Slack's section limit", () => {
 test("parseVerdict redacts before clipping", () => {
   const issue = parseVerdict(`Severity: low\nIssue: ${"x".repeat(290)} jo.doe@corp.com`).issues[0][0];
   assert.ok(issue.endsWith("[email]"), issue);
+});
+
+test("monitorAlert puts the Action in its own block and skips mentions when no ping is needed", () => {
+  const alert = (ping?: boolean, action = "Acked and closed in New Relic: Errors on /pay <x> by jo@corp.com") => monitorAlert({
+    name: "m", triggeredAt: 0, timeZone: "UTC", mentions: "U0123ABCD", ping,
+    analysis: "Severity: low\nTL;DR: Noise.\nPolicy: Errors\nIssue: api | /pay | 1 × Timeout",
+    action,
+  });
+  const { blocks } = alert(false);
+  assert.deepEqual(blocks.slice(0, 2), [
+    { type: "section", text: { type: "mrkdwn", text: ["*[LOW] Noise.*", "*Policy:* Errors", "• *api* `/pay`: 1 × Timeout"].join("\n") } },
+    { type: "section", text: { type: "mrkdwn", text: "*Action:* Acked and closed in New Relic: Errors on /pay &lt;x&gt; by [email]" } },
+  ]);
+  assert.equal((blocks[2] as { type: string }).type, "context");
+  const long = (alert(false, "<".repeat(3000)).blocks[1] as { text: { text: string } }).text.text;
+  assert.ok(long.length <= 3000 && long.endsWith(" …"), String(long.length));
+  assert.ok(alert(true).text.startsWith("<@U0123ABCD> "));
+  assert.ok(alert().text.startsWith("<@U0123ABCD> "));
+});
+
+test("triageUpdate is one line, mentions only on ping", () => {
+  assert.equal(triageUpdate({ name: "Errors", action: "Closed in New Relic: High <rate>", ping: false, mentions: "U0123ABCD" }).text, "*Errors:* Closed in New Relic: High &lt;rate&gt;");
+  assert.equal(triageUpdate({ name: "Errors", action: "Left open (still ongoing after 24h): x", ping: true, mentions: "@here" }).text, "<!here> *Errors:* Left open (still ongoing after 24h): x");
 });

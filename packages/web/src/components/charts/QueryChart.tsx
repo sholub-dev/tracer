@@ -18,9 +18,11 @@ interface QueryChartProps {
   chartType?: string;
   /** Size the plot to `height` and let the box grow to fit the legend below it. */
   growWithLegend?: boolean;
+  /** Reshapes array results before they render. */
+  transform?: (rows: Record<string, unknown>[]) => Record<string, unknown>[];
 }
 
-export function QueryChart({ provider, query, height, className, refreshKey = 0, threshold, chartType, growWithLegend = false }: QueryChartProps) {
+export function QueryChart({ provider, query, height, className, refreshKey = 0, threshold, chartType, growWithLegend = false, transform }: QueryChartProps) {
   const utils = trpc.useUtils();
   // POST mutation: a GET batch of every chart's query can overflow the URL, and GETs are cross-site triggerable.
   const result = useQuery({
@@ -31,7 +33,8 @@ export function QueryChart({ provider, query, height, className, refreshKey = 0,
     staleTime: 0,
   });
   const { refetch } = result;
-  const data = result.data ?? null;
+  const raw = result.data ?? null;
+  const data = useMemo(() => (transform && Array.isArray(raw) ? transform(raw) : raw), [transform, raw]);
   const error = result.error?.message ?? null;
   // Refreshes keep the previous result on screen; a new query (e.g. range change) overlays a spinner.
   const showSpinner = result.isLoading;

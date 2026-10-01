@@ -4,9 +4,11 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import Database from "better-sqlite3-multiple-ciphers";
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import type { UIMessage } from "ai";
+import type { ToolSet, UIMessage, UIMessageChunk } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import { streamText } from "ai";
+import { readUIMessageStream, streamText, tool } from "ai";
+import { z } from "zod";
+import type { StreamBroadcaster } from "../lib/stream-broadcaster.js";
 import * as schema from "../db/schema.js";
 import type { Db } from "../db/client.js";
 import { writeAppSetting } from "../db/config-reader.js";
@@ -36,17 +38,34 @@ function memoryDb(): Db {
   return drizzle(sqlite, { schema }) as unknown as Db;
 }
 
-const SSE = [
-  ["message_start", { type: "message_start", message: { id: "msg_1", type: "message", role: "assistant", model: "claude-test", content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 0 } } }],
+const sse = (events: [string, unknown][]) => events.map(([e, d]) => `event: ${e}\ndata: ${JSON.stringify(d)}\n\n`).join("");
+const MESSAGE_START: [string, unknown] = ["message_start", { type: "message_start", message: { id: "msg_1", type: "message", role: "assistant", model: "claude-test", content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 0 } } }];
+const end = (stopReason: string): [string, unknown][] => [
+  ["content_block_stop", { type: "content_block_stop", index: 0 }],
+  ["message_delta", { type: "message_delta", delta: { stop_reason: stopReason }, usage: { output_tokens: 2 } }],
+  ["message_stop", { type: "message_stop" }],
+];
+const SSE = sse([
+  MESSAGE_START,
   ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
   ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Hi there" } }],
-  ["content_block_stop", { type: "content_block_stop", index: 0 }],
-  ["message_delta", { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 2 } }],
-  ["message_stop", { type: "message_stop" }],
-].map(([e, d]) => `event: ${e}\ndata: ${JSON.stringify(d)}\n\n`).join("");
+  ...end("end_turn"),
+]);
+const TOOL_CALL_SSE = sse([
+  MESSAGE_START,
+  ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_1", name: "lookup", input: {} } }],
+  ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "{}" } }],
+  ...end("tool_use"),
+]);
+const MID_STREAM_ERROR_SSE = sse([
+  MESSAGE_START,
+  ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
+  ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "half an answer" } }],
+  ["error", { type: "error", error: { type: "overloaded_error", message: "Overloaded" } }],
+]);
 
-/** `fail` first requests get a non-retryable API error; `hold` never answers. */
-function fakeAnthropic({ fail = 0, hold = false } = {}): Promise<{ server: Server; url: string; bodies: Record<string, unknown>[] }> {
+/** `fail` first requests get a non-retryable API error; `hold` never answers; `script` sets each request's SSE body (null fails it). */
+function fakeAnthropic({ fail = 0, hold = false, script = [] as (string | null)[] } = {}): Promise<{ server: Server; url: string; bodies: Record<string, unknown>[] }> {
   const bodies: Record<string, unknown>[] = [];
   const server = createServer((req, res) => {
     let raw = "";
@@ -54,13 +73,13 @@ function fakeAnthropic({ fail = 0, hold = false } = {}): Promise<{ server: Serve
     req.on("end", () => {
       bodies.push(JSON.parse(raw));
       if (hold) return;
-      if (bodies.length <= fail) {
+      if (bodies.length <= fail || script[bodies.length - 1] === null) {
         res.writeHead(400, { "content-type": "application/json" });
         res.end(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "boom" } }));
         return;
       }
       res.writeHead(200, { "content-type": "text/event-stream" });
-      res.end(SSE);
+      res.end(script[bodies.length - 1] ?? SSE);
     });
   });
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => {
@@ -157,7 +176,7 @@ test("Anthropic chat request: date-only system prompt with cache breakpoint, tim
   }
 });
 
-async function retryRun(fake: { fail?: number; hold?: boolean }, retryDelaysMs: number[], whileRunning?: (ctx: Context) => Promise<void>) {
+async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string | null)[] }, retryDelaysMs: number[], whileRunning?: (ctx: Context) => Promise<void>, tools?: ToolSet) {
   const { server, url, bodies } = await fakeAnthropic(fake);
   process.env.ANTHROPIC_BASE_URL = url;
   try {
@@ -169,11 +188,11 @@ async function retryRun(fake: { fail?: number; hold?: boolean }, retryDelaysMs: 
     const failed: string[] = [];
     const res = await runChatAgent({
       sessionId: "s1", messages: [{ id: "u1", role: "user", parts: [{ type: "text", text: "why?" }] }], context,
-      collectTools: () => ({ tools: undefined, afterComplete: () => { completed++; } }),
+      collectTools: () => ({ tools, afterComplete: () => { completed++; } }),
       sessionTitle: () => "t", retryDelaysMs, onFailed: (e) => failed.push(e),
     });
     assert.ok("stream" in res && res.stream);
-    const parts: { type: string }[] = [];
+    const parts: UIMessageChunk[] = [];
     const draining = (async () => {
       const reader = res.stream.getReader();
       for (let r = await reader.read(); !r.done; r = await reader.read()) parts.push(r.value);
@@ -225,4 +244,50 @@ test("a stop is never retried", async () => {
   assert.equal(inBackoff.bodies.length, 1);
   assert.deepEqual(inBackoff.failed, [], "a stop while waiting is not a failure");
   assert.ok(Date.now() - started < 10_000);
+});
+
+test("a retried attempt's streamed steps are dropped for live and late viewers", async () => {
+  let broadcaster!: StreamBroadcaster;
+  const r = await retryRun(
+    { script: [TOOL_CALL_SSE, TOOL_CALL_SSE, null, TOOL_CALL_SSE] }, [0],
+    async (ctx) => { broadcaster = ctx.activeStreams.get("s1")!.broadcaster; },
+    { lookup: tool({ inputSchema: z.object({}), execute: async () => "ok" }) },
+  );
+  assert.equal(r.bodies.length, 5);
+  assert.equal(r.parts.filter((p) => p.type === "reset-step").length, 1);
+
+  const render = async (chunks: UIMessageChunk[]) => {
+    let last: UIMessage | undefined;
+    for await (const m of readUIMessageStream({ stream: new ReadableStream({ start(c) { chunks.forEach((x) => c.enqueue(x)); c.close(); } }) })) last = m;
+    return last!.parts.filter((p) => p.type !== "step-start").map((p) => p.type === "text" ? p.text : p.type);
+  };
+  const expected = ["tool-lookup", "Hi there"];
+  assert.deepEqual(await render(r.parts), expected, "live viewer");
+  const replay: UIMessageChunk[] = [];
+  broadcaster.subscribe((p) => replay.push(p as UIMessageChunk));
+  assert.equal(replay.some((p) => p.type === "reset-step"), false);
+  assert.deepEqual(await render(replay), expected, "late viewer");
+  assert.deepEqual(r.saved.map((m) => m.role), ["user", "assistant"]);
+});
+
+test("a mid-stream model error is a failed attempt: retried, not saved", async () => {
+  const r = await retryRun({ script: [MID_STREAM_ERROR_SSE] }, [0]);
+  assert.equal(r.bodies.length, 2);
+  assert.equal(r.parts.filter((p) => p.type === "reset-step").length, 1);
+  assert.equal(r.parts.filter((p) => p.type === "error").length, 0);
+  assert.deepEqual(r.failed, []);
+  assert.equal(r.completed, 1);
+  const assistant = r.saved.filter((m) => m.role === "assistant");
+  assert.equal(assistant.length, 1);
+  assert.deepEqual(assistant[0].parts.filter((p) => p.type === "text").map((p) => p.type === "text" && p.text), ["Hi there"]);
+});
+
+test("when every attempt ends in a mid-stream model error the run fails once and shows one error", async () => {
+  const r = await retryRun({ script: [MID_STREAM_ERROR_SSE, MID_STREAM_ERROR_SSE, MID_STREAM_ERROR_SSE] }, [0, 0]);
+  assert.equal(r.bodies.length, 3);
+  assert.equal(r.failed.length, 1);
+  assert.match(r.failed[0], /Overloaded/);
+  assert.equal(r.completed, 0);
+  assert.equal(r.parts.filter((p) => p.type === "error").length, 1);
+  assert.deepEqual(r.saved.map((m) => m.role), ["user"]);
 });

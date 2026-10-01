@@ -176,9 +176,11 @@ export function monitorAlert(a: MonitorAlert): Required<SlackPayload> {
   };
 }
 
-/** One-line post for a triage re-check outcome. */
-export function triageUpdate(u: { name: string; action: string; ping: boolean; mentions?: string }): SlackPayload {
-  const prefix = `${mentionsFor(u.mentions, u.ping)}*${escape(redact(u.name))}:* `;
+/** Post for a triage follow-up outcome; `firedAt` and `alert` name the alert it follows up on. */
+export function triageUpdate(u: { name: string; action: string; ping: boolean; mentions?: string; firedAt?: string; alert?: string }): SlackPayload {
+  const head = `${mentionsFor(u.mentions, u.ping)}*${escape(redact(u.name))}*${u.firedAt ? ` · follow-up on the ${escape(u.firedAt)} alert` : ""}`;
+  const alert = u.alert ? escape(tidy(u.alert, SUMMARY_MAX_CHARS)) : "";
+  const prefix = [head, alert, "*Action:* "].filter(Boolean).join("\n");
   // Clip after escaping: entities lengthen the text past Slack's section limit.
   const text = prefix + clip(escape(redact(u.action)), SECTION_MAX_CHARS - prefix.length);
   return { text, blocks: [{ type: "section", text: { type: "mrkdwn", text } }] };

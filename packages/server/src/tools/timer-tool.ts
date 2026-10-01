@@ -19,7 +19,7 @@ export function hasPendingTimer(db: Db, sessionId: string): boolean {
 
 export function setTimerTool(db: Db, sessionId: string): Tool<TimerInput, TimerResult> {
   return tool({
-    description: "Wake this chat later to follow up. Use it only when a follow-up is truly needed (e.g. an issue may recover, a deploy is rolling out), never to poll in a loop.",
+    description: "Wake this chat later to follow up. Use it only when a follow-up is truly needed (e.g. an issue may recover, a deploy is rolling out). For a live incident use the shortest wait; checking too often beats waiting too long.",
     inputSchema: z.object({
       minutes: z.number().int().describe(`Minutes from now, ${CONFIG.timerMinMinutes} to ${CONFIG.timerMaxMinutes}; 0 cancels the pending timer`),
       note: z.string().describe("What to check when it fires; no customer data"),

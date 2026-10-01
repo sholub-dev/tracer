@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { streamText, convertToModelMessages, isStepCount, createUIMessageStream, toUIMessageStream, type UIMessage, type ToolSet } from "ai";
 import { eq, sql } from "drizzle-orm";
 import { DEFAULT_SESSION_TITLE, unixNow, splitAtAnalysis, type AfterCompleteParams } from "@tracer-sh/shared";
@@ -84,6 +85,10 @@ export interface ChatAgentConfig {
     afterComplete?: (params: AfterCompleteParams) => void;
   };
   sessionTitle: (messages: UIMessage[]) => string;
+  /** Wait before each automatic re-run of an attempt that failed with an error; no re-runs when omitted. */
+  retryDelaysMs?: readonly number[];
+  /** Fires once when the last attempt failed with an error; never on a user stop. */
+  onFailed?: (error: string) => void;
 }
 
 /**
@@ -102,9 +107,11 @@ function finalizeSession(sessionId: string, context: Context, broadcaster: Strea
   context.activeStreams.delete(sessionId);
 }
 
+const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
 /**
  * Background LLM processing — runs completely independent of the HTTP response.
- * Emits stream parts to the broadcaster; saves messages to DB on completion.
+ * Emits stream parts to the broadcaster; saves messages to DB on completion; returns the error of a failed attempt.
  */
 async function processLLMStream(
   sessionId: string,
@@ -119,7 +126,8 @@ async function processLLMStream(
   modelId: string,
   providerOptions: ProviderOptions,
   compaction: { summary?: string | null; summaryUpTo?: number | null },
-): Promise<void> {
+  final: boolean,
+): Promise<{ error?: string }> {
   const writer: StreamWriter = {
     write: (part) => {
       const p = part as Record<string, unknown>;
@@ -216,13 +224,20 @@ When the user's question spans multiple providers, query each relevant provider 
   // Gates the fallback cleanup so processLLMStream doesn't return prematurely.
   let resolveFinish!: () => void;
   const finishPromise = new Promise<void>((r) => { resolveFinish = r; });
+  let failure: string | undefined;
 
   const uiStream = toUIMessageStream({
     stream: result.stream,
     tools: tools as ToolSet | undefined,
     sendStart: false,
     originalMessages: messages,
-    onEnd: ({ messages: updatedMessages }) => {
+    onEnd: ({ messages: updatedMessages, outcome }) => {
+      // A failed attempt is not saved, so a re-run starts from the same history.
+      if (outcome.status === "failed") {
+        failure = errorText(outcome.error);
+        resolveFinish();
+        return;
+      }
       // onEnd is synchronous but usage requires an await, so full
       // persistence runs in a detached IIFE to avoid blocking the stream close.
       (async () => {
@@ -290,8 +305,6 @@ When the user's question spans multiple providers, query each relevant provider 
         } catch (err) {
           console.warn(`[chat] Failed to save session ${sessionId}:`, err);
         } finally {
-          // After the DB write so clients reloading on "done" read the final messages.
-          finalizeSession(sessionId, context, broadcaster);
           resolveFinish();
         }
       })();
@@ -316,6 +329,8 @@ When the user's question spans multiple providers, query each relevant provider 
           break;
         }
       }
+      // A re-run follows, so the client should not show this attempt's error.
+      if (v.type === "error" && !final) continue;
       // Strip providerMetadata — the AI SDK emits it on some event types
       // but its own strictObject schema rejects it on the client side.
       const { providerMetadata: _, ...clean } = v;
@@ -323,6 +338,7 @@ When the user's question spans multiple providers, query each relevant provider 
     }
   } catch (err) {
     console.warn(`[chat] Stream error for ${sessionId}:`, err);
+    failure ??= errorText(err);
   } finally {
     reader.releaseLock();
   }
@@ -333,12 +349,12 @@ When the user's question spans multiple providers, query each relevant provider 
   const timeout = new Promise<void>((r) => { timeoutId = setTimeout(r, 5000); });
   await Promise.race([finishPromise, timeout]);
   clearTimeout(timeoutId!);
-
-  // Fallback cleanup if onEnd never ran (e.g. abort before stream completes)
-  finalizeSession(sessionId, context, broadcaster);
+  return serverAbort.signal.aborted ? {} : { error: failure };
 }
 
-export async function runChatAgent({ sessionId, messages: incoming, summary, summaryUpTo, context, collectTools, sessionTitle }: ChatAgentConfig) {
+export async function runChatAgent({
+  sessionId, messages: incoming, summary, summaryUpTo, context, collectTools, sessionTitle, retryDelaysMs = [], onFailed,
+}: ChatAgentConfig) {
   const messages = stampSentTime(incoming, getCurrentTimeText(context.db));
   const resolved = resolveModel(context.db);
   if ("error" in resolved) return { error: resolved.error };
@@ -375,12 +391,32 @@ export async function runChatAgent({ sessionId, messages: incoming, summary, sum
 
   // Start LLM processing in background — completely decoupled from HTTP lifecycle.
   // If the HTTP response is cancelled (client navigates away), this continues running.
-  processLLMStream(
-    sessionId, messages, context, broadcaster, serverAbort,
-    collectTools, sessionTitle, model, provider, modelId, providerOptions,
-    { summary, summaryUpTo },
-  ).catch((err) => {
+  // The session stays active between attempts, so nothing else starts a run on it.
+  (async () => {
+    for (let attempt = 0; ; attempt++) {
+      const final = attempt >= retryDelaysMs.length;
+      const { error } = await processLLMStream(
+        sessionId, messages, context, broadcaster, serverAbort,
+        collectTools, sessionTitle, model, provider, modelId, providerOptions,
+        { summary, summaryUpTo }, final,
+      );
+      if (error === undefined) break;
+      if (!final) {
+        console.warn(`[chat] Attempt ${attempt + 1} for ${sessionId} failed, retrying in ${retryDelaysMs[attempt] / 1000}s:`, error);
+        await delay(retryDelaysMs[attempt], undefined, { signal: serverAbort.signal }).catch(() => {});
+        // A user stop during the wait is not a failure.
+        if (serverAbort.signal.aborted) break;
+      }
+      if (final) {
+        console.warn(`[chat] Run for ${sessionId} failed:`, error);
+        onFailed?.(error);
+        break;
+      }
+    }
+  })().catch((err) => {
     console.error(`[chat] Unhandled error in LLM processing for ${sessionId}:`, err);
+  }).finally(() => {
+    // After the DB write so clients reloading on "done" read the final messages.
     finalizeSession(sessionId, context, broadcaster);
   });
 

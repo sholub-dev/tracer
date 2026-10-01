@@ -13,6 +13,7 @@ import { firstUserMessageTitle, loadSessionMessages, runChatAgent } from "./base
 import { collectChatTools } from "../tools/chat-tools.js";
 import { generateSessionTitle } from "./utility/title.js";
 import { setTimerTool } from "../tools/timer-tool.js";
+import { CONFIG } from "../config.js";
 
 export interface StartSessionOptions {
   sessionId: string;
@@ -22,8 +23,8 @@ export interface StartSessionOptions {
   title?: string;
   /** Scope to one provider in direct mode; unified when omitted. */
   provider?: string;
-  /** Fires after the final messages are persisted. */
-  onComplete?: () => void;
+  /** Fires once after the run: when its messages are persisted, or with the error when every attempt failed. */
+  onComplete?: (outcome: { error?: string }) => void;
   /** Extra tools for this session only. */
   tools?: Record<string, unknown>;
 }
@@ -78,11 +79,13 @@ export async function startAgentSession(
         tools: collected.tools && { ...collected.tools, set_timer: setTimerTool(context.db, sessionId), ...tools },
         afterComplete: (params) => {
           orig?.(params);
-          onComplete?.();
+          onComplete?.({});
         },
       };
     },
     sessionTitle: firstUserMessageTitle,
+    retryDelaysMs: CONFIG.agentRetryDelaysMs,
+    onFailed: (error) => onComplete?.({ error }),
   });
 
   return "error" in result ? { error: result.error ?? "Unknown error" } : { ok: true };

@@ -52,6 +52,9 @@ export const CONFIG = {
    */
   maxReasoningCharsPerStep: 40_000,
 
+  /** Waits before re-running a background agent run (monitor, timer, API) that failed with an LLM/API error. */
+  agentRetryDelaysMs: [5_000, 15_000, 45_000],
+
   // ── Monitor scheduler ──
 
   monitorTickIntervalMs: 10_000,

@@ -10,6 +10,8 @@ import { CONFIG } from "../config.js";
 import { NewRelicProvider } from "../providers/newrelic/newrelic.provider.js";
 import type { AiIssue } from "../providers/newrelic/nerdgraph.client.js";
 import { applyTriage, checkWatches, decide, incidentQuery, incidentRefs, reportIssueStatusTool, wakeupExtras, type DecideInput } from "./triage.js";
+import { firingRerun } from "./scheduler.js";
+import { writeSlackConfig } from "../integrations/slack.js";
 
 const MONITOR_QUERY = "SELECT count(*) FROM NrAiIncident WHERE event = 'open' AND policyName LIKE '%foundations%' FACET conditionName LIMIT 100 SINCE {{SINCE}} UNTIL {{UNTIL}}";
 
@@ -28,14 +30,16 @@ function memoryDb(globalOn = true): Db {
     );
     INSERT INTO chat_sessions VALUES ('s1', 'Firing', '[]', 'idle', 'monitor', NULL, NULL, NULL, 0, 0);
     CREATE TABLE session_timers (session_id TEXT PRIMARY KEY, fire_at INTEGER, note TEXT NOT NULL, set_at INTEGER NOT NULL);
-    CREATE TABLE monitor_triggers (id TEXT PRIMARY KEY, window_start INTEGER NOT NULL);
+    CREATE TABLE monitor_triggers (
+      id TEXT PRIMARY KEY, monitor_id TEXT, triggered_at INTEGER, window_start INTEGER NOT NULL, session_id TEXT, reported TEXT
+    );
     CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
     CREATE TABLE alert_issues (
       issue_id TEXT PRIMARY KEY, monitor_id TEXT NOT NULL, trigger_id TEXT NOT NULL, session_id TEXT NOT NULL,
       condition_name TEXT NOT NULL, title TEXT NOT NULL, severity TEXT, verdict TEXT, state TEXT NOT NULL, last_error TEXT,
       watch_until INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     );
-    INSERT INTO monitor_triggers VALUES ('t1', 0);
+    INSERT INTO monitor_triggers VALUES ('t1', 'm1', 0, 0, 's1', NULL);
   `);
   if (globalOn) sqlite.prepare("INSERT INTO app_settings VALUES ('alert_triage', 'true', 0)").run();
   return drizzle(sqlite, { schema }) as unknown as Db;
@@ -200,4 +204,86 @@ test("checkWatches leaves watched issues open once their follow-up timer is gone
   addIssue(context.db, "a", { state: "watching", verdict: "ongoing" });
   await checkWatches(context);
   assert.equal(context.db.select().from(schema.alertIssues).get()?.state, "left_open");
+});
+
+async function withSlack(db: Db, fn: (posts: string[]) => Promise<void>) {
+  writeSlackConfig(db, { webhookUrl: "https://hooks.slack.com/services/T/B/x" });
+  const posts: string[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url: string, init: RequestInit) => {
+    posts.push(init.body as string);
+    return new Response("ok");
+  }) as typeof fetch;
+  try {
+    await fn(posts);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+async function settle(until: () => boolean) {
+  for (let i = 0; i < 100 && !until(); i++) await new Promise((r) => setTimeout(r, 10));
+  await new Promise((r) => setTimeout(r, 30));
+}
+
+const reported = (db: Db) => db.select({ r: schema.monitorTriggers.reported }).from(schema.monitorTriggers).get()?.r;
+
+test("a retried firing gets report_issue_status for its pending issues, triages and posts once", async () => {
+  const { context, resolved } = fakeNewRelic({ a: "ACTIVATED" });
+  addIssue(context.db, "a");
+  await withSlack(context.db, async (posts) => {
+    const rerun = firingRerun(context, "s1")!;
+    const t = rerun.tools.report_issue_status as ReturnType<typeof reportIssueStatusTool>;
+    await t.execute!({ severity: "low", issues: [{ issueId: "a", status: "stopped" }] }, { toolCallId: "c", messages: [] } as never);
+    rerun.onComplete({});
+    rerun.onComplete({});
+    await settle(() => posts.length > 0);
+    assert.deepEqual(resolved, ["a"]);
+    assert.equal(posts.length, 1);
+    assert.equal(reported(context.db), "done");
+    assert.equal(firingRerun(context, "s1"), null, "a reported firing is a plain chat");
+  });
+});
+
+test("a firing whose every attempt failed posts once and keeps its issues for a Retry, which acks and closes", async () => {
+  const { context, resolved } = fakeNewRelic({ a: "ACTIVATED" });
+  addIssue(context.db, "a", { verdict: "stopped", severity: "low" });
+  await withSlack(context.db, async (posts) => {
+    const first = firingRerun(context, "s1")!;
+    first.onComplete({ error: "Overloaded" });
+    first.onComplete({ error: "Overloaded" });
+    await settle(() => posts.length > 0);
+    assert.equal(posts.length, 1);
+    assert.match(posts[0], /Investigation failed \(AI model error after retries\)\. New Relic issues left open; Retry the session to triage them\./);
+    const row = context.db.select().from(schema.alertIssues).get();
+    assert.equal(row?.state, "pending");
+    assert.equal(row?.verdict, null, "a failed run's report is not trusted");
+    assert.deepEqual(resolved, []);
+    assert.equal(reported(context.db), "failed");
+
+    const retry = firingRerun(context, "s1")!;
+    retry.onComplete({ error: "Overloaded" });
+    await settle(() => false);
+    assert.equal(posts.length, 1, "a repeated failure is not posted again");
+    const t = retry.tools.report_issue_status as ReturnType<typeof reportIssueStatusTool>;
+    await t.execute!({ severity: "low", issues: [{ issueId: "a", status: "stopped" }] }, { toolCallId: "c", messages: [] } as never);
+    retry.onComplete({});
+    await settle(() => posts.length > 1);
+    assert.equal(posts.length, 2);
+    assert.match(posts[1], /Acked and closed in New Relic/);
+    assert.deepEqual(resolved, ["a"]);
+    assert.equal(reported(context.db), "done");
+  });
+});
+
+test("a failed follow-up run leaves its issues open instead of trusting a partial report", async () => {
+  const { context, resolved } = fakeNewRelic({ a: "ACTIVATED" });
+  addIssue(context.db, "a", { state: "watching", verdict: "ongoing", severity: "low", watchUntil: Math.floor(Date.now() / 1000) + 3600 });
+  const extras = await wakeupExtras(context, "s1");
+  const t = extras.tools!.report_issue_status as ReturnType<typeof reportIssueStatusTool>;
+  await t.execute!({ severity: "low", issues: [{ issueId: "a", status: "stopped" }] }, { toolCallId: "c", messages: [] } as never);
+  extras.onComplete!({ error: "Overloaded" });
+  await settle(() => context.db.select().from(schema.alertIssues).get()?.state !== "pending");
+  assert.equal(context.db.select().from(schema.alertIssues).get()?.state, "left_open");
+  assert.deepEqual(resolved, []);
 });

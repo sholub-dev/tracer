@@ -45,13 +45,20 @@ const SSE = [
   ["message_stop", { type: "message_stop" }],
 ].map(([e, d]) => `event: ${e}\ndata: ${JSON.stringify(d)}\n\n`).join("");
 
-function fakeAnthropic(): Promise<{ server: Server; url: string; bodies: Record<string, unknown>[] }> {
+/** `fail` first requests get a non-retryable API error; `hold` never answers. */
+function fakeAnthropic({ fail = 0, hold = false } = {}): Promise<{ server: Server; url: string; bodies: Record<string, unknown>[] }> {
   const bodies: Record<string, unknown>[] = [];
   const server = createServer((req, res) => {
     let raw = "";
     req.on("data", (c) => { raw += c; });
     req.on("end", () => {
       bodies.push(JSON.parse(raw));
+      if (hold) return;
+      if (bodies.length <= fail) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "boom" } }));
+        return;
+      }
       res.writeHead(200, { "content-type": "text/event-stream" });
       res.end(SSE);
     });
@@ -148,4 +155,74 @@ test("Anthropic chat request: date-only system prompt with cache breakpoint, tim
     delete process.env.ANTHROPIC_BASE_URL;
     server.close();
   }
+});
+
+async function retryRun(fake: { fail?: number; hold?: boolean }, retryDelaysMs: number[], whileRunning?: (ctx: Context) => Promise<void>) {
+  const { server, url, bodies } = await fakeAnthropic(fake);
+  process.env.ANTHROPIC_BASE_URL = url;
+  try {
+    const db = memoryDb();
+    db.insert(schema.providerConfigs).values({ type: "anthropic", config: JSON.stringify({ apiKey: "test" }) }).run();
+    writeAppSetting(db, SETTINGS_KEYS.chatModel, { provider: "anthropic", modelId: "claude-test" });
+    const context: Context = { db, providers: {} as ProviderRegistry, activeStreams: new Map() };
+    let completed = 0;
+    const failed: string[] = [];
+    const res = await runChatAgent({
+      sessionId: "s1", messages: [{ id: "u1", role: "user", parts: [{ type: "text", text: "why?" }] }], context,
+      collectTools: () => ({ tools: undefined, afterComplete: () => { completed++; } }),
+      sessionTitle: () => "t", retryDelaysMs, onFailed: (e) => failed.push(e),
+    });
+    assert.ok("stream" in res && res.stream);
+    const parts: { type: string }[] = [];
+    const draining = (async () => {
+      const reader = res.stream.getReader();
+      for (let r = await reader.read(); !r.done; r = await reader.read()) parts.push(r.value);
+    })();
+    await whileRunning?.(context);
+    await draining;
+    const saved = JSON.parse(db.select().from(schema.chatSessions).get()!.messages) as UIMessage[];
+    return { bodies, completed, failed, parts, saved, status: db.select().from(schema.chatSessions).get()?.status };
+  } finally {
+    delete process.env.ANTHROPIC_BASE_URL;
+    server.close();
+  }
+}
+
+test("a failed attempt is re-run on the same history and completes once", async () => {
+  const r = await retryRun({ fail: 2 }, [0, 0, 0]);
+  assert.equal(r.bodies.length, 3);
+  for (const b of r.bodies) assert.equal((b.messages as unknown[]).length, 1, "the user message is sent once");
+  assert.equal(r.completed, 1);
+  assert.deepEqual(r.failed, []);
+  assert.equal(r.parts.filter((p) => p.type === "error").length, 0, "retried errors are not shown");
+  assert.deepEqual(r.saved.map((m) => m.role), ["user", "assistant"]);
+  assert.equal(r.status, "done");
+});
+
+test("when every attempt fails the run reports one failure and one error", async () => {
+  const r = await retryRun({ fail: 99 }, [0, 0]);
+  assert.equal(r.bodies.length, 3);
+  assert.equal(r.completed, 0);
+  assert.deepEqual(r.failed, ["boom"]);
+  assert.equal(r.parts.filter((p) => p.type === "error").length, 1);
+  assert.deepEqual(r.saved.map((m) => m.role), ["user"]);
+  assert.equal(r.status, "done");
+});
+
+test("a stop is never retried", async () => {
+  const stopped = await retryRun({ hold: true }, [0, 0], async (ctx) => {
+    await new Promise((r) => setTimeout(r, 100));
+    ctx.activeStreams.get("s1")!.controller.abort();
+  });
+  assert.equal(stopped.bodies.length, 1);
+  assert.deepEqual(stopped.failed, []);
+
+  const started = Date.now();
+  const inBackoff = await retryRun({ fail: 99 }, [60_000], async (ctx) => {
+    await new Promise((r) => setTimeout(r, 300));
+    ctx.activeStreams.get("s1")!.controller.abort();
+  });
+  assert.equal(inBackoff.bodies.length, 1);
+  assert.deepEqual(inBackoff.failed, [], "a stop while waiting is not a failure");
+  assert.ok(Date.now() - started < 10_000);
 });

@@ -17,7 +17,7 @@ function memoryDb(): Db {
   sqlite.exec(`
     CREATE TABLE monitor_triggers (
       id TEXT PRIMARY KEY, monitor_id TEXT NOT NULL, triggered_at INTEGER NOT NULL, value REAL NOT NULL,
-      window_start INTEGER NOT NULL, window_end INTEGER NOT NULL, status TEXT NOT NULL, groups TEXT NOT NULL, session_id TEXT
+      window_start INTEGER NOT NULL, window_end INTEGER NOT NULL, status TEXT NOT NULL, groups TEXT NOT NULL, session_id TEXT, reported TEXT
     );
   `);
   return drizzle(sqlite, { schema }) as unknown as Db;

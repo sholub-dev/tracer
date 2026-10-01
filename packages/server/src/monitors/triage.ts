@@ -269,12 +269,23 @@ export async function applyTriage(context: Context, sessionId: string, recheck: 
   return { action: lines.join("; "), ping };
 }
 
-/** The Slack action for a finished firing investigation; never throws. */
-export async function triageAfterRun(context: Context, sessionId: string, found: FoundIssues): Promise<Triage> {
-  if ("error" in found) return { action: `Triage skipped: could not read the New Relic issues (${found.error})`, ping: true };
+/** Pending issues of a session, for a re-run of its firing. */
+export function pendingIssueIds(db: Db, sessionId: string): string[] {
+  return db.select({ id: alertIssues.issueId }).from(alertIssues)
+    .where(and(eq(alertIssues.sessionId, sessionId), eq(alertIssues.state, "pending"))).all().map((r) => r.id);
+}
+
+/** Drops the status reports of a run that did not finish, so its issues are left open. */
+export function forgetReports(db: Db, sessionId: string): void {
+  db.update(alertIssues).set({ verdict: null }).where(and(eq(alertIssues.sessionId, sessionId), eq(alertIssues.state, "pending"))).run();
+}
+
+/** The Slack action for a finished firing investigation; never throws. Without `found` (a re-run) it acts on the recorded issues only. */
+export async function triageAfterRun(context: Context, sessionId: string, found?: FoundIssues | null): Promise<Triage | undefined> {
+  if (found && "error" in found) return { action: `Triage skipped: could not read the New Relic issues (${found.error})`, ping: true };
   try {
     const triage = await applyTriage(context, sessionId, false);
-    if (triage) return triage;
+    if (triage || !found) return triage ?? undefined;
     // Found issues with no rows here were recorded first by a concurrent firing.
     return found.tracked + found.open.length + found.closed.length > 0
       ? { action: "Already tracked from an earlier alert", ping: false }
@@ -313,7 +324,7 @@ async function leaveOpen(context: Context, rows: IssueRow[], reason: string): Pr
 const monitorName = (db: Db, monitorId: string) =>
   db.select({ name: monitors.name }).from(monitors).where(eq(monitors.id, monitorId)).get()?.name ?? "monitor";
 
-export type Wakeup = { lines: string[]; tools?: Record<string, unknown>; onComplete?: () => void; revert?: () => void };
+export type Wakeup = { lines: string[]; tools?: Record<string, unknown>; onComplete?: (outcome: { error?: string }) => void; revert?: () => void };
 
 /** Turns a follow-up timer wake-up into a triage re-check when the session has watched issues. */
 export async function wakeupExtras(context: Context, sessionId: string): Promise<Wakeup> {
@@ -343,9 +354,12 @@ export async function wakeupExtras(context: Context, sessionId: string): Promise
       FOLLOW_UP_INSTRUCTION,
     ],
     tools: { report_issue_status: reportIssueStatusTool(db, active.map((r) => r.issueId)) },
-    onComplete: () => void applyTriage(context, sessionId, true)
-      .then((t) => postUpdate(context, monitor?.name ?? "monitor", t))
-      .catch((err) => console.error("[triage] follow-up failed:", errorText(err))),
+    onComplete: ({ error }) => {
+      if (error) forgetReports(db, sessionId);
+      void applyTriage(context, sessionId, true)
+        .then((t) => postUpdate(context, monitor?.name ?? "monitor", t))
+        .catch((err) => console.error("[triage] follow-up failed:", errorText(err)));
+    },
     revert: () => setRows(db, active, { state: "watching" }),
   };
 }
@@ -361,7 +375,7 @@ export async function checkWatches(context: Context): Promise<void> {
     if (context.activeStreams.has(sessionId)) continue;
     try {
       // The agent died or the server restarted mid-run: the report is treated as unknown.
-      db.update(alertIssues).set({ verdict: null }).where(and(eq(alertIssues.sessionId, sessionId), eq(alertIssues.state, "pending"))).run();
+      forgetReports(db, sessionId);
       const name = monitorName(db, stale.find((r) => r.sessionId === sessionId)!.monitorId);
       await postUpdate(context, name, await applyTriage(context, sessionId, true));
     } catch (err) {

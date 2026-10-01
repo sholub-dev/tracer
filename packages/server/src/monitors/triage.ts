@@ -1,18 +1,16 @@
-import { and, countDistinct, eq, gte, inArray, lt, lte, ne } from "drizzle-orm";
+import { and, countDistinct, eq, gte, inArray, lt, ne } from "drizzle-orm";
 import { z } from "zod";
 import { tool, type Tool } from "ai";
-import { SESSION_KIND, substituteWindow, unixNow } from "@tracer-sh/shared";
+import { substituteWindow, unixNow } from "@tracer-sh/shared";
 import type { Context } from "../trpc/context.js";
 import type { Db } from "../db/client.js";
-import { alertIssues, chatSessions, monitors, monitorTriggers } from "../db/schema.js";
+import { alertIssues, monitors, monitorTriggers } from "../db/schema.js";
 import { CONFIG, SETTINGS_KEYS } from "../config.js";
 import { readAppSetting } from "../db/config-reader.js";
 import { NewRelicProvider } from "../providers/newrelic/newrelic.provider.js";
 import type { AiIssue } from "../providers/newrelic/nerdgraph.client.js";
-import { startAgentSession } from "../agents/start-session.js";
-import { sessionChanged } from "../lib/session-events.js";
-import { clip, parseVerdict, postSlack, readSlackConfig, triageUpdate } from "../integrations/slack.js";
-import { readAnalysis } from "./repeats.js";
+import { clip, postSlack, readSlackConfig, triageUpdate } from "../integrations/slack.js";
+import { hasPendingTimer } from "../tools/timer-tool.js";
 import { withTimeout } from "./validate.js";
 
 const ISSUE_STATUSES = ["stopped", "ongoing", "recurring", "unknown"] as const;
@@ -25,7 +23,6 @@ export type FoundIssues = { open: AiIssue[]; closed: AiIssue[]; tracked: number 
 
 // Issues can open hours before the incident event that fired the monitor.
 const ISSUE_LOOKBACK_SECONDS = 6 * 3600;
-const BUSY_RETRY_SECONDS = 60;
 const PENDING_STALE_SECONDS = 3600;
 const TITLE_MAX_CHARS = 150;
 const TERMINAL_STATES = ["closed", "nr_closed", "left_open"];
@@ -34,6 +31,9 @@ const TERMINAL_STATES = ["closed", "nr_closed", "left_open"];
 export function triageEnabled(db: Db): boolean {
   return readAppSetting<boolean>(db, SETTINGS_KEYS.alertTriage) === true;
 }
+
+export const ingestLagSeconds = (query: string) =>
+  incidentQuery(query) ? CONFIG.monitorIncidentLagSeconds : CONFIG.monitorIngestLagSeconds;
 
 const SELECT_FROM_INCIDENT = /^\s*SELECT\s+[\s\S]+?\s+FROM\s+NrAiIncident\b/i;
 
@@ -106,6 +106,7 @@ const issueList = (issues: { issueId: string; conditionName: string; title: stri
   issues.map((i) => `- ${i.issueId}: ${i.conditionName || "unknown condition"} | ${i.title}`);
 
 const REPORT_INSTRUCTION = "call report_issue_status once with the severity and, for each issue id above, its status: stopped, ongoing, recurring or unknown.";
+const FOLLOW_UP_INSTRUCTION = "If any issue is ongoing or recurring, call set_timer to follow up on it later; without a timer it is left open.";
 
 export function issuesPrompt(open: AiIssue[]): string[] {
   if (open.length === 0) return [];
@@ -114,18 +115,8 @@ export function issuesPrompt(open: AiIssue[]): string[] {
     "New Relic issues of this firing that are still open:",
     ...issueList(open.map((i) => ({ issueId: i.issueId, conditionName: conditionOf(i), title: titleOf(i) }))),
     `Before the closing lines, ${REPORT_INSTRUCTION} Base it on the data up to now.`,
+    FOLLOW_UP_INSTRUCTION,
   ];
-}
-
-export function recheckMessage(monitorName: string, issues: IssueRow[], now: number, finding: string): string {
-  return [
-    `Monitor "${monitorName}" re-check at ${new Date(now * 1000).toISOString()}.`,
-    ...(finding ? [`Original finding: ${finding}`] : []),
-    "These New Relic issues are still open:",
-    ...issueList(issues),
-    `Look at the last 15 minutes only, with the fewest queries possible. Then ${REPORT_INSTRUCTION}`,
-    "End with one line: Status: <stopped (last error at <time>); ongoing; recurring (the pattern)>. Facts only, never suggest fixes or actions.",
-  ].join("\n");
 }
 
 type IssueReport = { severity: "critical" | "high" | "medium" | "low"; issues: { issueId: string; status: IssueStatus }[] };
@@ -177,10 +168,13 @@ export function decide(i: DecideInput): Decision {
   return { outcome: "close", ping: !i.recheck && (i.severity === "high" || i.severity === "critical") };
 }
 
+// The condition name is short; raw issue titles can be whole error messages.
+const nameOf = (r: { conditionName: string | null; title: string | null }) => r.conditionName || r.title || "unknown issue";
+
 function actionLine(state: string, title: string, reason?: string): string {
   const labels: Record<string, string> = {
     closed: "Acked and closed in New Relic",
-    watching: `Still ongoing, left open, re-checking every ${CONFIG.triageRecheckSeconds / 60} min`,
+    watching: "Still ongoing, left open, follow-up set",
     nr_closed: "Already closed in New Relic",
   };
   const label = labels[state] ?? `Left open (${reason ?? "unknown"})`;
@@ -229,11 +223,12 @@ export async function applyTriage(context: Context, sessionId: string, recheck: 
   const enabled = triageEnabled(db);
   const pending = rows.filter((r) => r.state === "pending");
   const fresh = await freshStates(context, pending);
+  const followUp = hasPendingTimer(db, sessionId);
   const lines: string[] = [];
   let ping = false;
   for (const row of rows) {
     if (row.state === "nr_closed") {
-      lines.push(actionLine("nr_closed", row.title));
+      lines.push(actionLine("nr_closed", nameOf(row)));
       continue;
     }
     const now = unixNow();
@@ -248,6 +243,7 @@ export async function applyTriage(context: Context, sessionId: string, recheck: 
         watchExpired: row.watchUntil !== null && now >= row.watchUntil,
         recheck,
       });
+    if (d.outcome === "watching" && !followUp) d = { outcome: "left_open", ping: true, reason: "no follow-up set" };
     let state: string = d.outcome;
     let lastError: string | null = null;
     if (d.outcome === "close") {
@@ -265,11 +261,10 @@ export async function applyTriage(context: Context, sessionId: string, recheck: 
       state,
       lastError,
       watchUntil: watching ? (row.watchUntil ?? now + CONFIG.triageWatchMaxSeconds) : row.watchUntil,
-      nextCheckAt: watching ? now + CONFIG.triageRecheckSeconds : null,
       updatedAt: now,
     }).where(eq(alertIssues.issueId, row.issueId)).run();
     ping ||= d.ping;
-    if (!(recheck && watching)) lines.push(actionLine(state, row.title, d.reason));
+    if (!(recheck && watching)) lines.push(actionLine(state, nameOf(row), d.reason));
   }
   return { action: lines.join("; "), ping };
 }
@@ -307,71 +302,55 @@ function setRows(db: Db, rows: IssueRow[], fields: Partial<IssueRow>): void {
   db.update(alertIssues).set({ ...fields, updatedAt: unixNow() }).where(inArray(alertIssues.issueId, rows.map((r) => r.issueId))).run();
 }
 
-async function recheckSession(context: Context, sessionId: string, rows: IssueRow[], now: number): Promise<void> {
-  const { db } = context;
-  const monitor = db.select().from(monitors).where(eq(monitors.id, rows[0].monitorId)).get();
-  if (!monitor) return;
-  const lines: string[] = [];
-  let ping = false;
-  const leaveOpen = (list: IssueRow[], reason: string) => {
-    setRows(db, list, { state: "left_open", nextCheckAt: null });
-    lines.push(...list.map((r) => actionLine("left_open", r.title, reason)));
-    ping ||= list.length > 0;
-  };
-
-  let active = rows;
-  // Stop when the firing's session was deleted; muted monitors never start sessions.
-  const stopReason = !triageEnabled(db) ? "triage turned off"
-    : !monitor.enabled || monitor.alertEnabled === 0 ? "monitor or its alerts turned off"
-    : !db.select({ id: chatSessions.id }).from(chatSessions).where(eq(chatSessions.id, sessionId)).get() ? "its session was deleted"
-    : null;
-  if (stopReason) {
-    leaveOpen(active, `stopped watching, ${stopReason}`);
-    active = [];
-  }
-  leaveOpen(active.filter((r) => r.watchUntil !== null && now >= r.watchUntil), "still ongoing after 24h");
-  active = active.filter((r) => r.watchUntil === null || now < r.watchUntil);
-
-  if (active.length > 0 && active.some((r) => r.recheckSessionId && context.activeStreams.has(r.recheckSessionId))) {
-    setRows(db, active, { nextCheckAt: now + BUSY_RETRY_SECONDS });
-    active = [];
-  }
-  // Cheap NR check first: the agent only runs for issues still open.
-  const fresh = active.length > 0 ? await freshStates(context, active) : null;
-  if (active.length > 0 && !fresh) {
-    setRows(db, active, { nextCheckAt: now + CONFIG.triageRecheckSeconds });
-    active = [];
-  }
-  const closedByNr = active.filter((r) => fresh?.get(r.issueId)?.state === "CLOSED");
-  setRows(db, closedByNr, { state: "nr_closed", nextCheckAt: null });
-  lines.push(...closedByNr.map((r) => actionLine("nr_closed", r.title)));
-  const open = active.filter((r) => !closedByNr.includes(r));
-
-  if (open.length > 0) {
-    // A fresh session keeps the original analysis intact for repeat detection; rows stay keyed to the original session.
-    const recheckId = crypto.randomUUID();
-    setRows(db, open, { state: "pending", verdict: null, recheckSessionId: recheckId });
-    const started = await startAgentSession(context, {
-      sessionId: recheckId,
-      kind: SESSION_KIND.MONITOR,
-      title: `Re-check: ${monitor.name}`,
-      message: recheckMessage(monitor.name, open, now, parseVerdict(readAnalysis(db, sessionId)).summary),
-      tools: { report_issue_status: reportIssueStatusTool(db, open.map((r) => r.issueId)) },
-      onComplete: () => void applyTriage(context, sessionId, true)
-        .then((t) => postUpdate(context, monitor.name, t))
-        .catch((err) => console.error("[triage] re-check failed:", errorText(err))),
-    });
-    if ("error" in started) {
-      console.warn(`[triage] "${monitor.name}" re-check not started:`, started.error);
-      db.delete(chatSessions).where(eq(chatSessions.id, recheckId)).run();
-      sessionChanged(recheckId);
-      setRows(db, open, { state: "watching", nextCheckAt: now + BUSY_RETRY_SECONDS, recheckSessionId: null });
-    }
-  }
-  await postUpdate(context, monitor.name, lines.length > 0 ? { action: lines.join("; "), ping } : null);
+async function leaveOpen(context: Context, rows: IssueRow[], reason: string): Promise<void> {
+  if (rows.length === 0) return;
+  setRows(context.db, rows, { state: "left_open" });
+  await postUpdate(context, monitorName(context.db, rows[0].monitorId), {
+    action: rows.map((r) => actionLine("left_open", nameOf(r), reason)).join("; "), ping: true,
+  });
 }
 
-/** Runs each scheduler tick: re-checks due watched issues and sweeps stale pending ones. */
+const monitorName = (db: Db, monitorId: string) =>
+  db.select({ name: monitors.name }).from(monitors).where(eq(monitors.id, monitorId)).get()?.name ?? "monitor";
+
+export type Wakeup = { lines: string[]; tools?: Record<string, unknown>; onComplete?: () => void; revert?: () => void };
+
+/** Turns a follow-up timer wake-up into a triage re-check when the session has watched issues. */
+export async function wakeupExtras(context: Context, sessionId: string): Promise<Wakeup> {
+  const { db } = context;
+  const rows = db.select().from(alertIssues).where(and(eq(alertIssues.sessionId, sessionId), eq(alertIssues.state, "watching"))).all();
+  if (rows.length === 0) return { lines: [] };
+  const monitor = db.select().from(monitors).where(eq(monitors.id, rows[0].monitorId)).get();
+  const stopReason = !triageEnabled(db) ? "triage turned off"
+    : !monitor?.enabled || monitor.alertEnabled === 0 ? "monitor or its alerts turned off"
+    : null;
+  if (stopReason) {
+    await leaveOpen(context, rows, `stopped watching, ${stopReason}`);
+    return { lines: [] };
+  }
+  const now = unixNow();
+  await leaveOpen(context, rows.filter((r) => r.watchUntil !== null && now >= r.watchUntil), "still ongoing after 24h");
+  const active = rows.filter((r) => r.watchUntil === null || now < r.watchUntil);
+  if (active.length === 0) return { lines: [] };
+
+  setRows(db, active, { state: "pending", verdict: null });
+  return {
+    lines: [
+      "",
+      "New Relic issues still being followed up:",
+      ...issueList(active),
+      `Look at the data since the last check only, with the fewest queries possible. Then ${REPORT_INSTRUCTION}`,
+      FOLLOW_UP_INSTRUCTION,
+    ],
+    tools: { report_issue_status: reportIssueStatusTool(db, active.map((r) => r.issueId)) },
+    onComplete: () => void applyTriage(context, sessionId, true)
+      .then((t) => postUpdate(context, monitor?.name ?? "monitor", t))
+      .catch((err) => console.error("[triage] follow-up failed:", errorText(err))),
+    revert: () => setRows(db, active, { state: "watching" }),
+  };
+}
+
+/** Runs each scheduler tick: sweeps stale pending issues, watched issues left without a follow-up, and old rows. */
 export async function checkWatches(context: Context): Promise<void> {
   const { db } = context;
   const now = unixNow();
@@ -379,26 +358,25 @@ export async function checkWatches(context: Context): Promise<void> {
   const stale = db.select().from(alertIssues)
     .where(and(eq(alertIssues.state, "pending"), lt(alertIssues.updatedAt, now - PENDING_STALE_SECONDS))).all();
   for (const sessionId of new Set(stale.map((r) => r.sessionId))) {
-    const running = [sessionId, ...stale.filter((r) => r.sessionId === sessionId).map((r) => r.recheckSessionId)];
-    if (running.some((id) => id && context.activeStreams.has(id))) continue;
+    if (context.activeStreams.has(sessionId)) continue;
     try {
       // The agent died or the server restarted mid-run: the report is treated as unknown.
       db.update(alertIssues).set({ verdict: null }).where(and(eq(alertIssues.sessionId, sessionId), eq(alertIssues.state, "pending"))).run();
-      const name = db.select({ name: monitors.name }).from(monitors).where(eq(monitors.id, stale.find((r) => r.sessionId === sessionId)!.monitorId)).get()?.name ?? "monitor";
+      const name = monitorName(db, stale.find((r) => r.sessionId === sessionId)!.monitorId);
       await postUpdate(context, name, await applyTriage(context, sessionId, true));
     } catch (err) {
       console.error("[triage] stale sweep failed:", errorText(err));
     }
   }
 
-  const due = db.select().from(alertIssues)
-    .where(and(eq(alertIssues.state, "watching"), lte(alertIssues.nextCheckAt, now))).all();
-  for (const sessionId of new Set(due.map((r) => r.sessionId))) {
-    const rows = due.filter((r) => r.sessionId === sessionId);
+  // The timer was cancelled or its session deleted.
+  const orphaned = db.select().from(alertIssues).where(eq(alertIssues.state, "watching")).all()
+    .filter((r) => !hasPendingTimer(db, r.sessionId));
+  for (const sessionId of new Set(orphaned.map((r) => r.sessionId))) {
     try {
-      await recheckSession(context, sessionId, rows, now);
+      await leaveOpen(context, orphaned.filter((r) => r.sessionId === sessionId), "no follow-up set");
     } catch (err) {
-      console.error("[triage] re-check failed:", errorText(err));
+      console.error("[triage] watch sweep failed:", errorText(err));
     }
   }
 }

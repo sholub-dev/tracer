@@ -4,9 +4,9 @@ import { eq, asc, desc, and, gt, like, sql } from "drizzle-orm";
 import { SESSION_KIND, SESSION_PREFIX, unixNow } from "@tracer-sh/shared";
 import { publicProcedure, router } from "../trpc.js";
 import { chatSessions, monitors, monitorTriggers } from "../../db/schema.js";
-import { CONFIG } from "../../config.js";
 import { parseTriggerGroups } from "../../monitors/repeats.js";
 import { deleteMonitor, setMonitorToggles } from "../../monitors/store.js";
+import { ingestLagSeconds } from "../../monitors/triage.js";
 
 const unreadSession = and(eq(chatSessions.kind, SESSION_KIND.MONITOR), eq(chatSessions.status, "done"));
 
@@ -25,12 +25,11 @@ export const monitorsRouter = router({
         .all()
         .map((r) => [r.monitorId, r.count]),
     );
-    const lag = CONFIG.monitorIngestLagSeconds;
     // lastCheckedAt is the end of the last checked window; checks run `lag` seconds after it.
     return rows.map((m) => ({
       ...m,
       unreadCount: unread.get(m.id) ?? 0,
-      lastRunAt: m.lastCheckedAt === null ? null : m.lastCheckedAt + lag,
+      lastRunAt: m.lastCheckedAt === null ? null : m.lastCheckedAt + ingestLagSeconds(m.query),
     }));
   }),
 

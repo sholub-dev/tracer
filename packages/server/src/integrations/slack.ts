@@ -162,13 +162,15 @@ export function monitorAlert(a: MonitorAlert): Required<SlackPayload> {
   lines.push(...issues.slice(0, MAX_ISSUES).map(issueLine));
   if (issues.length > MAX_ISSUES) lines.push(`+${issues.length - MAX_ISSUES} more`);
   if (seenBefore) lines.push(`*Seen before:* ${escape(seenBefore)}`);
-  // Drop whole lines, not mid-span, so Slack formatting stays closed.
-  while (lines.length > 1 && lines.join("\n").length > SECTION_MAX_CHARS) lines.pop();
+  const action = a.action ? clip(`*Action:* ${escape(redact(a.action))}`, SECTION_MAX_CHARS / 2) : "";
+  const room = SECTION_MAX_CHARS - (action ? action.length + 1 : 0);
+  // Drop whole lines, not mid-span, so Slack formatting stays closed; the action line always fits.
+  while (lines.length > 1 && lines.join("\n").length > room) lines.pop();
+  if (action) lines.push(action);
   return {
     text,
     blocks: [
       { type: "section", text: { type: "mrkdwn", text: lines.join("\n") } },
-      ...(a.action ? [{ type: "section", text: { type: "mrkdwn", text: clip(`*Action:* ${escape(redact(a.action))}`, SECTION_MAX_CHARS) } }] : []),
       { type: "context", elements: [{ type: "mrkdwn", text: escape(`monitor "${name}" · ${time}`) }] },
     ],
   };

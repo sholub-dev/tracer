@@ -9,24 +9,34 @@ import type { ProviderRegistry } from "../providers/registry.js";
 import { CONFIG } from "../config.js";
 import { NewRelicProvider } from "../providers/newrelic/newrelic.provider.js";
 import type { AiIssue } from "../providers/newrelic/nerdgraph.client.js";
-import { applyTriage, checkWatches, decide, incidentQuery, incidentRefs, recheckMessage, reportIssueStatusTool, type DecideInput } from "./triage.js";
+import { applyTriage, checkWatches, decide, incidentQuery, incidentRefs, reportIssueStatusTool, wakeupExtras, type DecideInput } from "./triage.js";
 
 const MONITOR_QUERY = "SELECT count(*) FROM NrAiIncident WHERE event = 'open' AND policyName LIKE '%foundations%' FACET conditionName LIMIT 100 SINCE {{SINCE}} UNTIL {{UNTIL}}";
 
 function memoryDb(globalOn = true): Db {
   const sqlite = new Database(":memory:");
   sqlite.exec(`
-    CREATE TABLE monitors (id TEXT PRIMARY KEY);
+    CREATE TABLE monitors (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, provider TEXT NOT NULL, query TEXT NOT NULL, chart_query TEXT, condition TEXT NOT NULL,
+      frequency_seconds INTEGER NOT NULL, enabled INTEGER NOT NULL, last_checked_at INTEGER, last_status TEXT NOT NULL, last_error TEXT,
+      sort_order INTEGER, card_width INTEGER, alert_enabled INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+    );
+    INSERT INTO monitors VALUES ('m1', 'M', 'newrelic', 'q', NULL, 'c', 60, 1, NULL, 'ok', NULL, NULL, NULL, 1, 0, 0);
+    CREATE TABLE chat_sessions (
+      id TEXT PRIMARY KEY, title TEXT NOT NULL, messages TEXT NOT NULL, status TEXT NOT NULL, kind TEXT,
+      summary TEXT, summary_up_to INTEGER, summary_created_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+    );
+    INSERT INTO chat_sessions VALUES ('s1', 'Firing', '[]', 'idle', 'monitor', NULL, NULL, NULL, 0, 0);
+    CREATE TABLE session_timers (session_id TEXT PRIMARY KEY, fire_at INTEGER, note TEXT NOT NULL, set_at INTEGER NOT NULL);
     CREATE TABLE monitor_triggers (id TEXT PRIMARY KEY, window_start INTEGER NOT NULL);
     CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
     CREATE TABLE alert_issues (
       issue_id TEXT PRIMARY KEY, monitor_id TEXT NOT NULL, trigger_id TEXT NOT NULL, session_id TEXT NOT NULL,
       condition_name TEXT NOT NULL, title TEXT NOT NULL, severity TEXT, verdict TEXT, state TEXT NOT NULL, last_error TEXT,
-      watch_until INTEGER, next_check_at INTEGER, recheck_session_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      watch_until INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     );
     INSERT INTO monitor_triggers VALUES ('t1', 0);
   `);
-  sqlite.exec("INSERT INTO monitors VALUES ('m1')");
   if (globalOn) sqlite.prepare("INSERT INTO app_settings VALUES ('alert_triage', 'true', 0)").run();
   return drizzle(sqlite, { schema }) as unknown as Db;
 }
@@ -36,6 +46,10 @@ function addIssue(db: Db, issueId: string, fields: Partial<typeof schema.alertIs
     issueId, monitorId: "m1", triggerId: "t1", sessionId: "s1", conditionName: "Errors", title: `Issue ${issueId}`,
     state: "pending", createdAt: 0, updatedAt: Math.floor(Date.now() / 1000), ...fields,
   }).run();
+}
+
+function addTimer(db: Db, sessionId = "s1") {
+  db.insert(schema.sessionTimers).values({ sessionId, fireAt: Math.floor(Date.now() / 1000) + 600, note: "check", setAt: 0 }).run();
 }
 
 function fakeNewRelic(states: Record<string, AiIssue["state"]>, globalOn = true) {
@@ -102,13 +116,14 @@ test("applyTriage: stopped is acked then closed, ongoing is watched, skipped rep
   addIssue(context.db, "b", { verdict: "ongoing", severity: "low" });
   addIssue(context.db, "c");
   addIssue(context.db, "d", { verdict: "stopped", severity: "low" });
+  addTimer(context.db);
   const result = await applyTriage(context, "s1", false);
   const states = Object.fromEntries(context.db.select().from(schema.alertIssues).all().map((r) => [r.issueId, r.state]));
   assert.deepEqual(states, { a: "closed", b: "watching", c: "left_open", d: "nr_closed" });
   assert.deepEqual(acked, ["a"]);
   assert.deepEqual(resolved, ["a"]);
   assert.equal(result?.ping, true);
-  assert.match(result!.action, /Acked and closed in New Relic: Issue a/);
+  assert.match(result!.action, /Acked and closed in New Relic: Errors/);
 });
 
 test("applyTriage counts earlier firings, not sibling issues, toward the close loop limit", async () => {
@@ -131,25 +146,41 @@ test("applyTriage never closes while the Settings switch is off", async () => {
   assert.equal(result?.ping, true);
 });
 
-test("a re-check in its own session records against the original firing's rows by issue id", async () => {
-  const { context, resolved } = fakeNewRelic({ a: "ACTIVATED", b: "ACTIVATED" });
-  addIssue(context.db, "a", { recheckSessionId: "r1" });
-  addIssue(context.db, "b", { state: "watching", verdict: "ongoing", severity: "low" });
-  const t = reportIssueStatusTool(context.db, ["a"]);
-  assert.deepEqual(await t.execute!({ severity: "low", issues: [{ issueId: "a", status: "stopped" }] }, { toolCallId: "c", messages: [] } as never), { recorded: 1 });
-  const result = await applyTriage(context, "s1", true);
-  const rows = Object.fromEntries(context.db.select().from(schema.alertIssues).all().map((r) => [r.issueId, r]));
-  assert.equal(rows.a.sessionId, "s1");
-  assert.equal(rows.a.state, "closed");
-  assert.equal(rows.b.state, "watching");
-  assert.deepEqual(resolved, ["a"]);
-  assert.match(result!.action, /Acked and closed in New Relic: Issue a/);
+test("applyTriage leaves an ongoing issue open and pings when no follow-up timer is set", async () => {
+  const { context } = fakeNewRelic({ a: "ACTIVATED" });
+  addIssue(context.db, "a", { verdict: "ongoing", severity: "low" });
+  const result = await applyTriage(context, "s1", false);
+  const row = context.db.select().from(schema.alertIssues).get();
+  assert.equal(row?.state, "left_open");
+  assert.equal(result?.ping, true);
+  assert.match(result!.action, /Left open \(no follow-up set\): Errors/);
 });
 
-test("recheckMessage carries the original finding only when there is one", () => {
-  const rows = [{ issueId: "a", conditionName: "Errors", title: "Issue a" }] as Parameters<typeof recheckMessage>[1];
-  assert.match(recheckMessage("M", rows, 0, "DB timeouts on /pay"), /Original finding: DB timeouts on \/pay/);
-  assert.doesNotMatch(recheckMessage("M", rows, 0, ""), /Original finding/);
+test("a follow-up wake-up re-checks watched issues and acks then closes a stopped one", async () => {
+  const { context, resolved, acked } = fakeNewRelic({ a: "ACTIVATED" });
+  addIssue(context.db, "a", { state: "watching", verdict: "ongoing", severity: "low", watchUntil: Math.floor(Date.now() / 1000) + 3600 });
+  const extras = await wakeupExtras(context, "s1");
+  assert.equal(context.db.select().from(schema.alertIssues).get()?.state, "pending");
+  assert.match(extras.lines.join("\n"), /- a: Errors \| Issue a/);
+  const t = extras.tools!.report_issue_status as ReturnType<typeof reportIssueStatusTool>;
+  await t.execute!({ severity: "low", issues: [{ issueId: "a", status: "stopped" }] }, { toolCallId: "c", messages: [] } as never);
+  const result = await applyTriage(context, "s1", true);
+  assert.equal(context.db.select().from(schema.alertIssues).get()?.state, "closed");
+  assert.deepEqual(acked, ["a"]);
+  assert.deepEqual(resolved, ["a"]);
+  assert.match(result!.action, /Acked and closed in New Relic: Errors/);
+});
+
+test("a follow-up wake-up stops watching when triage is off or the 24h cap passed", async () => {
+  const { context } = fakeNewRelic({ a: "ACTIVATED" }, false);
+  addIssue(context.db, "a", { state: "watching", verdict: "ongoing" });
+  assert.deepEqual(await wakeupExtras(context, "s1"), { lines: [] });
+  assert.equal(context.db.select().from(schema.alertIssues).get()?.state, "left_open");
+
+  const on = fakeNewRelic({ b: "ACTIVATED" });
+  addIssue(on.context.db, "b", { state: "watching", verdict: "ongoing", watchUntil: 1 });
+  assert.deepEqual(await wakeupExtras(on.context, "s1"), { lines: [] });
+  assert.equal(on.context.db.select().from(schema.alertIssues).get()?.state, "left_open");
 });
 
 test("checkWatches deletes finished issues after the retention period and keeps the rest", async () => {
@@ -158,33 +189,15 @@ test("checkWatches deletes finished issues after the retention period and keeps 
   addIssue(context.db, "a", { state: "closed", updatedAt: old });
   addIssue(context.db, "b", { state: "left_open", updatedAt: old });
   addIssue(context.db, "c", { state: "nr_closed" });
-  addIssue(context.db, "d", { state: "watching", updatedAt: old, nextCheckAt: null });
+  addIssue(context.db, "d", { state: "watching", updatedAt: old });
+  addTimer(context.db);
   await checkWatches(context);
   assert.deepEqual(context.db.select().from(schema.alertIssues).all().map((r) => r.issueId).sort(), ["c", "d"]);
 });
 
-test("a re-check that fails to start deletes its session and retries later", async () => {
-  const { context } = fakeNewRelic({ a: "ACTIVATED" });
-  (context.db as unknown as { $client: Database.Database }).$client.exec(`
-    DROP TABLE monitors;
-    CREATE TABLE monitors (
-      id TEXT PRIMARY KEY, name TEXT NOT NULL, provider TEXT NOT NULL, query TEXT NOT NULL, chart_query TEXT, condition TEXT NOT NULL,
-      frequency_seconds INTEGER NOT NULL, enabled INTEGER NOT NULL, last_checked_at INTEGER, last_status TEXT NOT NULL, last_error TEXT,
-      sort_order INTEGER, card_width INTEGER, alert_enabled INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
-    );
-    INSERT INTO monitors VALUES ('m1', 'M', 'newrelic', 'q', NULL, 'c', 60, 1, NULL, 'ok', NULL, NULL, NULL, 1, 0, 0);
-    CREATE TABLE chat_sessions (
-      id TEXT PRIMARY KEY, title TEXT NOT NULL, messages TEXT NOT NULL, status TEXT NOT NULL, kind TEXT,
-      summary TEXT, summary_up_to INTEGER, summary_created_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
-    );
-    INSERT INTO chat_sessions VALUES ('s1', 'Firing', '[]', 'idle', 'monitor', NULL, NULL, NULL, 0, 0);
-    INSERT INTO app_settings VALUES ('chat_model', '{"provider":"none","modelId":"x"}', 0);
-  `);
-  addIssue(context.db, "a", { state: "watching", verdict: "ongoing", nextCheckAt: 0 });
+test("checkWatches leaves watched issues open once their follow-up timer is gone", async () => {
+  const { context } = fakeNewRelic({});
+  addIssue(context.db, "a", { state: "watching", verdict: "ongoing" });
   await checkWatches(context);
-  assert.deepEqual(context.db.select({ id: schema.chatSessions.id }).from(schema.chatSessions).all(), [{ id: "s1" }]);
-  const row = context.db.select().from(schema.alertIssues).get();
-  assert.equal(row?.state, "watching");
-  assert.equal(row?.recheckSessionId, null);
-  assert.ok((row?.nextCheckAt ?? 0) > 0);
+  assert.equal(context.db.select().from(schema.alertIssues).get()?.state, "left_open");
 });

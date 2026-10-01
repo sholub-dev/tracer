@@ -141,17 +141,19 @@ test("byRelevance puts sessions sharing a key first, each part newest first", ()
   assert.deepEqual(byRelevance(past, [""]).map((p) => p.id), ["a", "b", "c", "d"]);
 });
 
-test("nextWindow aligns runs to clock boundaries, applies lag, and never overlaps", () => {
+test("nextWindow ends windows on clock boundaries, runs them after the lag, and never overlaps", () => {
   const lag = 60;
-  // 10:47:10 -> the latest 5-min boundary is 10:45:00, window ends at 10:44:00.
   const t = (h: number, m: number, sec = 0) => h * 3600 + m * 60 + sec;
-  assert.deepEqual(nextWindow(null, 300, t(10, 47, 10), lag), { start: t(10, 39), end: t(10, 44) });
-  assert.equal(nextWindow(t(10, 44), 300, t(10, 49, 59), lag), null);
-  assert.deepEqual(nextWindow(t(10, 44), 300, t(10, 50, 5), lag), { start: t(10, 44), end: t(10, 49) });
+  // 10:47:10 -> the latest boundary at least `lag` ago is 10:45:00.
+  assert.deepEqual(nextWindow(null, 300, t(10, 47, 10), lag), { start: t(10, 40), end: t(10, 45) });
+  assert.equal(nextWindow(t(10, 45), 300, t(10, 50, 59), lag), null);
+  assert.deepEqual(nextWindow(t(10, 45), 300, t(10, 51, 0), lag), { start: t(10, 45), end: t(10, 50) });
+  // An alert at 6:19 is in the window checked right after 6:20 once the lag passes.
+  assert.deepEqual(nextWindow(t(6, 15), 300, t(6, 20, 15), 15), { start: t(6, 15), end: t(6, 20) });
   // An unaligned end from before this change catches up at the next boundary.
-  assert.deepEqual(nextWindow(t(10, 43, 23), 300, t(10, 45, 2), lag), { start: t(10, 43, 23), end: t(10, 44) });
+  assert.deepEqual(nextWindow(t(10, 44), 300, t(10, 46, 2), lag), { start: t(10, 44), end: t(10, 45) });
   // After sleep, one window covers the whole gap.
-  assert.deepEqual(nextWindow(t(10, 44), 300, t(12, 1), lag), { start: t(10, 44), end: t(11, 59) });
+  assert.deepEqual(nextWindow(t(10, 45), 300, t(12, 1), lag), { start: t(10, 45), end: t(12, 0) });
 });
 
 test("isFailedWindow skips only the window end that failed", () => {

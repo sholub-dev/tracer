@@ -101,13 +101,19 @@ export function runSetup(): void {
       state TEXT NOT NULL,
       last_error TEXT,
       watch_until INTEGER,
-      next_check_at INTEGER,
-      recheck_session_id TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
 
-    CREATE INDEX IF NOT EXISTS idx_alert_issues_due ON alert_issues(state, next_check_at);
+    CREATE TABLE IF NOT EXISTS session_timers (
+      session_id TEXT PRIMARY KEY REFERENCES chat_sessions(id) ON DELETE CASCADE,
+      fire_at INTEGER,
+      note TEXT NOT NULL,
+      set_at INTEGER NOT NULL
+    );
+
+    DROP INDEX IF EXISTS idx_alert_issues_due;
+    CREATE INDEX IF NOT EXISTS idx_alert_issues_state ON alert_issues(state);
     CREATE INDEX IF NOT EXISTS idx_widgets_dashboard ON dashboard_widgets(dashboard_id);
     CREATE INDEX IF NOT EXISTS idx_memories_tool ON tool_memories(tool_name);
     CREATE INDEX IF NOT EXISTS idx_dashboards_updated ON dashboards(updated_at);
@@ -154,7 +160,6 @@ export function runSetup(): void {
     `ALTER TABLE monitors ADD COLUMN card_width INTEGER`,
     `ALTER TABLE monitors ADD COLUMN alert_enabled INTEGER NOT NULL DEFAULT 1`,
     `ALTER TABLE monitors ADD COLUMN chart_query TEXT`,
-    `ALTER TABLE alert_issues ADD COLUMN recheck_session_id TEXT`,
     // Drops the short-lived id-based boundary column (never shipped in a release).
     `ALTER TABLE chat_sessions DROP COLUMN summary_up_to_id`,
   ]) {

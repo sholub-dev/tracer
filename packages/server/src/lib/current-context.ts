@@ -33,3 +33,9 @@ The user's timezone is ${timezone}. Always report times in it, with the zone lab
 export function getCurrentTimeText(db?: Db): string {
   return `[Current date and time: ${formatNow(getTimezone(db), true)}]`;
 }
+
+export function formatLocalTime(seconds: number, timeZone: string): string {
+  return new Date(seconds * 1000).toLocaleString("en-US", {
+    timeZone, month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
+  });
+}

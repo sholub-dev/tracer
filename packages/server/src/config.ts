@@ -59,14 +59,24 @@ export const CONFIG = {
   monitorMinFrequencySeconds: 30,
   /** Window end trails now by this much so late-arriving events are counted. */
   monitorIngestLagSeconds: 60,
+  /** Shorter lag for monitors on NrAiIncident: New Relic writes its own alert events within seconds. */
+  monitorIncidentLagSeconds: 15,
   monitorRepeatWindowSeconds: 86_400,
-  triageRecheckSeconds: 300,
   triageWatchMaxSeconds: 86_400,
   /** Stop closing a condition after this many Tracer closes in 24h. */
   triageLoopMax: 3,
   triageLoopWindowSeconds: 86_400,
   /** Closed, nr_closed and left_open issue rows are deleted after this long. */
   triageRetentionSeconds: 7 * 86_400,
+
+  // ── Session follow-up timers ──
+
+  timerMinMinutes: 5,
+  timerMaxMinutes: 1440,
+  /** A timer may not fire later than this after its session was created. */
+  timerMaxAfterSessionSeconds: 86_400,
+  timerMaxWakeupsPerTick: 3,
+  timerBusyRetrySeconds: 60,
 
   // ── Server lifecycle ──
 

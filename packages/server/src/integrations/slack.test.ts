@@ -78,20 +78,20 @@ test("parseVerdict redacts before clipping", () => {
   assert.ok(issue.endsWith("[email]"), issue);
 });
 
-test("monitorAlert puts the Action in its own block and skips mentions when no ping is needed", () => {
+test("monitorAlert always keeps the Action line and skips mentions when no ping is needed", () => {
   const alert = (ping?: boolean, action = "Acked and closed in New Relic: Errors on /pay <x> by jo@corp.com") => monitorAlert({
     name: "m", triggeredAt: 0, timeZone: "UTC", mentions: "U0123ABCD", ping,
     analysis: "Severity: low\nTL;DR: Noise.\nPolicy: Errors\nIssue: api | /pay | 1 × Timeout",
     action,
   });
   const { blocks } = alert(false);
-  assert.deepEqual(blocks.slice(0, 2), [
-    { type: "section", text: { type: "mrkdwn", text: ["*[LOW] Noise.*", "*Policy:* Errors", "• *api* `/pay`: 1 × Timeout"].join("\n") } },
-    { type: "section", text: { type: "mrkdwn", text: "*Action:* Acked and closed in New Relic: Errors on /pay &lt;x&gt; by [email]" } },
-  ]);
-  assert.equal((blocks[2] as { type: string }).type, "context");
-  const long = (alert(false, "<".repeat(3000)).blocks[1] as { text: { text: string } }).text.text;
-  assert.ok(long.length <= 3000 && long.endsWith(" …"), String(long.length));
+  assert.deepEqual(blocks[0], { type: "section", text: { type: "mrkdwn", text: [
+    "*[LOW] Noise.*", "*Policy:* Errors", "• *api* `/pay`: 1 × Timeout",
+    "*Action:* Acked and closed in New Relic: Errors on /pay &lt;x&gt; by [email]",
+  ].join("\n") } });
+  assert.equal((blocks[1] as { type: string }).type, "context");
+  const long = (alert(false, "<".repeat(3000)).blocks[0] as { text: { text: string } }).text.text;
+  assert.ok(long.length <= 3000 && long.startsWith("*[LOW] Noise.*") && long.endsWith(" …"), String(long.length));
   assert.ok(alert(true).text.startsWith("<@U0123ABCD> "));
   assert.ok(alert().text.startsWith("<@U0123ABCD> "));
 });

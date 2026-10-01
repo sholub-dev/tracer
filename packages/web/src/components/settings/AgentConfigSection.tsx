@@ -43,10 +43,10 @@ const TRIAGE_TIP = [
   "Off: monitors post their analysis to Slack as usual. Nothing changes in New Relic.",
   "On: Tracer acts on the New Relic issue behind each alert of monitors on NrAiIncident:",
   "- Stopped: acks, then closes it (JSM closes its alert). Pings you if severity is high or critical.",
-  "- Ongoing or recurring: no ack, no close, so JSM keeps escalating. Pings you, re-checks every 5 min, acks and closes it once it stops.",
+  "- Ongoing or recurring: no ack, no close, so JSM keeps escalating. Pings you; the agent sets its own follow-up timer and acks and closes it once it stops.",
   "- Status unknown or close failed: leaves it open, pings you.",
   "- Closed 3 times in 24h and it keeps coming back: stops closing, pings you.",
-  "- Still ongoing after 24h: stops re-checking, pings you.",
+  "- Still ongoing after 24h: stops following up, pings you.",
 ].join("\n");
 
 function AlertTriageCard() {

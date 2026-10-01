@@ -12,6 +12,7 @@ import { sessionChanged } from "../lib/session-events.js";
 import { firstUserMessageTitle, loadSessionMessages, runChatAgent } from "./base-agent.js";
 import { collectChatTools } from "../tools/chat-tools.js";
 import { generateSessionTitle } from "./utility/title.js";
+import { setTimerTool } from "../tools/timer-tool.js";
 
 export interface StartSessionOptions {
   sessionId: string;
@@ -74,7 +75,7 @@ export async function startAgentSession(
       const orig = collected.afterComplete;
       return {
         ...collected,
-        tools: collected.tools && tools ? { ...collected.tools, ...tools } : collected.tools,
+        tools: collected.tools && { ...collected.tools, set_timer: setTimerTool(context.db, sessionId), ...tools },
         afterComplete: (params) => {
           orig?.(params);
           onComplete?.();

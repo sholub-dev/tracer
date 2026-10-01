@@ -144,13 +144,18 @@ export const alertIssues = sqliteTable("alert_issues", {
   state: text("state").notNull(), // "pending" | "watching" | "closed" | "nr_closed" | "left_open"
   lastError: text("last_error"),
   watchUntil: integer("watch_until"),
-  nextCheckAt: integer("next_check_at"),
-  recheckSessionId: text("recheck_session_id"),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
 }, (t) => [
-  index("idx_alert_issues_due").on(t.state, t.nextCheckAt),
+  index("idx_alert_issues_state").on(t.state),
 ]);
+
+export const sessionTimers = sqliteTable("session_timers", {
+  sessionId: text("session_id").primaryKey().references(() => chatSessions.id, { onDelete: "cascade" }),
+  fireAt: integer("fire_at"),
+  note: text("note").notNull(),
+  setAt: integer("set_at").notNull(),
+});
 
 export const memoryOperations = sqliteTable("memory_operations", {
   id: integer("id").primaryKey({ autoIncrement: true }),

@@ -10,18 +10,19 @@ import { classifyGroups, pastSessions, readAnalysis, readPastSessionTool, type P
 import { withTimeout } from "./validate.js";
 import { getTimezone } from "../lib/current-context.js";
 import { monitorAlert, parseVerdict, postSlack, readSlackConfig } from "../integrations/slack.js";
-import { checkWatches, findIssues, incidentQuery, triageEnabled, issuesPrompt, recordIssues, reportIssueStatusTool, triageAfterRun, type FoundIssues, type Triage } from "./triage.js";
+import { fireDueTimers } from "./timers.js";
+import { checkWatches, findIssues, incidentQuery, ingestLagSeconds, triageEnabled, issuesPrompt, recordIssues, reportIssueStatusTool, triageAfterRun, type FoundIssues, type Triage } from "./triage.js";
 
 type Monitor = typeof monitors.$inferSelect;
 
-/** Runs on clock boundaries (every 5 min at :00, :05, ...); the window ends `lag` before the boundary. */
+/** Windows end on clock boundaries (:00, :05, ...); each runs `lag` after its end so late events are in. */
 export function nextWindow(
   lastCheckedAt: number | null,
   frequencySeconds: number,
   now: number,
-  lagSeconds = CONFIG.monitorIngestLagSeconds,
+  lagSeconds: number = CONFIG.monitorIngestLagSeconds,
 ): { start: number; end: number } | null {
-  const end = Math.floor(now / frequencySeconds) * frequencySeconds - lagSeconds;
+  const end = Math.floor((now - lagSeconds) / frequencySeconds) * frequencySeconds;
   const start = lastCheckedAt ?? end - frequencySeconds;
   return end > start ? { start, end } : null;
 }
@@ -245,7 +246,7 @@ export async function runDueMonitors(context: Context): Promise<void> {
   const enabled = context.db.select().from(monitors).where(eq(monitors.enabled, 1)).all();
   const now = unixNow();
   await Promise.all(enabled.map(async (monitor) => {
-    const window = nextWindow(monitor.lastCheckedAt, monitor.frequencySeconds, now);
+    const window = nextWindow(monitor.lastCheckedAt, monitor.frequencySeconds, now, ingestLagSeconds(monitor.query));
     if (!window || isFailedWindow(failedWindowEnds, monitor.id, window.end)) return;
     try {
       await checkMonitor(context, monitor, window);
@@ -269,6 +270,7 @@ export class MonitorScheduler {
       if (this.tickPromise) return;
       this.tickPromise = runDueMonitors(this.context)
         .then(() => checkWatches(this.context))
+        .then(() => fireDueTimers(this.context))
         .catch((err) => console.error("MonitorScheduler tick error:", err))
         .finally(() => { this.tickPromise = null; });
     }, CONFIG.monitorTickIntervalMs);

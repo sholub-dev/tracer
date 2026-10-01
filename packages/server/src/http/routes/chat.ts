@@ -9,6 +9,7 @@ import { collectDashboardTools } from "../../tools/dashboard-tools.js";
 import { collectMonitorTools } from "../../tools/monitor-tools.js";
 import { generateSessionTitle } from "../../agents/utility/title.js";
 import { pastSessionToolFor } from "../../monitors/repeats.js";
+import { setTimerTool } from "../../tools/timer-tool.js";
 
 export function registerChatRoutes(app: Hono, context: Context): void {
   app.post("/api/chat", async (c) => {
@@ -38,8 +39,12 @@ export function registerChatRoutes(app: Hono, context: Context): void {
       context,
       collectTools: (writer) => {
         const collected = collectChatTools(context.providers, context.db, writer, scopedProvider, mode);
-        const readPast = collected.tools && pastSessionToolFor(context.db, id);
-        return readPast ? { ...collected, tools: { ...collected.tools, read_past_session: readPast } } : collected;
+        if (!collected.tools) return collected;
+        const readPast = pastSessionToolFor(context.db, id);
+        return {
+          ...collected,
+          tools: { ...collected.tools, set_timer: setTimerTool(context.db, id), ...(readPast ? { read_past_session: readPast } : {}) },
+        };
       },
       sessionTitle: firstUserMessageTitle,
     });

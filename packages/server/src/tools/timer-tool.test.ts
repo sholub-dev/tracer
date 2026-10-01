@@ -23,7 +23,7 @@ function memoryDb(): Db {
     CREATE TABLE session_timers (session_id TEXT PRIMARY KEY, fire_at INTEGER, note TEXT NOT NULL, set_at INTEGER NOT NULL);
     CREATE TABLE alert_issues (
       issue_id TEXT PRIMARY KEY, monitor_id TEXT NOT NULL, trigger_id TEXT NOT NULL, session_id TEXT NOT NULL,
-      condition_name TEXT NOT NULL, title TEXT NOT NULL, severity TEXT, verdict TEXT, state TEXT NOT NULL, last_error TEXT,
+      condition_name TEXT NOT NULL, title TEXT NOT NULL, severity TEXT, verdict TEXT, reason TEXT, state TEXT NOT NULL, last_error TEXT,
       watch_until INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     );
   `);

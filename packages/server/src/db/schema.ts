@@ -143,6 +143,7 @@ export const alertIssues = sqliteTable("alert_issues", {
   title: text("title").notNull(),
   severity: text("severity"),
   verdict: text("verdict"), // "stopped" | "ongoing" | "recurring" | "unknown"
+  reason: text("reason"),
   state: text("state").notNull(), // "pending" | "watching" | "closed" | "nr_closed" | "left_open"
   lastError: text("last_error"),
   watchUntil: integer("watch_until"),

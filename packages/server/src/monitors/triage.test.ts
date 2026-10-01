@@ -36,7 +36,7 @@ function memoryDb(globalOn = true): Db {
     CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
     CREATE TABLE alert_issues (
       issue_id TEXT PRIMARY KEY, monitor_id TEXT NOT NULL, trigger_id TEXT NOT NULL, session_id TEXT NOT NULL,
-      condition_name TEXT NOT NULL, title TEXT NOT NULL, severity TEXT, verdict TEXT, state TEXT NOT NULL, last_error TEXT,
+      condition_name TEXT NOT NULL, title TEXT NOT NULL, severity TEXT, verdict TEXT, reason TEXT, state TEXT NOT NULL, last_error TEXT,
       watch_until INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     );
     INSERT INTO monitor_triggers VALUES ('t1', 'm1', 0, 0, 's1', NULL);
@@ -106,9 +106,9 @@ test("report_issue_status rejects ids outside the firing and records allowed one
   addIssue(db, "a");
   const t = reportIssueStatusTool(db, ["a"]);
   const run = (input: Parameters<NonNullable<typeof t.execute>>[0]) => t.execute!(input, { toolCallId: "c", messages: [] } as never);
-  assert.ok("error" in (await run({ severity: "low", issues: [{ issueId: "a", status: "stopped" }, { issueId: "zzz", status: "stopped" }] }) as object));
+  assert.ok("error" in (await run({ severity: "low", issues: [{ issueId: "a", status: "stopped", reason: "errors back to 0 since 13:58" }, { issueId: "zzz", status: "stopped", reason: "errors back to 0 since 13:58" }] }) as object));
   assert.equal(db.select().from(schema.alertIssues).get()?.verdict, null);
-  assert.deepEqual(await run({ severity: "high", issues: [{ issueId: "a", status: "ongoing" }] }), { recorded: 1 });
+  assert.deepEqual(await run({ severity: "high", issues: [{ issueId: "a", status: "ongoing", reason: "errors back to 0 since 13:58" }] }), { recorded: 1 });
   const row = db.select().from(schema.alertIssues).get();
   assert.equal(row?.verdict, "ongoing");
   assert.equal(row?.severity, "high");
@@ -167,12 +167,12 @@ test("a follow-up wake-up re-checks watched issues and acks then closes a stoppe
   assert.equal(context.db.select().from(schema.alertIssues).get()?.state, "pending");
   assert.match(extras.lines.join("\n"), /- a: Errors \| Issue a/);
   const t = extras.tools!.report_issue_status as ReturnType<typeof reportIssueStatusTool>;
-  await t.execute!({ severity: "low", issues: [{ issueId: "a", status: "stopped" }] }, { toolCallId: "c", messages: [] } as never);
+  await t.execute!({ severity: "low", issues: [{ issueId: "a", status: "stopped", reason: "errors back to 0 since 13:58" }] }, { toolCallId: "c", messages: [] } as never);
   const result = await applyTriage(context, "s1", true);
   assert.equal(context.db.select().from(schema.alertIssues).get()?.state, "closed");
   assert.deepEqual(acked, ["a"]);
   assert.deepEqual(resolved, ["a"]);
-  assert.match(result!.action, /Acked and closed in New Relic: Errors/);
+  assert.match(result!.action, /Acked and closed in New Relic: Errors\. Why: errors back to 0 since 13:58$/);
 });
 
 test("a follow-up wake-up stops watching when triage is off or the 24h cap passed", async () => {
@@ -234,7 +234,7 @@ test("a retried firing gets report_issue_status for its pending issues, triages 
   await withSlack(context.db, async (posts) => {
     const rerun = firingRerun(context, "s1")!;
     const t = rerun.tools.report_issue_status as ReturnType<typeof reportIssueStatusTool>;
-    await t.execute!({ severity: "low", issues: [{ issueId: "a", status: "stopped" }] }, { toolCallId: "c", messages: [] } as never);
+    await t.execute!({ severity: "low", issues: [{ issueId: "a", status: "stopped", reason: "errors back to 0 since 13:58" }] }, { toolCallId: "c", messages: [] } as never);
     rerun.onComplete({});
     rerun.onComplete({});
     await settle(() => posts.length > 0);
@@ -266,7 +266,7 @@ test("a firing whose every attempt failed posts once and keeps its issues for a 
     await settle(() => false);
     assert.equal(posts.length, 1, "a repeated failure is not posted again");
     const t = retry.tools.report_issue_status as ReturnType<typeof reportIssueStatusTool>;
-    await t.execute!({ severity: "low", issues: [{ issueId: "a", status: "stopped" }] }, { toolCallId: "c", messages: [] } as never);
+    await t.execute!({ severity: "low", issues: [{ issueId: "a", status: "stopped", reason: "errors back to 0 since 13:58" }] }, { toolCallId: "c", messages: [] } as never);
     retry.onComplete({});
     await settle(() => posts.length > 1);
     assert.equal(posts.length, 2);
@@ -281,7 +281,7 @@ test("a failed follow-up run leaves its issues open instead of trusting a partia
   addIssue(context.db, "a", { state: "watching", verdict: "ongoing", severity: "low", watchUntil: Math.floor(Date.now() / 1000) + 3600 });
   const extras = await wakeupExtras(context, "s1");
   const t = extras.tools!.report_issue_status as ReturnType<typeof reportIssueStatusTool>;
-  await t.execute!({ severity: "low", issues: [{ issueId: "a", status: "stopped" }] }, { toolCallId: "c", messages: [] } as never);
+  await t.execute!({ severity: "low", issues: [{ issueId: "a", status: "stopped", reason: "errors back to 0 since 13:58" }] }, { toolCallId: "c", messages: [] } as never);
   extras.onComplete!({ error: "Overloaded" });
   await settle(() => context.db.select().from(schema.alertIssues).get()?.state !== "pending");
   assert.equal(context.db.select().from(schema.alertIssues).get()?.state, "left_open");

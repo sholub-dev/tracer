@@ -99,6 +99,7 @@ export function runSetup(): void {
       title TEXT NOT NULL,
       severity TEXT,
       verdict TEXT,
+      reason TEXT,
       state TEXT NOT NULL,
       last_error TEXT,
       watch_until INTEGER,
@@ -161,6 +162,7 @@ export function runSetup(): void {
     `ALTER TABLE monitors ADD COLUMN card_width INTEGER`,
     `ALTER TABLE monitors ADD COLUMN alert_enabled INTEGER NOT NULL DEFAULT 1`,
     `ALTER TABLE monitors ADD COLUMN chart_query TEXT`,
+    `ALTER TABLE alert_issues ADD COLUMN reason TEXT`,
     // Drops the short-lived id-based boundary column (never shipped in a release).
     `ALTER TABLE chat_sessions DROP COLUMN summary_up_to_id`,
   ]) {

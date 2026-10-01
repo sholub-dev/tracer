@@ -77,8 +77,9 @@ export function readOutcome(db: Db, sessionId: string): { analysis: string; repo
   }
 }
 
+export const outcomeSummary = (o: { analysis: string; report: AlertSummary | null }) => o.report?.tldr ?? firstSentence(o.analysis);
 /** The one-line summary of a past run, for the prompt. */
-export const pastSummary = (p: PastSession) => redact(p.report?.tldr ?? firstSentence(p.analysis));
+export const pastSummary = (p: PastSession) => redact(outcomeSummary(p));
 
 export function pastSessions(db: Db, monitorId: string, currentKeys: string[], before = Number.MAX_SAFE_INTEGER): PastSession[] {
   const triggers = db

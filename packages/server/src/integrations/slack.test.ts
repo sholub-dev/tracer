@@ -112,7 +112,11 @@ test("monitorAlert always keeps the Action line and skips mentions when no ping 
   assert.ok(alert().text.startsWith("<@U0123ABCD> "));
 });
 
-test("triageUpdate is one line, mentions only on ping", () => {
-  assert.equal(triageUpdate({ name: "Errors", action: "Closed in New Relic: High <rate>", ping: false, mentions: "U0123ABCD" }).text, "*Errors:* Closed in New Relic: High &lt;rate&gt;");
-  assert.equal(triageUpdate({ name: "Errors", action: "Left open (still ongoing after 24h): x", ping: true, mentions: "@here" }).text, "<!here> *Errors:* Left open (still ongoing after 24h): x");
+test("triageUpdate names the alert it follows up on, mentions only on ping", () => {
+  assert.equal(
+    triageUpdate({ name: "Errors", action: "Acked and closed: x", ping: false, firedAt: "Oct 1, 1:51 PM PDT", alert: "Apdex <0.95 for jane@x.com" }).text,
+    "*Errors* · follow-up on the Oct 1, 1:51 PM PDT alert\nApdex &lt;0.95 for [email]\n*Action:* Acked and closed: x",
+  );
+  assert.equal(triageUpdate({ name: "Errors", action: "Closed in New Relic: High <rate>", ping: false, mentions: "U0123ABCD" }).text, "*Errors*\n*Action:* Closed in New Relic: High &lt;rate&gt;");
+  assert.equal(triageUpdate({ name: "Errors", action: "Left open (still ongoing after 24h): x", ping: true, mentions: "@here" }).text, "<!here> *Errors*\n*Action:* Left open (still ongoing after 24h): x");
 });

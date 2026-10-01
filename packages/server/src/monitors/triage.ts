@@ -11,6 +11,7 @@ import { NewRelicProvider } from "../providers/newrelic/newrelic.provider.js";
 import type { AiIssue } from "../providers/newrelic/nerdgraph.client.js";
 import { clip, postSlack, readSlackConfig, triageUpdate } from "../integrations/slack.js";
 import { hasPendingTimer } from "../tools/timer-tool.js";
+import { SEVERITIES } from "./alert-summary.js";
 import { withTimeout } from "./validate.js";
 import { formatLocalTime, getTimezone } from "../lib/current-context.js";
 
@@ -115,18 +116,18 @@ export function issuesPrompt(open: AiIssue[]): string[] {
     "",
     "New Relic issues of this firing that are still open:",
     ...issueList(open.map((i) => ({ issueId: i.issueId, conditionName: conditionOf(i), title: titleOf(i) }))),
-    `Before the closing lines, ${REPORT_INSTRUCTION} Base it on the data up to now.`,
+    `Before report_alert_summary, ${REPORT_INSTRUCTION} Base it on the data up to now.`,
     FOLLOW_UP_INSTRUCTION,
   ];
 }
 
-type IssueReport = { severity: "critical" | "high" | "medium" | "low"; issues: { issueId: string; status: IssueStatus }[] };
+type IssueReport = { severity: (typeof SEVERITIES)[number]; issues: { issueId: string; status: IssueStatus }[] };
 
 export function reportIssueStatusTool(db: Db, allowedIds: string[]): Tool<IssueReport, { error: string } | { recorded: number }> {
   return tool({
     description: "Report the severity and the status of each New Relic issue listed in the prompt. It only records the report and never changes New Relic.",
     inputSchema: z.object({
-      severity: z.enum(["critical", "high", "medium", "low"]),
+      severity: z.enum(SEVERITIES),
       issues: z.array(z.object({ issueId: z.string(), status: z.enum(ISSUE_STATUSES) })),
     }),
     execute: async ({ severity, issues }) => {
@@ -166,7 +167,7 @@ export function decide(i: DecideInput): Decision {
   if (i.recentCloses >= CONFIG.triageLoopMax) {
     return { outcome: "left_open", ping: true, reason: `closed ${i.recentCloses} times in 24h and it keeps coming back` };
   }
-  return { outcome: "close", ping: !i.recheck && (i.severity === "high" || i.severity === "critical") };
+  return { outcome: "close", ping: !i.recheck && i.severity === "high" };
 }
 
 // The condition name is short; raw issue titles can be whole error messages.

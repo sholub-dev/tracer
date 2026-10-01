@@ -6,6 +6,8 @@ import type { Db } from "../db/client.js";
 import { chatSessions, monitorTriggers } from "../db/schema.js";
 import { extractAnalysis } from "../agents/analysis.js";
 import { CONFIG } from "../config.js";
+import { redact } from "../integrations/slack.js";
+import { firstSentence, summaryFromMessages, type AlertSummary } from "./alert-summary.js";
 import type { Group } from "./condition.js";
 
 export interface TriggerGroup extends Group {
@@ -18,6 +20,7 @@ export interface PastSession {
   triggeredAt: number;
   keys: string[];
   analysis: string;
+  report: AlertSummary | null;
 }
 
 const PAST_SESSIONS_LIMIT = 5;
@@ -63,15 +66,19 @@ export function byRelevance<T extends { keys: string[] }>(newestFirst: T[], curr
   return [...newestFirst.filter(shares), ...newestFirst.filter((p) => !shares(p))];
 }
 
-export function readAnalysis(db: Db, sessionId: string): string {
+/** A session's analysis and the summary it reported. */
+export function readOutcome(db: Db, sessionId: string): { analysis: string; report: AlertSummary | null } {
   const row = db.select({ messages: chatSessions.messages }).from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
-  if (!row) return "";
   try {
-    return extractAnalysis(JSON.parse(row.messages) as UIMessage[]).analysis;
+    const messages = JSON.parse(row?.messages ?? "[]") as UIMessage[];
+    return { analysis: extractAnalysis(messages).analysis, report: summaryFromMessages(messages) };
   } catch {
-    return "";
+    return { analysis: "", report: null };
   }
 }
+
+/** The one-line summary of a past run, for the prompt. */
+export const pastSummary = (p: PastSession) => redact(p.report?.tldr ?? firstSentence(p.analysis));
 
 export function pastSessions(db: Db, monitorId: string, currentKeys: string[], before = Number.MAX_SAFE_INTEGER): PastSession[] {
   const triggers = db
@@ -87,13 +94,13 @@ export function pastSessions(db: Db, monitorId: string, currentKeys: string[], b
   const picked: PastSession[] = [];
   for (const t of byRelevance(triggers, currentKeys)) {
     if (picked.length === PAST_SESSIONS_LIMIT) break;
-    const analysis = readAnalysis(db, t.sessionId);
-    if (analysis) picked.push({ ...t, analysis: analysis.length > ANALYSIS_MAX_CHARS ? `${analysis.slice(0, ANALYSIS_MAX_CHARS)} …[truncated]` : analysis });
+    const { analysis, report } = readOutcome(db, t.sessionId);
+    if (analysis || report) picked.push({ ...t, report, analysis: analysis.length > ANALYSIS_MAX_CHARS ? `${analysis.slice(0, ANALYSIS_MAX_CHARS)} …[truncated]` : analysis });
   }
   return picked.sort((a, b) => b.triggeredAt - a.triggeredAt);
 }
 
-type PastSessionResult = { error: string } | { sessionId: string; triggeredAt: string; groups: string[]; analysis: string };
+type PastSessionResult = { error: string } | { sessionId: string; triggeredAt: string; groups: string[]; summary: AlertSummary | null; analysis: string };
 
 export function readPastSessionTool(load: () => PastSession[]): Tool<{ sessionId: string }, PastSessionResult> {
   let sessions: PastSession[] | undefined;
@@ -104,7 +111,7 @@ export function readPastSessionTool(load: () => PastSession[]): Tool<{ sessionId
       sessions ??= load();
       const s = sessions.find((p) => p.sessionId === sessionId);
       if (!s) return { error: `Session ${sessionId} is not one of the listed past sessions` };
-      return { sessionId, triggeredAt: new Date(s.triggeredAt * 1000).toISOString(), groups: s.keys, analysis: s.analysis };
+      return { sessionId, triggeredAt: new Date(s.triggeredAt * 1000).toISOString(), groups: s.keys, summary: s.report, analysis: s.analysis };
     },
   });
 }

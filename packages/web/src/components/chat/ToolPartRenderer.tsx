@@ -34,6 +34,7 @@ const CRUD_LABELS: Record<string, { done: string; loading: string; errorLabel: s
   [CLIENT_TOOL_NAMES.DELETE_WIDGET]: { done: "Widget Deleted", loading: "Deleting widget...", errorLabel: "Widget Error" },
   "tool-read_past_session": { done: "Read past session", loading: "Reading past session...", errorLabel: "Past session not available" },
   "tool-report_issue_status": { done: "Reported alert status", loading: "Reporting alert status...", errorLabel: "Alert status not recorded" },
+  "tool-report_alert_summary": { done: "Reported alert summary", loading: "Reporting alert summary...", errorLabel: "Alert summary not recorded" },
   "tool-set_timer": { done: "Follow-up timer set", loading: "Setting follow-up timer...", errorLabel: "Follow-up timer not set" },
 };
 

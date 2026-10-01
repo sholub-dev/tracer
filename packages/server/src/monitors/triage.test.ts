@@ -74,7 +74,7 @@ test("decide follows the triage rules", () => {
   assert.deepEqual(decide(base), { outcome: "close", ping: false });
   assert.deepEqual(decide({ ...base, severity: "medium" }), { outcome: "close", ping: false });
   assert.deepEqual(decide({ ...base, severity: "high" }), { outcome: "close", ping: true });
-  assert.deepEqual(decide({ ...base, severity: "critical", recheck: true }), { outcome: "close", ping: false });
+  assert.deepEqual(decide({ ...base, severity: "high", recheck: true }), { outcome: "close", ping: false });
   assert.deepEqual(decide({ ...base, verdict: "ongoing" }), { outcome: "watching", ping: true });
   assert.deepEqual(decide({ ...base, verdict: "recurring", recheck: true }), { outcome: "watching", ping: false });
   assert.equal(decide({ ...base, verdict: "ongoing", watchExpired: true }).outcome, "left_open");

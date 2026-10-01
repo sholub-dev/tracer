@@ -106,6 +106,15 @@ export const settingsRouter = router({
       return { success: true };
     }),
 
+  getAlertTriage: publicProcedure.query(({ ctx }) => readAppSetting<boolean>(ctx.db, SETTINGS_KEYS.alertTriage) === true),
+
+  setAlertTriage: publicProcedure
+    .input(z.object({ enabled: z.boolean() }))
+    .mutation(({ ctx, input }) => {
+      writeAppSetting(ctx.db, SETTINGS_KEYS.alertTriage, input.enabled);
+      return { success: true };
+    }),
+
   getAgentConfig: publicProcedure.query(({ ctx }) => {
     const keys = [
       SETTINGS_KEYS.timezone,

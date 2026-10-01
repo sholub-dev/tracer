@@ -89,7 +89,7 @@ const MAX_ISSUES = 5;
 const SECTION_MAX_CHARS = 2900; // Slack rejects section text over 3000.
 const FACT_LABELS = ["Policy", "Started", "Status"];
 
-const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max)} …` : s);
+export const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max)} …` : s);
 // Redact before clipping: a cut value may no longer match the redact patterns.
 const tidy = (s: string, max = DETAIL_MAX_CHARS) => clip(redact(s.replace(/\*\*|`/g, "").trim()), max);
 const known = (s: string) => (/^(unknown|n\/a|none)?\.?$/i.test(s) ? "" : s);
@@ -130,6 +130,16 @@ export interface MonitorAlert {
   analysis: string;
   timeZone: string;
   mentions?: string;
+  /** Triage outcome, shown after the facts. */
+  action?: string;
+  /** False when nothing needs a person; undefined keeps the mentions. */
+  ping?: boolean;
+}
+
+function mentionsFor(raw: string | undefined, ping: boolean | undefined): string {
+  if (ping === false) return "";
+  const parsed = parseMentions(raw ?? "");
+  return "mentions" in parsed ? mentionPrefix(parsed.mentions) : "";
 }
 
 function issueLine([service = "", endpoint = "", error = "", experience = "", funnel = ""]: string[]): string {
@@ -144,8 +154,7 @@ export function monitorAlert(a: MonitorAlert): Required<SlackPayload> {
     timeZone: a.timeZone, month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
   });
   const { severity, summary, facts, issues, seenBefore } = parseVerdict(a.analysis);
-  const parsed = parseMentions(a.mentions ?? "");
-  const mentions = "mentions" in parsed ? mentionPrefix(parsed.mentions) : "";
+  const mentions = mentionsFor(a.mentions, a.ping);
   const name = redact(a.name);
   const text = `${mentions}*[${severity.toUpperCase()}] ${escape(summary || `Monitor "${name}" fired; no root cause found`)}*`;
   const lines = [text];
@@ -159,7 +168,16 @@ export function monitorAlert(a: MonitorAlert): Required<SlackPayload> {
     text,
     blocks: [
       { type: "section", text: { type: "mrkdwn", text: lines.join("\n") } },
+      ...(a.action ? [{ type: "section", text: { type: "mrkdwn", text: clip(`*Action:* ${escape(redact(a.action))}`, SECTION_MAX_CHARS) } }] : []),
       { type: "context", elements: [{ type: "mrkdwn", text: escape(`monitor "${name}" · ${time}`) }] },
     ],
   };
+}
+
+/** One-line post for a triage re-check outcome. */
+export function triageUpdate(u: { name: string; action: string; ping: boolean; mentions?: string }): SlackPayload {
+  const prefix = `${mentionsFor(u.mentions, u.ping)}*${escape(redact(u.name))}:* `;
+  // Clip after escaping: entities lengthen the text past Slack's section limit.
+  const text = prefix + clip(escape(redact(u.action)), SECTION_MAX_CHARS - prefix.length);
+  return { text, blocks: [{ type: "section", text: { type: "mrkdwn", text } }] };
 }

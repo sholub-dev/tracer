@@ -60,6 +60,13 @@ export const CONFIG = {
   /** Window end trails now by this much so late-arriving events are counted. */
   monitorIngestLagSeconds: 60,
   monitorRepeatWindowSeconds: 86_400,
+  triageRecheckSeconds: 300,
+  triageWatchMaxSeconds: 86_400,
+  /** Stop closing a condition after this many Tracer closes in 24h. */
+  triageLoopMax: 3,
+  triageLoopWindowSeconds: 86_400,
+  /** Closed, nr_closed and left_open issue rows are deleted after this long. */
+  triageRetentionSeconds: 7 * 86_400,
 
   // ── Server lifecycle ──
 
@@ -106,4 +113,5 @@ export const SETTINGS_KEYS = {
   subAgentMaxSteps: "sub_agent_max_steps",
   thinkingBudgetGoogle: "thinking_budget_google",
   thinkingBudgetAnthropic: "thinking_budget_anthropic",
+  alertTriage: "alert_triage",
 } as const;

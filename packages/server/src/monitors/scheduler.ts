@@ -10,6 +10,7 @@ import { classifyGroups, pastSessions, readAnalysis, readPastSessionTool, type P
 import { withTimeout } from "./validate.js";
 import { getTimezone } from "../lib/current-context.js";
 import { monitorAlert, parseVerdict, postSlack, readSlackConfig } from "../integrations/slack.js";
+import { checkWatches, findIssues, incidentQuery, triageEnabled, issuesPrompt, recordIssues, reportIssueStatusTool, triageAfterRun, type FoundIssues, type Triage } from "./triage.js";
 
 type Monitor = typeof monitors.$inferSelect;
 
@@ -52,6 +53,7 @@ function buildMessage(
   window: { start: number; end: number },
   classified: TriggerGroup[],
   past: PastSession[],
+  triageLines: string[] = [],
 ): string {
   const lines = [
     `Monitor "${monitor.name}" triggered.`,
@@ -72,6 +74,7 @@ function buildMessage(
       lines.push(`- ${iso(p.triggeredAt)} groups: ${p.keys.join(", ") || "none"} session ${p.sessionId}: ${parseVerdict(p.analysis).summary || "no summary"}`);
     }
   }
+  lines.push(...triageLines);
   lines.push(
     "",
     "If this looks like a past issue, read the most relevant past session, confirm with the fewest queries possible and say which one; otherwise investigate fully.",
@@ -90,7 +93,7 @@ function buildMessage(
 }
 
 /** Never throws: a Slack failure is only logged. */
-async function notifySlack(context: Context, monitor: Monitor, triggeredAt: number, sessionId: string): Promise<void> {
+async function notifySlack(context: Context, monitor: Monitor, triggeredAt: number, sessionId: string, triage?: Triage): Promise<void> {
   let error: string;
   try {
     const slack = readSlackConfig(context.db);
@@ -102,6 +105,7 @@ async function notifySlack(context: Context, monitor: Monitor, triggeredAt: numb
       analysis,
       timeZone: getTimezone(context.db),
       mentions: slack.mentions,
+      ...triage,
     }));
     if (!("error" in result)) return;
     error = result.error;
@@ -187,7 +191,9 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
   const sessionId = alerting ? crypto.randomUUID() : null;
   const triggerId = crypto.randomUUID();
   const past = alerting ? pastSessions(context.db, monitor.id, classified.map((g) => g.key)) : [];
-  const message = alerting ? buildMessage(monitor, value, window, classified, past) : "";
+  const found: FoundIssues | null = alerting && triageEnabled(context.db) && incidentQuery(monitor.query) ? await findIssues(context, monitor, window) : null;
+  const openIssues = found && !("error" in found) ? found.open : [];
+  const message = alerting ? buildMessage(monitor, value, window, classified, past, issuesPrompt(openIssues)) : "";
   try {
     // Insert first: the monitor_id FK fails if the monitor was deleted mid-check.
     context.db.insert(monitorTriggers).values({
@@ -206,14 +212,21 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
     return;
   }
 
+  if (sessionId && found && !("error" in found)) recordIssues(context.db, { monitorId: monitor.id, triggerId, sessionId }, found);
   if (sessionId) {
     const started = await startAgentSession(context, {
       sessionId,
       kind: SESSION_KIND.MONITOR,
       title: sessionTitle(monitor.name, classified),
       message,
-      tools: { read_past_session: readPastSessionTool(() => past) },
-      onComplete: () => void notifySlack(context, monitor, now, sessionId),
+      tools: {
+        read_past_session: readPastSessionTool(() => past),
+        ...(openIssues.length > 0 ? { report_issue_status: reportIssueStatusTool(context.db, openIssues.map((i) => i.issueId)) } : {}),
+      },
+      onComplete: () => void (async () => {
+        const triage = found ? await triageAfterRun(context, sessionId, found) : undefined;
+        await notifySlack(context, monitor, now, sessionId, triage);
+      })(),
     });
     if ("error" in started) {
       context.db.delete(monitorTriggers).where(eq(monitorTriggers.id, triggerId)).run();
@@ -255,6 +268,7 @@ export class MonitorScheduler {
     this.interval = setInterval(() => {
       if (this.tickPromise) return;
       this.tickPromise = runDueMonitors(this.context)
+        .then(() => checkWatches(this.context))
         .catch((err) => console.error("MonitorScheduler tick error:", err))
         .finally(() => { this.tickPromise = null; });
     }, CONFIG.monitorTickIntervalMs);

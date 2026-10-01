@@ -132,6 +132,26 @@ export const monitorTriggers = sqliteTable("monitor_triggers", {
   index("idx_triggers_recent_session").on(t.triggeredAt).where(sql`session_id IS NOT NULL`),
 ]);
 
+export const alertIssues = sqliteTable("alert_issues", {
+  issueId: text("issue_id").primaryKey(),
+  monitorId: text("monitor_id").notNull().references(() => monitors.id, { onDelete: "cascade" }),
+  triggerId: text("trigger_id").notNull().references(() => monitorTriggers.id, { onDelete: "cascade" }),
+  sessionId: text("session_id").notNull(),
+  conditionName: text("condition_name").notNull(),
+  title: text("title").notNull(),
+  severity: text("severity"),
+  verdict: text("verdict"), // "stopped" | "ongoing" | "recurring" | "unknown"
+  state: text("state").notNull(), // "pending" | "watching" | "closed" | "nr_closed" | "left_open"
+  lastError: text("last_error"),
+  watchUntil: integer("watch_until"),
+  nextCheckAt: integer("next_check_at"),
+  recheckSessionId: text("recheck_session_id"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (t) => [
+  index("idx_alert_issues_due").on(t.state, t.nextCheckAt),
+]);
+
 export const memoryOperations = sqliteTable("memory_operations", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   sessionId: text("session_id").notNull().references(() => chatSessions.id, { onDelete: "cascade" }),

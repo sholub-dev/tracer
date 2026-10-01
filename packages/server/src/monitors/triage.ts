@@ -12,6 +12,7 @@ import type { AiIssue } from "../providers/newrelic/nerdgraph.client.js";
 import { clip, postSlack, readSlackConfig, triageUpdate } from "../integrations/slack.js";
 import { hasPendingTimer } from "../tools/timer-tool.js";
 import { withTimeout } from "./validate.js";
+import { formatLocalTime, getTimezone } from "../lib/current-context.js";
 
 const ISSUE_STATUSES = ["stopped", "ongoing", "recurring", "unknown"] as const;
 export type IssueStatus = (typeof ISSUE_STATUSES)[number];
@@ -376,8 +377,14 @@ export async function checkWatches(context: Context): Promise<void> {
     try {
       // The agent died or the server restarted mid-run: the report is treated as unknown.
       forgetReports(db, sessionId);
-      const name = monitorName(db, stale.find((r) => r.sessionId === sessionId)!.monitorId);
-      await postUpdate(context, name, await applyTriage(context, sessionId, true));
+      const first = stale.find((r) => r.sessionId === sessionId)!;
+      const triage = await applyTriage(context, sessionId, true);
+      const firedAt = db.select({ at: monitorTriggers.triggeredAt }).from(monitorTriggers)
+        .where(eq(monitorTriggers.id, first.triggerId)).get()?.at ?? first.createdAt;
+      const run = first.watchUntil === null ? "Investigation" : "Follow-up check";
+      await postUpdate(context, monitorName(db, first.monitorId), triage && {
+        ...triage, action: `${run} of the alert fired ${formatLocalTime(firedAt, getTimezone(db))} never finished. ${triage.action}`,
+      });
     } catch (err) {
       console.error("[triage] stale sweep failed:", errorText(err));
     }

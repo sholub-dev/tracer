@@ -225,16 +225,22 @@ When the user's question spans multiple providers, query each relevant provider 
   let resolveFinish!: () => void;
   const finishPromise = new Promise<void>((r) => { resolveFinish = r; });
   let failure: string | undefined;
+  let streamError: string | undefined;
 
   const uiStream = toUIMessageStream({
     stream: result.stream,
     tools: tools as ToolSet | undefined,
     sendStart: false,
     originalMessages: messages,
-    onEnd: ({ messages: updatedMessages, outcome }) => {
+    onError: (err) => {
+      streamError ??= errorText(err);
+      return "An error occurred.";
+    },
+    onEnd: ({ messages: updatedMessages, outcome, finishReason }) => {
       // A failed attempt is not saved, so a re-run starts from the same history.
-      if (outcome.status === "failed") {
-        failure = errorText(outcome.error);
+      // A mid-stream model error still ends with "finish", so only its finish reason shows the failure.
+      if (outcome.status === "failed" || finishReason === "error") {
+        failure = outcome.status === "failed" ? errorText(outcome.error) : streamError ?? "The model stream failed";
         resolveFinish();
         return;
       }
@@ -314,6 +320,7 @@ When the user's question spans multiple providers, query each relevant provider 
   // This loop runs independently of any HTTP connection.
   const reader = uiStream.getReader();
   let reasoningChars = 0; // per-step; code-level guard against runaway thinking loops
+  let stepSent = false;
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -331,6 +338,11 @@ When the user's question spans multiple providers, query each relevant provider 
       }
       // A re-run follows, so the client should not show this attempt's error.
       if (v.type === "error" && !final) continue;
+      // Clients see a retryable attempt as one step, so one reset-step drops all of it.
+      if (v.type === "start-step" && !final) {
+        if (stepSent) continue;
+        stepSent = true;
+      }
       // Strip providerMetadata — the AI SDK emits it on some event types
       // but its own strictObject schema rejects it on the client side.
       const { providerMetadata: _, ...clean } = v;
@@ -402,6 +414,7 @@ export async function runChatAgent({
       );
       if (error === undefined) break;
       if (!final) {
+        broadcaster.discard({ type: "reset-step" });
         console.warn(`[chat] Attempt ${attempt + 1} for ${sessionId} failed, retrying in ${retryDelaysMs[attempt] / 1000}s:`, error);
         await delay(retryDelaysMs[attempt], undefined, { signal: serverAbort.signal }).catch(() => {});
         // A user stop during the wait is not a failure.

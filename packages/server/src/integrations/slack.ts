@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { appSettings } from "../db/schema.js";
+import { formatLocalTime } from "../lib/current-context.js";
 import { readAppSetting, writeAppSetting } from "../db/config-reader.js";
 
 export const SLACK_CONFIG_KEY = "integration:slack";
@@ -150,9 +151,7 @@ function issueLine([service = "", endpoint = "", error = "", experience = "", fu
 }
 
 export function monitorAlert(a: MonitorAlert): Required<SlackPayload> {
-  const time = new Date(a.triggeredAt * 1000).toLocaleString("en-US", {
-    timeZone: a.timeZone, month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
-  });
+  const time = formatLocalTime(a.triggeredAt, a.timeZone);
   const { severity, summary, facts, issues, seenBefore } = parseVerdict(a.analysis);
   const mentions = mentionsFor(a.mentions, a.ping);
   const name = redact(a.name);

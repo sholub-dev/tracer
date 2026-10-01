@@ -17,6 +17,17 @@ export class StreamBroadcaster {
   emit(part: Record<string, unknown>): void {
     if (this._done) return;
     this.bufferPart(part);
+    this.send(part);
+  }
+
+  /** Empties the replay buffer and sends `part` to live subscribers only, so late subscribers start clean. */
+  discard(part: Record<string, unknown>): void {
+    if (this._done) return;
+    this.buffer = [];
+    this.send(part);
+  }
+
+  private send(part: Record<string, unknown>): void {
     for (const cb of this.subscribers) {
       try { cb(part); } catch (err) { console.warn("[StreamBroadcaster] subscriber error:", err); }
     }

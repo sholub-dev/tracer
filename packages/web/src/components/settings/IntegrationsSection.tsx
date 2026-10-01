@@ -92,9 +92,10 @@ interface IntegrationCardProps {
   pending: boolean;
   onSave: (values: Record<string, string>) => Promise<SaveResult>;
   onRemove: () => Promise<unknown>;
+  children?: ReactNode;
 }
 
-function IntegrationCard({ label, fields, note, configured, existingConfig, pending, onSave, onRemove }: IntegrationCardProps) {
+function IntegrationCard({ label, fields, note, configured, existingConfig, pending, onSave, onRemove, children }: IntegrationCardProps) {
   const [editing, setEditing] = useState(false);
   const [formValues, setFormValues] = useState<Record<string, string>>({});
   const [saveResult, setSaveResult] = useState<SaveResult | null>(null);
@@ -156,6 +157,7 @@ function IntegrationCard({ label, fields, note, configured, existingConfig, pend
             Edit
           </button>
         </div>
+        {configured && children}
       </div>
 
       {editing && (
@@ -185,6 +187,40 @@ function IntegrationCard({ label, fields, note, configured, existingConfig, pend
         onCancel={() => setConfirmRemove(false)}
       />
     </>
+  );
+}
+
+const TRIAGE_TIP = [
+  "Off: monitors post their analysis to Slack as usual. Nothing changes in New Relic.",
+  "On: Tracer acts on the New Relic issue behind each alert of monitors on NrAiIncident:",
+  "- Stopped: acks, then closes it (JSM closes its alert). Pings you if severity is high or critical.",
+  "- Ongoing or recurring: no ack, no close, so JSM keeps escalating. Pings you; the agent sets its own follow-up timer and acks and closes it once it stops.",
+  "- Status unknown or close failed: leaves it open, pings you.",
+  "- Closed 3 times in 24h and it keeps coming back: stops closing, pings you.",
+  "- Still ongoing after 24h: stops following up, pings you.",
+].join("\n");
+
+function AlertTriageRow() {
+  const utils = trpc.useUtils();
+  const { data: enabled } = trpc.settings.getAlertTriage.useQuery();
+  const save = trpc.settings.setAlertTriage.useMutation({ onSettled: () => utils.settings.getAlertTriage.invalidate() });
+  if (enabled === undefined) return null;
+  return (
+    <div className="mt-3 pt-3 border-t border-[#e8e6e1]" title={TRIAGE_TIP}>
+      <div className="flex items-center gap-2">
+        <ToggleSwitch
+          checked={enabled}
+          disabled={save.isPending}
+          aria-label="Alert triage"
+          onChange={(v) => {
+            utils.settings.getAlertTriage.setData(undefined, v);
+            save.mutate({ enabled: v });
+          }}
+        />
+        <span className="font-medium">Alert triage</span>
+      </div>
+      <div className="text-xs opacity-40 mt-1">Off: analysis only. On: acks, closes and escalates New Relic alerts for you</div>
+    </div>
   );
 }
 
@@ -259,7 +295,9 @@ export function IntegrationsSection() {
         pending={saveSlack.isPending || removeSlack.isPending}
         onSave={(v) => saveSlack.mutateAsync({ webhookUrl: v.webhookUrl ?? "", mentions: v.mentions ?? "" })}
         onRemove={() => removeSlack.mutateAsync()}
-      />
+      >
+        <AlertTriageRow />
+      </IntegrationCard>
       <AgentSkillCard />
     </div>
   );

@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import { theme } from "../../lib/theme";
 import { trpc } from "../../lib/trpc";
 import { ChatModelSelector } from "./ChatModelSelector";
-import { ToggleSwitch } from "../ui/ToggleSwitch";
 
 const TIMEZONES = [
   "Pacific/Auckland",
@@ -38,43 +37,6 @@ function formatTzLabel(tz: string): string {
 }
 
 const TZ_LABELS = new Map(TIMEZONES.map((tz) => [tz, formatTzLabel(tz)]));
-
-const TRIAGE_TIP = [
-  "Off: monitors post their analysis to Slack as usual. Nothing changes in New Relic.",
-  "On: Tracer acts on the New Relic issue behind each alert of monitors on NrAiIncident:",
-  "- Stopped: acks, then closes it (JSM closes its alert). Pings you if severity is high or critical.",
-  "- Ongoing or recurring: no ack, no close, so JSM keeps escalating. Pings you; the agent sets its own follow-up timer and acks and closes it once it stops.",
-  "- Status unknown or close failed: leaves it open, pings you.",
-  "- Closed 3 times in 24h and it keeps coming back: stops closing, pings you.",
-  "- Still ongoing after 24h: stops following up, pings you.",
-].join("\n");
-
-function AlertTriageCard() {
-  const utils = trpc.useUtils();
-  const { data: enabled } = trpc.settings.getAlertTriage.useQuery();
-  const save = trpc.settings.setAlertTriage.useMutation({ onSettled: () => utils.settings.getAlertTriage.invalidate() });
-  if (enabled === undefined) return null;
-  return (
-    <div className={theme.settingsCard}>
-      <div className="flex items-center gap-2" title={TRIAGE_TIP}>
-        <span className="text-sm font-medium">Alert triage</span>
-        <span className="text-xs opacity-40">Off: analysis only. On: acks, closes and escalates New Relic alerts for you</span>
-        <span className="ml-auto">
-          <ToggleSwitch
-            checked={enabled}
-            disabled={save.isPending}
-            title={TRIAGE_TIP}
-            aria-label="Alert triage"
-            onChange={(v) => {
-              utils.settings.getAlertTriage.setData(undefined, v);
-              save.mutate({ enabled: v });
-            }}
-          />
-        </span>
-      </div>
-    </div>
-  );
-}
 
 export function AgentConfigSection() {
   const utils = trpc.useUtils();
@@ -138,8 +100,6 @@ export function AgentConfigSection() {
         </div>
         <ChatModelSelector />
       </div>
-
-      <AlertTriageCard />
 
       <div className={theme.settingsCard}>
         <div className="space-y-3">

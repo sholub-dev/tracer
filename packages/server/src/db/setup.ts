@@ -86,7 +86,8 @@ export function runSetup(): void {
       window_end INTEGER NOT NULL,
       status TEXT NOT NULL,
       groups TEXT NOT NULL,
-      session_id TEXT
+      session_id TEXT,
+      reported TEXT
     );
 
     CREATE TABLE IF NOT EXISTS alert_issues (
@@ -165,6 +166,11 @@ export function runSetup(): void {
   ]) {
     try { sqlite.exec(ddl); } catch { /* column already exists */ }
   }
+  // Firings from before this column were all reported already.
+  try {
+    sqlite.exec(`ALTER TABLE monitor_triggers ADD COLUMN reported TEXT`);
+    sqlite.exec(`UPDATE monitor_triggers SET reported = 'done'`);
+  } catch { /* column already exists */ }
 
   sqlite.exec(`
     CREATE INDEX IF NOT EXISTS idx_sessions_status_kind ON chat_sessions(status, kind, id);

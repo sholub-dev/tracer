@@ -10,6 +10,7 @@ import { collectMonitorTools } from "../../tools/monitor-tools.js";
 import { generateSessionTitle } from "../../agents/utility/title.js";
 import { pastSessionToolFor } from "../../monitors/repeats.js";
 import { setTimerTool } from "../../tools/timer-tool.js";
+import { firingRerun } from "../../monitors/scheduler.js";
 
 export function registerChatRoutes(app: Hono, context: Context): void {
   app.post("/api/chat", async (c) => {
@@ -30,6 +31,8 @@ export function registerChatRoutes(app: Hono, context: Context): void {
     const isUnified = !activeProvider || activeProvider === UNIFIED_SCOPE;
     const mode: ChatMode = isUnified ? "unified" : "direct";
     const scopedProvider = isUnified ? undefined : activeProvider;
+    // A monitor session whose run never reported (e.g. Retry after an error) still owes its triage and Slack post.
+    const rerun = firingRerun(context, id);
 
     const result = await runChatAgent({
       sessionId: id,
@@ -39,14 +42,19 @@ export function registerChatRoutes(app: Hono, context: Context): void {
       context,
       collectTools: (writer) => {
         const collected = collectChatTools(context.providers, context.db, writer, scopedProvider, mode);
-        if (!collected.tools) return collected;
+        const afterComplete: typeof collected.afterComplete = rerun
+          ? (params) => { collected.afterComplete?.(params); rerun.onComplete({}); }
+          : collected.afterComplete;
+        if (!collected.tools) return { ...collected, afterComplete };
         const readPast = pastSessionToolFor(context.db, id);
         return {
           ...collected,
-          tools: { ...collected.tools, set_timer: setTimerTool(context.db, id), ...(readPast ? { read_past_session: readPast } : {}) },
+          tools: { ...collected.tools, set_timer: setTimerTool(context.db, id), ...(readPast ? { read_past_session: readPast } : {}), ...rerun?.tools },
+          afterComplete,
         };
       },
       sessionTitle: firstUserMessageTitle,
+      onFailed: rerun ? (error) => rerun.onComplete({ error }) : undefined,
     });
 
     if ("error" in result) return c.json({ error: result.error }, 400);

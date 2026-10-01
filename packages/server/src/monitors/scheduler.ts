@@ -1,4 +1,4 @@
-import { and, desc, eq, isNotNull } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, or } from "drizzle-orm";
 import { SESSION_KIND, substituteWindow, unixNow } from "@tracer-sh/shared";
 import type { Context } from "../trpc/context.js";
 import { chatSessions, monitors, monitorTriggers } from "../db/schema.js";
@@ -11,9 +11,13 @@ import { withTimeout } from "./validate.js";
 import { getTimezone } from "../lib/current-context.js";
 import { monitorAlert, parseVerdict, postSlack, readSlackConfig } from "../integrations/slack.js";
 import { fireDueTimers } from "./timers.js";
-import { checkWatches, findIssues, incidentQuery, ingestLagSeconds, triageEnabled, issuesPrompt, recordIssues, reportIssueStatusTool, triageAfterRun, type FoundIssues, type Triage } from "./triage.js";
+import {
+  checkWatches, findIssues, forgetReports, incidentQuery, ingestLagSeconds, triageEnabled, issuesPrompt, pendingIssueIds, recordIssues,
+  reportIssueStatusTool, triageAfterRun, type FoundIssues, type Triage,
+} from "./triage.js";
 
 type Monitor = typeof monitors.$inferSelect;
+type RunOutcome = { error?: string };
 
 /** Windows end on clock boundaries (:00, :05, ...); each runs `lag` after its end so late events are in. */
 export function nextWindow(
@@ -114,6 +118,52 @@ async function notifySlack(context: Context, monitor: Monitor, triggeredAt: numb
     error = err instanceof Error ? err.message : String(err);
   }
   console.warn(`[monitor] "${monitor.name}" Slack post failed:`, error);
+}
+
+// A failure is reported once; a later finished run (e.g. Retry) is still reported.
+function claimFiring(context: Context, sessionId: string, failed: boolean): boolean {
+  const unreported = failed ? isNull(monitorTriggers.reported) : or(isNull(monitorTriggers.reported), eq(monitorTriggers.reported, "failed"));
+  return context.db.update(monitorTriggers).set({ reported: failed ? "failed" : "done" })
+    .where(and(eq(monitorTriggers.sessionId, sessionId), unreported))
+    .run().changes > 0;
+}
+
+/** Triage and the Slack post after a firing's run; never throws. Without `found` (a re-run) triage uses the recorded issues. */
+async function completeFiring(
+  context: Context, monitor: Monitor, triggeredAt: number, sessionId: string, found: FoundIssues | null | undefined, { error }: RunOutcome,
+): Promise<void> {
+  try {
+    if (!claimFiring(context, sessionId, error !== undefined)) return;
+    if (error !== undefined) {
+      // Issues stay pending so a Retry can still triage them; the stale sweep leaves them open after an hour.
+      forgetReports(context.db, sessionId);
+      // The provider's error text stays in the local log; Slack gets a fixed line.
+      console.warn(`[monitor] "${monitor.name}" investigation failed:`, error);
+      await notifySlack(context, monitor, triggeredAt, sessionId, {
+        action: "Investigation failed (AI model error after retries). New Relic issues left open; Retry the session to triage them.",
+        ping: true,
+      });
+      return;
+    }
+    await notifySlack(context, monitor, triggeredAt, sessionId, await triageAfterRun(context, sessionId, found));
+  } catch (err) {
+    console.error(`[monitor] "${monitor.name}" completion failed:`, err instanceof Error ? err.message : err);
+  }
+}
+
+/** The tools and completion of a firing's session for a re-run such as Retry; null once its run was reported. */
+export function firingRerun(context: Context, sessionId: string): { tools: Record<string, unknown>; onComplete: (outcome: RunOutcome) => void } | null {
+  const { db } = context;
+  const trigger = db.select({ monitorId: monitorTriggers.monitorId, triggeredAt: monitorTriggers.triggeredAt, reported: monitorTriggers.reported })
+    .from(monitorTriggers).where(eq(monitorTriggers.sessionId, sessionId)).get();
+  if (!trigger || trigger.reported === "done") return null;
+  const monitor = db.select().from(monitors).where(eq(monitors.id, trigger.monitorId)).get();
+  if (!monitor) return null;
+  const pending = pendingIssueIds(db, sessionId);
+  return {
+    tools: pending.length > 0 ? { report_issue_status: reportIssueStatusTool(db, pending) } : {},
+    onComplete: (outcome) => void completeFiring(context, monitor, trigger.triggeredAt, sessionId, undefined, outcome),
+  };
 }
 
 function setStatus(context: Context, monitorId: string, fields: Partial<Pick<Monitor, "lastStatus" | "lastError" | "lastCheckedAt">>): void {
@@ -224,10 +274,7 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
         read_past_session: readPastSessionTool(() => past),
         ...(openIssues.length > 0 ? { report_issue_status: reportIssueStatusTool(context.db, openIssues.map((i) => i.issueId)) } : {}),
       },
-      onComplete: () => void (async () => {
-        const triage = found ? await triageAfterRun(context, sessionId, found) : undefined;
-        await notifySlack(context, monitor, now, sessionId, triage);
-      })(),
+      onComplete: (outcome) => void completeFiring(context, monitor, now, sessionId, found, outcome),
     });
     if ("error" in started) {
       context.db.delete(monitorTriggers).where(eq(monitorTriggers.id, triggerId)).run();

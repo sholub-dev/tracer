@@ -1,9 +1,10 @@
 import { useCallback, useRef, useState } from "react";
 import { SESSION_PREFIX } from "@tracer-sh/shared";
 import { usePersistedState, usePolling } from "../lib/hooks";
-import { theme } from "../lib/theme";
+import { Plus } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { trpc } from "../lib/trpc";
-import { MonitorChatPanel } from "../components/monitors/MonitorChatPanel";
+import { BuilderSheet } from "../components/monitors/BuilderSheet";
 import { MonitorCard } from "../components/monitors/MonitorCard";
 import { TimeRangePicker } from "../components/ui/TimeRangePicker";
 
@@ -14,31 +15,31 @@ interface MonitorsProps {
   onCloseBuilder: () => void;
 }
 
-type Editing = { sessionId: string; prefill: string };
+type Editing = { sessionId: string; name: string };
 
 const newBuilderId = () => `${SESSION_PREFIX.MONITORS}${crypto.randomUUID()}`;
 const LIST_POLL_MS = 30_000;
 const RANGE_PRESETS = [
-  { label: "1h", since: "1 hour ago" },
-  { label: "3h", since: "3 hours ago" },
-  { label: "6h", since: "6 hours ago" },
-  { label: "24h", since: "24 hours ago" },
-  { label: "7d", since: "7 days ago" },
-  { label: "30d", since: "30 days ago" },
-  { label: "90d", since: "90 days ago" },
+  { label: "1h", since: "1 hour ago", long: "1 hour" },
+  { label: "3h", since: "3 hours ago", long: "3 hours" },
+  { label: "6h", since: "6 hours ago", long: "6 hours" },
+  { label: "24h", since: "24 hours ago", long: "24 hours" },
+  { label: "7d", since: "7 days ago", long: "7 days" },
+  { label: "30d", since: "30 days ago", long: "30 days" },
+  { label: "90d", since: "90 days ago", long: "90 days" },
 ] as const;
 const DEFAULT_RANGE = "24 hours ago";
 
 type CardWidth = 50 | 75 | 100;
 const WIDTHS: CardWidth[] = [50, 75, 100];
-// Container breakpoints: the grid narrows when the builder chat is open.
-const SPAN_CLASS: Record<CardWidth, string> = { 50: "@4xl:col-span-2", 75: "@4xl:col-span-3", 100: "@4xl:col-span-4" };
+const SPAN_CLASS: Record<CardWidth, string> = { 50: "min-[1100px]:col-span-2", 75: "min-[1100px]:col-span-3", 100: "min-[1100px]:col-span-4" };
 const toWidth = (w: number | null | undefined): CardWidth => (w === 75 || w === 100 ? w : 50);
 
 export function Monitors({ builderSessionId, onNavigate: navigate, onOpenBuilder, onCloseBuilder }: MonitorsProps) {
   const [editing, setEditing] = useState<Editing | null>(null);
   const [storedSince, setSince] = usePersistedState<string>("tracer:monitorsSince", DEFAULT_RANGE);
-  const since = RANGE_PRESETS.some((p) => p.since === storedSince) ? storedSince : DEFAULT_RANGE;
+  const range = RANGE_PRESETS.find((p) => p.since === storedSince) ?? RANGE_PRESETS.find((p) => p.since === DEFAULT_RANGE)!;
+  const since = range.since;
   const utils = trpc.useUtils();
   const listQuery = trpc.monitors.list.useQuery();
   const monitors = listQuery.data ?? [];
@@ -122,71 +123,86 @@ export function Monitors({ builderSessionId, onNavigate: navigate, onOpenBuilder
   const onEdit = useCallback((id: string) => {
     const m = live.current.monitors.find((row) => row.id === id);
     const newId = newBuilderId();
-    setEditing({ sessionId: newId, prefill: m ? `Modify monitor "${m.name}": ` : "" });
+    setEditing(m ? { sessionId: newId, name: m.name } : null);
     onOpenBuilder(newId);
   }, [onOpenBuilder]);
 
   const startNew = () => onOpenBuilder(newBuilderId());
 
-  let overlay;
-  if (listQuery.isSuccess && !hasMonitors) {
-    overlay = (
-      <div className="flex flex-1 items-center justify-center">
-        <div className="text-center space-y-3">
-          <p className="text-sm text-[#666666] font-sans">No monitors yet. Describe what to watch and the agent builds it.</p>
-          <button type="button" onClick={startNew} className={theme.primaryBtn}>New monitor</button>
-        </div>
-      </div>
-    );
-  }
-
-  const grid = hasMonitors && (
-    <div className="@container flex-1 min-h-0 overflow-y-auto">
-      <div ref={gridRef} className="p-6 grid grid-cols-1 @4xl:grid-cols-4 gap-4 items-stretch content-start">
-        {monitors.map((m) => (
-          <MonitorCard
-            key={m.id}
-            monitor={m}
-            since={since}
-            spanClass={SPAN_CLASS[resizing?.id === m.id ? resizing.width : toWidth(m.cardWidth)]}
-            isDragging={dragId === m.id}
-            isTarget={!!dragId && overId === m.id && dragId !== m.id}
-            resizeActive={resizing?.id === m.id}
-            onNavigate={navigate}
-            onEdit={onEdit}
-            onDragStartId={onDragStartId}
-            onDragEnd={onDragEnd}
-            onOverId={onOverId}
-            onDropId={onDropId}
-            onResizeStart={onResizeStart}
-          />
-        ))}
-      </div>
-    </div>
+  const editingName = editing && editing.sessionId === builderSessionId ? editing.name : undefined;
+  const firing = monitors.filter((m) => m.enabled && m.lastStatus === "triggered").length;
+  const newButton = (
+    <Button onClick={startNew}>
+      <Plus />
+      New monitor
+    </Button>
   );
 
   return (
-    <div className="flex flex-col h-full">
-      <div className={`flex items-center justify-between px-6 py-4 ${theme.header}`}>
-        <span className={theme.headerTitle}>Monitors</span>
-        <div className="flex items-center gap-4">
-          {hasMonitors && <TimeRangePicker value={since} onChange={setSince} presets={RANGE_PRESETS} />}
-          {builderSessionId && (
-            <button type="button" onClick={onCloseBuilder} className={theme.secondaryBtn}>Close chat</button>
+    <div className="min-h-full bg-background text-foreground">
+      <header className="sticky top-0 z-10 border-b bg-background/90 backdrop-blur-md">
+        <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 sm:px-6">
+          <div className="flex min-w-0 flex-1 flex-col sm:flex-row sm:items-baseline sm:gap-3">
+            <h1 className="text-xl font-semibold tracking-tight">Monitors</h1>
+            {listQuery.isSuccess && (
+              <p className="text-[13px] leading-[18px] text-muted-foreground tabular-nums">
+                {monitors.length} {monitors.length === 1 ? "monitor" : "monitors"} · {firing} firing
+              </p>
+            )}
+          </div>
+          {hasMonitors && (
+            <TimeRangePicker
+              value={since}
+              onChange={setSince}
+              presets={RANGE_PRESETS}
+              className="order-last max-sm:w-full max-sm:[&>*]:flex-1 sm:order-none"
+            />
           )}
-          <button type="button" onClick={startNew} className={theme.primaryBtn}>Edit</button>
+          {newButton}
         </div>
-      </div>
-      <div className="flex flex-1 min-h-0">
-        <div className="flex flex-col flex-1 min-w-0 bg-[#fafaf8]">{overlay}{grid}</div>
-        {builderSessionId && (
-          <MonitorChatPanel
-            key={builderSessionId}
-            sessionId={builderSessionId}
-            initialInput={editing?.sessionId === builderSessionId ? editing.prefill : undefined}
-          />
-        )}
-      </div>
+      </header>
+
+      {listQuery.isSuccess && !hasMonitors && (
+        <div className="flex flex-col items-center gap-4 px-4 py-24 text-center">
+          <p className="text-sm text-muted-foreground">No monitors yet. Describe what to watch and the agent builds it.</p>
+          {newButton}
+        </div>
+      )}
+
+      {hasMonitors && (
+        <div
+          ref={gridRef}
+          className="mx-auto grid max-w-[1400px] items-start gap-4 px-4 py-6 sm:px-6 min-[1100px]:grid-cols-4"
+        >
+          {monitors.map((m) => (
+            <MonitorCard
+              key={m.id}
+              monitor={m}
+              since={since}
+              rangeLabel={range.long}
+              spanClass={SPAN_CLASS[resizing?.id === m.id ? resizing.width : toWidth(m.cardWidth)]}
+              isDragging={dragId === m.id}
+              isTarget={!!dragId && overId === m.id && dragId !== m.id}
+              resizeActive={resizing?.id === m.id}
+              onNavigate={navigate}
+              onEdit={onEdit}
+              onDragStartId={onDragStartId}
+              onDragEnd={onDragEnd}
+              onOverId={onOverId}
+              onDropId={onDropId}
+              onResizeStart={onResizeStart}
+            />
+          ))}
+        </div>
+      )}
+
+      <BuilderSheet
+        sessionId={builderSessionId}
+        editingName={editingName}
+        initialInput={editingName ? `Modify monitor "${editingName}": ` : undefined}
+        onOpenChat={onOpenBuilder}
+        onClose={onCloseBuilder}
+      />
     </div>
   );
 }

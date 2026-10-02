@@ -65,8 +65,7 @@ export function buildColumns(rows: Record<string, unknown>[]): Column[] {
   const facet = sample.facet;
   const dupeKeys = new Set<string>();
 
-  // Expand facet field into columns (NerdGraph puts FACET values here)
-  // Also detect named keys that duplicate the facet values so we can skip them
+  // NerdGraph puts FACET values in `facet`; expand them and skip named keys that duplicate them.
   if (facet !== undefined) {
     if (Array.isArray(facet)) {
       facet.forEach((val, idx) => {

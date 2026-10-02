@@ -3,6 +3,7 @@ import { WEB_CONFIG } from "../../lib/config";
 import { parseThreshold, sinceToSeconds } from "../../lib/monitor-utils";
 import { substituteWindow, unixNow } from "@tracer-sh/shared";
 import { QueryChart } from "../charts/QueryChart";
+import { cn } from "@/lib/utils";
 
 const CHART_HEIGHT = 180;
 const HOUR = 3600;
@@ -17,9 +18,10 @@ interface MonitorChartProps {
   chartQuery: string | null;
   lastRunAt: number | null;
   since: string;
+  className?: string;
 }
 
-export const MonitorChart = memo(function MonitorChart({ provider, query: monitorQuery, condition, chartQuery: monitorChartQuery, lastRunAt, since }: MonitorChartProps) {
+export const MonitorChart = memo(function MonitorChart({ provider, query: monitorQuery, condition, chartQuery: monitorChartQuery, lastRunAt, since, className }: MonitorChartProps) {
   const sinceSeconds = sinceToSeconds(since);
   const bucketSeconds = BUCKET_SECONDS[sinceSeconds] ?? Math.max(300, Math.ceil(sinceSeconds / WEB_CONFIG.maxBuckets / 60) * 60);
   const refreshKey = lastRunAt ?? 0;
@@ -29,13 +31,10 @@ export const MonitorChart = memo(function MonitorChart({ provider, query: monito
     const offset = new Date().getTimezoneOffset() * 60;
     const until = Math.ceil((now - offset) / bucketSeconds) * bucketSeconds + offset;
     const from = until - sinceSeconds;
-    // Plot each bucket at its end (the current one at now), so the line reaches the latest run.
-    const atEnd = (r: Record<string, unknown>) =>
-      typeof r.endTimeSeconds === "number" ? { ...r, beginTimeSeconds: Math.min(r.endTimeSeconds, now) } : r;
     // No events (e.g. a FACET query with no matches) is a flat zero line, not an empty chart.
     const zeros = () => Array.from({ length: sinceSeconds / bucketSeconds }, (_, i) =>
       ({ beginTimeSeconds: from + i * bucketSeconds, endTimeSeconds: from + (i + 1) * bucketSeconds, events: 0 }));
-    const transform = (rows: Record<string, unknown>[]) => (rows.length > 0 ? rows : zeros()).map(atEnd);
+    const transform = (rows: Record<string, unknown>[]) => (rows.length > 0 ? rows : zeros());
     const query = provider !== "posthog"
       ? `${substituteWindow(provider, monitorQuery, from, until)} TIMESERIES ${bucketSeconds / 60} minutes`
       : substituteWindow(provider, monitorChartQuery ?? monitorQuery, from, until);
@@ -45,7 +44,7 @@ export const MonitorChart = memo(function MonitorChart({ provider, query: monito
   const threshold = useMemo(() => parseThreshold(condition), [condition]);
 
   return (
-    <div className="flex-1 px-5 py-4 border-t border-[#e8e6e1]">
+    <div className={cn("flex-1 border-t border-border px-5 py-4", className)}>
       <QueryChart
         provider={provider}
         query={chartQuery}
@@ -54,7 +53,6 @@ export const MonitorChart = memo(function MonitorChart({ provider, query: monito
         threshold={threshold}
         growWithLegend
         transform={transform}
-        className="[&_.chart-legend]:max-h-[88px] [&_.chart-legend]:overflow-y-auto"
       />
     </div>
   );

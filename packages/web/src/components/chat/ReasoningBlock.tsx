@@ -1,31 +1,22 @@
-import { memo, useState } from "react";
+import { memo } from "react";
+import { ChevronRight } from "lucide-react";
 import { Streamdown } from "streamdown";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { MD_CONTROLS, MD_LINK_SAFETY } from "../../lib/markdown";
 
-/**
- * Collapsible "Thinking" block for model reasoning. Single source of truth shared
- * by the top-level message renderer (MessageParts) and the sub-agent renderer
- * (ToolPartRenderer) so reasoning renders identically everywhere — collapsed by
- * default; the user expands it on demand.
- */
-export const ReasoningBlock = memo(function ReasoningBlock({
-  content,
-  isAnimating,
-}: {
-  content: string;
-  isAnimating: boolean;
-}) {
-  const [open, setOpen] = useState(false);
+/** Model reasoning, collapsed by default; the body only renders while open. */
+export const ReasoningBlock = memo(function ReasoningBlock({ content, isAnimating }: { content: string; isAnimating: boolean }) {
   return (
-    <details className="mb-2 border border-[#e8e3da]/30 rounded-md" onToggle={(e) => setOpen(e.currentTarget.open)}>
-      <summary className="cursor-pointer select-none px-3 py-1.5 text-xs text-[#9c9890] italic hover:text-[#6b6560] transition-colors">
+    <Collapsible>
+      <CollapsibleTrigger className="group/trigger -ml-1.5 inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[13px]/[18px] text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50">
+        <ChevronRight className="size-3.5 transition-transform duration-200 ease-out group-data-[state=open]/trigger:rotate-90" aria-hidden="true" />
         Thinking
-      </summary>
-      {open && (
-        <div className="px-3 pb-2 text-sm text-[#9c9890] italic">
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="mt-1 max-w-[68ch] pl-5 text-sm leading-relaxed text-muted-foreground">
           <Streamdown isAnimating={isAnimating} controls={MD_CONTROLS} linkSafety={MD_LINK_SAFETY}>{content}</Streamdown>
         </div>
-      )}
-    </details>
+      </CollapsibleContent>
+    </Collapsible>
   );
 });

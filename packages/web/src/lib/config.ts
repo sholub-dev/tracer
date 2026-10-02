@@ -1,48 +1,30 @@
-/**
- * Centralized web configuration.
- * Every tunable UI constant lives here — no magic numbers in components.
- */
-
+/** Tunable UI constants, kept here instead of as magic numbers in components. */
 export const WEB_CONFIG = {
-  // ── Polling intervals ──
-
   /** Also the global react-query staleTime default (main.tsx). */
   sessionStaleTimeMs: 30_000,
   /** Coalesces bursts of live session change events into one refetch. */
   sessionEventCoalesceMs: 100,
   monitorPollingMs: 60_000,
   updateCheckStaleTimeMs: 5 * 60 * 1000,
-  // ── Self-update restart: poll for the restarted server, then reload ──
-  /** Grace period before probing, to let the old server exit first. */
+  /** Grace period before probing a self-updating server, so the old one exits first. */
   updateRestartProbeDelayMs: 1_500,
-  /** Interval between readiness probes while the server restarts. */
   updateRestartPollMs: 1_000,
-  /** Give up polling and reload anyway after this long. */
+  /** Reload anyway after this long without an answer from the restarted server. */
   updateRestartMaxWaitMs: 60_000,
 
-  // ── Layout ──
-
-  sidebarWidth: 208,
+  /** Matches the sidebar's --sidebar-width. */
+  sidebarWidth: 280,
   panelMinWidth: 260,
   panelMaxWidthRatio: 0.8,
-
-  // ── Dashboard grid ──
 
   gridRows: 12,
   gridCols: 12,
   gridMinRowHeight: 20,
   gridMargin: [8, 8] as [number, number],
 
-  // ── Chat ──
-
   /** Streaming re-render cadence; 100ms reads as live while halving render work vs 50ms. */
   chatThrottleMs: 100,
-
-  // ── SSE ──
-
   maxSseErrors: 3,
-
-  // ── Monitor chart ──
-
+  /** Upper bound on monitor chart buckets. */
   maxBuckets: 366,
 } as const;

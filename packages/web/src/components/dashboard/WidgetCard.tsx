@@ -1,9 +1,19 @@
 import React, { useState } from "react";
-import { theme } from "../../lib/theme";
+import { RotateCw, Trash2 } from "lucide-react";
 import { substituteTimeRange } from "@tracer-sh/shared";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { QueryChart } from "../charts/QueryChart";
+import { IconButton } from "../chat/IconButton";
 import { trpc } from "../../lib/trpc";
-import { ConfirmDialog } from "../ui/ConfirmDialog";
 
 class WidgetErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -16,7 +26,7 @@ class WidgetErrorBoundary extends React.Component<
   render() {
     if (this.state.error)
       return (
-        <div className="flex items-center justify-center h-full p-4 text-xs text-[#b33a2a]">
+        <div role="alert" className="flex h-full items-center justify-center p-4 text-[13px]/[18px] text-destructive">
           Widget error: {this.state.error}
         </div>
       );
@@ -46,32 +56,16 @@ export function WidgetCard({ widget, since, until }: { widget: Widget; since: st
   });
 
   return (
-    <div className={theme.widgetCard}>
-      <div className={`${theme.widgetCardHeader} drag-handle`}>
-        <span className={theme.widgetCardTitle}>{widget.title}</span>
-        <div className="flex items-center gap-2.5 shrink-0">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setRefreshKey((k) => k + 1);
-            }}
-            className="text-[#666666] hover:text-[#2b5ea7] text-xs font-sans"
-            title="Refresh"
-          >
-            ↻
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setConfirmDelete(true);
-            }}
-            className="text-[#666666] hover:text-[#b33a2a] text-xs font-sans leading-none"
-            title="Delete widget"
-          >
-            ✕
-          </button>
+    <article aria-label={widget.title} className="group flex h-full flex-col overflow-hidden rounded-lg border bg-card">
+      <div className="drag-handle flex h-10 shrink-0 cursor-grab items-center justify-between gap-2 border-b pr-1.5 pl-4 active:cursor-grabbing">
+        <h2 title={widget.title} className="truncate text-sm font-medium">{widget.title}</h2>
+        <div className="flex shrink-0 items-center opacity-100 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 [@media(hover:hover)]:opacity-0">
+          <IconButton label="Refresh" size="icon-xs" className="text-muted-foreground" onClick={() => setRefreshKey((k) => k + 1)}>
+            <RotateCw />
+          </IconButton>
+          <IconButton label="Delete widget" size="icon-xs" className="text-muted-foreground hover:text-destructive" onClick={() => setConfirmDelete(true)}>
+            <Trash2 />
+          </IconButton>
         </div>
       </div>
       <WidgetErrorBoundary>
@@ -79,21 +73,23 @@ export function WidgetCard({ widget, since, until }: { widget: Widget; since: st
           provider={widget.provider}
           query={substituteTimeRange(widget.query, since, until)}
           refreshKey={refreshKey}
-          className={theme.widgetCardBody}
+          className="min-h-0 flex-1 overflow-auto p-3"
           chartType={widget.chartType}
         />
       </WidgetErrorBoundary>
 
-      <ConfirmDialog
-        open={confirmDelete}
-        title="Delete widget"
-        message={`Delete "${widget.title}"?`}
-        onConfirm={() => {
-          deleteMutation.mutate({ id: widget.id });
-          setConfirmDelete(false);
-        }}
-        onCancel={() => setConfirmDelete(false)}
-      />
-    </div>
+      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete "{widget.title}"?</AlertDialogTitle>
+            <AlertDialogDescription>The widget is removed from this dashboard. This cannot be undone.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={() => deleteMutation.mutate({ id: widget.id })}>Delete widget</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </article>
   );
 }

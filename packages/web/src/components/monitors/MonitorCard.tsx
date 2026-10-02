@@ -1,18 +1,69 @@
 import { memo, useState } from "react";
+import { AlertTriangle, ChevronDown, Copy, GripVertical, MoreHorizontal } from "lucide-react";
+import { toast } from "sonner";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import { trpc } from "../../lib/trpc";
-import { theme } from "../../lib/theme";
-import { formatFrequency, formatTime, statusVariant } from "../../lib/monitor-utils";
-import { Badge } from "../ui/Badge";
-import { ToggleSwitch } from "../ui/ToggleSwitch";
-import { ConfirmDialog } from "../ui/ConfirmDialog";
+import { formatFrequency, formatTime } from "../../lib/monitor-utils";
+import { providerLabel } from "../../lib/providers";
+import { copyText } from "../chat/MessageActions";
+import { ProviderDot } from "../common/ProviderDot";
+import { MonitorChart } from "./MonitorChart";
 import { MonitorTriggers } from "./MonitorTriggers";
 
 type Utils = ReturnType<typeof trpc.useUtils>;
-export type MonitorRow = NonNullable<ReturnType<Utils["monitors"]["list"]["getData"]>>[number];
+type MonitorRow = NonNullable<ReturnType<Utils["monitors"]["list"]["getData"]>>[number];
+type MonitorState = "active" | "silent" | "paused";
+
+const STATES: { value: MonitorState; label: string; description: string; dot: string }[] = [
+  { value: "active", label: "Active", description: "Runs and opens an investigation when it fires", dot: "bg-success" },
+  { value: "silent", label: "Silent", description: "Runs and records firings, no investigation", dot: "bg-warning" },
+  { value: "paused", label: "Paused", description: "Does not run", dot: "bg-muted-foreground" },
+];
+const STATE_TOAST: Record<MonitorState, string> = { active: "is active", silent: "runs silently", paused: "is paused" };
+
+const STATUS_BADGE = {
+  ok: { label: "OK", className: "bg-success-tint text-success" },
+  firing: { label: "Firing", className: "bg-destructive-tint text-destructive" },
+  error: { label: "Error", className: "bg-warning-tint text-warning" },
+  paused: { label: "Paused", className: "bg-muted text-ink-2" },
+};
+
+const stateOf = (m: Pick<MonitorRow, "enabled" | "alertEnabled">): MonitorState =>
+  !m.enabled ? "paused" : m.alertEnabled ? "active" : "silent";
+
+function statusOf(m: MonitorRow): keyof typeof STATUS_BADGE {
+  if (!m.enabled) return "paused";
+  if (m.lastStatus === "triggered") return "firing";
+  return m.lastStatus === "error" ? "error" : "ok";
+}
 
 interface MonitorCardProps {
   monitor: MonitorRow;
   since: string;
+  rangeLabel: string;
   spanClass: string;
   isDragging: boolean;
   isTarget: boolean;
@@ -26,156 +77,219 @@ interface MonitorCardProps {
   onResizeStart: (id: string, e: React.PointerEvent) => void;
 }
 
-function GripIcon() {
-  return (
-    <svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true">
-      {[3, 8, 13].flatMap((y) => [2, 8].map((x) => <circle key={`${x}-${y}`} cx={x} cy={y} r="1.5" />))}
-    </svg>
-  );
-}
-
 export const MonitorCard = memo(function MonitorCard({
-  monitor, since, spanClass, isDragging, isTarget, resizeActive,
+  monitor, since, rangeLabel, spanClass, isDragging, isTarget, resizeActive,
   onNavigate, onEdit, onDragStartId, onDragEnd, onOverId, onDropId, onResizeStart,
 }: MonitorCardProps) {
-  const [queryExpanded, setQueryExpanded] = useState(false);
+  const [queryOpen, setQueryOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const accent = theme.providerCardAccents[monitor.provider];
   const utils = trpc.useUtils();
-  const toggle = trpc.monitors.toggleEnabled.useMutation({ onSuccess: () => utils.monitors.list.invalidate() });
-  const setAlert = trpc.monitors.setAlertEnabled.useMutation({ onError: () => utils.monitors.list.invalidate() });
-  const toggleAlert = (enabled: boolean) => {
-    utils.monitors.list.setData(undefined, (rows) => rows?.map((m) => (m.id === monitor.id ? { ...m, alertEnabled: enabled ? 1 : 0 } : m)));
-    setAlert.mutate({ id: monitor.id, enabled });
+  const onError = (e: { message: string }) => {
+    toast.error(e.message);
+    utils.monitors.list.invalidate();
   };
-  const remove = trpc.monitors.delete.useMutation({ onSuccess: () => utils.monitors.list.invalidate() });
+  const toggleRun = trpc.monitors.toggleEnabled.useMutation({ onError, onSuccess: () => utils.monitors.list.invalidate() });
+  // Both toggles refetch on success: one change can fire both, and the later refetch must win.
+  const toggleAlert = trpc.monitors.setAlertEnabled.useMutation({ onError, onSuccess: () => utils.monitors.list.invalidate() });
+  const remove = trpc.monitors.delete.useMutation({
+    onSuccess: () => { utils.monitors.list.invalidate(); toast("Monitor deleted"); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const state = stateOf(monitor);
+  const stateInfo = STATES.find((s) => s.value === state)!;
+  const status = statusOf(monitor);
+  const badge = STATUS_BADGE[status];
+  const provider = providerLabel(monitor.provider);
+  const condition = `Fires when count ${monitor.condition}`;
+  const frequency = formatFrequency(monitor.frequencySeconds);
+  const ranAt = !monitor.enabled ? "paused" : monitor.lastRunAt === null ? "not run yet" : `ran ${formatTime(monitor.lastRunAt)}`;
+
+  const setState = (next: MonitorState) => {
+    if (next === state) return;
+    const run = next !== "paused";
+    const alert = next === "active";
+    utils.monitors.list.setData(undefined, (rows) => rows?.map((m) => (
+      m.id === monitor.id ? { ...m, enabled: run ? 1 : 0, alertEnabled: run ? (alert ? 1 : 0) : m.alertEnabled } : m
+    )));
+    if (!!monitor.enabled !== run) toggleRun.mutate({ id: monitor.id, enabled: run });
+    if (run && !!monitor.alertEnabled !== alert) toggleAlert.mutate({ id: monitor.id, enabled: alert });
+    toast(`${monitor.name} ${STATE_TOAST[next]}`);
+  };
 
   return (
-    <div
+    <article
       id={`monitor-${monitor.id}`}
+      aria-labelledby={`monitor-${monitor.id}-name`}
       onDragOver={(e) => { e.preventDefault(); onOverId(monitor.id); }}
       onDrop={(e) => { e.preventDefault(); onDropId(monitor.id); }}
-      className={`group relative min-w-0 h-full flex flex-col rounded bg-white border font-sans scroll-mt-4 transition-opacity ${accent?.border ?? ""} ${spanClass} ${
-        isTarget || resizeActive ? "border-[#d4d2cd] outline-2 outline-dashed outline-offset-2 outline-[#9a9894]" : "border-[#d4d2cd]"
-      } ${isDragging ? "opacity-50" : ""}`}
+      className={cn(
+        "group relative flex min-w-0 scroll-mt-20 flex-col rounded-lg border bg-card transition-opacity",
+        status === "firing" && "border-destructive/30",
+        (isTarget || resizeActive) && "outline-2 outline-offset-2 outline-muted-foreground outline-dashed",
+        isDragging && "opacity-50",
+        spanClass,
+      )}
     >
       <div
         onPointerDown={(e) => onResizeStart(monitor.id, e)}
-        title="Drag to resize"
-        className={`hidden xl:flex absolute inset-y-0 -right-1 w-3 z-10 items-center justify-center cursor-ew-resize transition-opacity ${
-          resizeActive ? "opacity-100" : "opacity-0 group-hover:opacity-100"
-        }`}
+        aria-hidden="true"
+        className={cn(
+          "absolute inset-y-0 -right-1.5 z-10 hidden w-3 cursor-ew-resize items-center justify-center transition-opacity min-[1100px]:flex",
+          resizeActive ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+        )}
       >
-        <div className="h-10 w-1 rounded-full bg-[#9c9890]" />
+        <div className="h-10 w-1 rounded-full bg-muted-foreground" />
       </div>
-      <div className="p-5 space-y-3">
-        <div className="flex items-center gap-3">
-          <span
-            draggable
-            title="Drag to reorder"
-            onDragStart={(e) => {
-              e.dataTransfer.effectAllowed = "move";
-              e.dataTransfer.setData("text/plain", monitor.id);
-              const card = e.currentTarget.closest<HTMLElement>(`[id="monitor-${monitor.id}"]`);
-              if (card) e.dataTransfer.setDragImage(card, 16, 16);
-              onDragStartId(monitor.id);
-            }}
-            onDragEnd={onDragEnd}
-            className="shrink-0 -ml-1 px-1 py-0.5 text-[#9c9890] hover:text-[#666666] cursor-grab active:cursor-grabbing"
-          >
-            <GripIcon />
-          </span>
-          <span title={monitor.name} className="min-w-0 flex-1 truncate text-base font-semibold text-[#2c2c2c]">{monitor.name}</span>
-          <span className="shrink-0">
-            <Badge variant={monitor.enabled ? statusVariant(monitor.lastStatus) : "default"}>
-              {monitor.enabled ? monitor.lastStatus : "paused"}
-            </Badge>
-          </span>
-          {monitor.unreadCount > 0 && (
-            <span
-              title={`${monitor.unreadCount} unread`}
-              className="shrink-0 min-w-5 h-5 px-1.5 rounded-full bg-[#2b5ea7] text-white text-[11px] flex items-center justify-center"
-            >
-              {monitor.unreadCount}
-            </span>
-          )}
-          <div className="flex shrink-0 items-center gap-3">
-            <label className="flex items-center gap-1.5 text-xs text-[#666666]">
-              Run
-              <ToggleSwitch
-                checked={!!monitor.enabled}
-                onChange={(enabled) => toggle.mutate({ id: monitor.id, enabled })}
-                title="Run checks on schedule"
-                aria-label={monitor.enabled ? "Disable monitor" : "Enable monitor"}
-              />
-            </label>
-            <label className="flex items-center gap-1.5 text-xs text-[#666666]">
-              <span className={monitor.enabled ? "" : "opacity-50"}>Alert</span>
-              <ToggleSwitch
-                checked={!!monitor.alertEnabled}
-                onChange={toggleAlert}
-                disabled={!monitor.enabled}
-                title="Start a debug session when it fires"
-                aria-label={monitor.alertEnabled ? "Disable alerts" : "Enable alerts"}
-              />
-            </label>
-            <button type="button" onClick={() => onEdit(monitor.id)} className={theme.outlineBtn}>Edit</button>
-            <button
-              type="button"
-              onClick={() => { remove.reset(); setConfirmDelete(true); }}
-              disabled={remove.isPending}
-              className="text-xs text-[#666666] hover:text-[#b33a2a] transition-colors"
-            >
-              Delete
-            </button>
+
+      <div className="space-y-3 p-4 pb-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                draggable
+                aria-label="Drag to reorder"
+                onDragStart={(e) => {
+                  e.dataTransfer.effectAllowed = "move";
+                  e.dataTransfer.setData("text/plain", monitor.id);
+                  const card = e.currentTarget.closest<HTMLElement>("article");
+                  if (card) e.dataTransfer.setDragImage(card, 16, 16);
+                  onDragStartId(monitor.id);
+                }}
+                onDragEnd={onDragEnd}
+                className="absolute top-[22px] left-0 hidden cursor-grab text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 hover:text-foreground active:cursor-grabbing min-[1100px]:block [@media(hover:none)]:opacity-100"
+              >
+                <GripVertical className="size-4" aria-hidden="true" />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>Drag to reorder</TooltipContent>
+          </Tooltip>
+          <Badge className={cn("rounded-md", badge.className)}>{badge.label}</Badge>
+          <div className="flex min-w-0 flex-1 items-center gap-2 max-sm:order-last max-sm:basis-full">
+            <h2 id={`monitor-${monitor.id}-name`} title={monitor.name} className="min-w-0 truncate text-base font-semibold tracking-tight">
+              {monitor.name}
+            </h2>
+            {monitor.unreadCount > 0 && (
+              <Badge aria-label={`${monitor.unreadCount} unread`} className="min-w-5 rounded-full px-1.5 tabular-nums">
+                {monitor.unreadCount}
+              </Badge>
+            )}
           </div>
+          <span className="flex-1 sm:hidden" />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="h-7 gap-1.5 px-2 text-xs" aria-label={`State: ${stateInfo.label}`}>
+                <span className={cn("size-1.5 rounded-full", stateInfo.dot)} aria-hidden="true" />
+                {stateInfo.label}
+                <ChevronDown className="size-3.5 text-muted-foreground" aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-72">
+              <DropdownMenuRadioGroup value={state} onValueChange={(v) => setState(v as MonitorState)}>
+                {STATES.map((s) => (
+                  <DropdownMenuRadioItem key={s.value} value={s.value} className="items-start py-2 pr-8">
+                    <span className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", s.dot)} aria-hidden="true" />
+                    <span className="flex flex-col gap-0.5">
+                      <span>{s.label}</span>
+                      <span className="text-xs text-muted-foreground">{s.description}</span>
+                    </span>
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <DropdownMenu>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" className="size-7" aria-label={`More actions for ${monitor.name}`}>
+                    <MoreHorizontal />
+                  </Button>
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent>More actions</TooltipContent>
+            </Tooltip>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem onSelect={() => onEdit(monitor.id)}>Edit with agent</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setQueryOpen(true)}>View query</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem variant="destructive" disabled={remove.isPending} onSelect={() => setConfirmDelete(true)}>
+                Delete monitor
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
 
-        {remove.error && <div className={theme.errorText}>{remove.error.message}</div>}
-        {monitor.lastError && <div className={theme.errorText}>Last error: {monitor.lastError}</div>}
-
-        <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-[#666666]">
-          <span>Condition: <code className="font-mono font-semibold text-[#444444]">count {monitor.condition}</code></span>
-          <span>Runs every <strong className="font-semibold text-[#444444]">{formatFrequency(monitor.frequencySeconds).replace(/^every /, "")}</strong></span>
-          <button
-            type="button"
-            onClick={() => setQueryExpanded((v) => !v)}
-            aria-expanded={queryExpanded}
-            className="text-[#2b5ea7] hover:text-[#234d8a]"
-          >
-            Query {queryExpanded ? "∨" : ">"}
-          </button>
-          <span className="ml-auto">
-            {monitor.lastRunAt === null ? "Not run yet" : `Last run ${formatTime(monitor.lastRunAt)}`}
-          </span>
-        </div>
-
-        {queryExpanded && (
-          <pre className="text-[12px] font-mono text-[#444444] bg-[#f5f4f0] border border-[#e8e6e1] rounded px-3 py-1.5 whitespace-pre-wrap [overflow-wrap:anywhere]">
-            {monitor.query}
-            {monitor.chartQuery && `\n\nChart query:\n${monitor.chartQuery}`}
-          </pre>
+        <p className="flex min-w-0 items-start gap-1.5 text-[13px] leading-[18px] text-ink-2">
+          <span className="flex h-[18px] items-center"><ProviderDot provider={monitor.provider} /></span>
+          <span className="tabular-nums">{provider} · {condition} · {frequency} · {ranAt}</span>
+        </p>
+        {monitor.lastError && (
+          <p className="flex items-start gap-1.5 text-[13px] leading-[18px] text-warning">
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 [overflow-wrap:anywhere]">{monitor.lastError}</span>
+          </p>
         )}
       </div>
 
-      <MonitorTriggers
-        monitorId={monitor.id}
+      <MonitorChart
         provider={monitor.provider}
         query={monitor.query}
         condition={monitor.condition}
         chartQuery={monitor.chartQuery}
         lastRunAt={monitor.lastRunAt}
         since={since}
-        onNavigate={onNavigate}
+        className="border-t-0 px-4 pt-0 pb-3"
       />
 
-      <ConfirmDialog
-        open={confirmDelete}
-        title="Delete monitor"
-        message="Delete this monitor, its trigger history, and its sessions?"
-        onConfirm={() => { setConfirmDelete(false); remove.mutate({ id: monitor.id }); }}
-        onCancel={() => setConfirmDelete(false)}
-      />
-    </div>
+      <div className="mt-auto border-t px-2 py-1.5">
+        <MonitorTriggers monitorId={monitor.id} lastRunAt={monitor.lastRunAt} since={since} rangeLabel={rangeLabel} onNavigate={onNavigate} />
+      </div>
+
+      <Dialog open={queryOpen} onOpenChange={setQueryOpen}>
+        <DialogContent className="sm:max-w-xl" onOpenAutoFocus={(e) => { e.preventDefault(); (e.currentTarget as HTMLElement).focus(); }}>
+          <DialogHeader>
+            <DialogTitle>{monitor.name}</DialogTitle>
+            <DialogDescription>{provider} · {condition} · {frequency}</DialogDescription>
+          </DialogHeader>
+          <div className="relative">
+            <pre tabIndex={0} className="max-h-72 outline-none focus-visible:ring-3 focus-visible:ring-ring/50 overflow-auto rounded-md border bg-background py-3 pr-11 pl-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">
+              <code>{monitor.query}</code>
+            </pre>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-xs" aria-label="Copy query" className="absolute top-2 right-2 text-muted-foreground" onClick={() => copyText(monitor.query, "Query copied")}>
+                  <Copy />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Copy query</TooltipContent>
+            </Tooltip>
+          </div>
+          {monitor.chartQuery && (
+            <div className="space-y-1.5">
+              <p className="text-xs text-muted-foreground">Chart query</p>
+              <pre tabIndex={0} className="max-h-72 outline-none focus-visible:ring-3 focus-visible:ring-ring/50 overflow-auto rounded-md border bg-background p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">
+                <code>{monitor.chartQuery}</code>
+              </pre>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete "{monitor.name}"?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Its trigger history and the sessions it opened are deleted too. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={() => remove.mutate({ id: monitor.id })}>Delete monitor</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </article>
   );
 });

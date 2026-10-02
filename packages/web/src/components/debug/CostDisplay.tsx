@@ -1,16 +1,13 @@
-import { useState, useRef } from "react";
-import { useClickOutside } from "../../lib/hooks";
-import { theme } from "../../lib/theme";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { computeCost, formatCost } from "../../lib/models";
-import { ProviderToggle } from "../ui/ProviderToggle";
 
-export interface AgentCost {
+interface AgentCost {
   label: string;
   model: string | null;
   cost: number;
 }
 
-export interface CostBreakdown {
+interface CostBreakdown {
   agents: AgentCost[];
   totalCost: number;
   totalCostWithoutCache: number;
@@ -19,9 +16,7 @@ export interface CostBreakdown {
   totalCached: number;
 }
 
-/** Convert server-side agent token breakdown into client-side cost breakdown.
- *  `atMs` prices the runs at when they happened, so a scheduled price change
- *  doesn't retroactively change displayed historical costs. */
+/** Prices each agent's tokens at `atMs`, so a later price change never rewrites past costs. */
 export function computeCostBreakdown(agents: Array<{ label: string; model: string | null; input: number; output: number; cached: number; cacheWrite: number; reasoning: number }>, atMs?: number): CostBreakdown {
   const costed: AgentCost[] = agents.map((a) => ({
     label: a.label,
@@ -30,75 +25,53 @@ export function computeCostBreakdown(agents: Array<{ label: string; model: strin
   }));
   let totalInput = 0, totalOutput = 0, totalCached = 0;
   for (const a of agents) { totalInput += a.input; totalOutput += a.output; totalCached += a.cached; }
-  const totalCost = costed.reduce((sum, a) => sum + a.cost, 0);
-  // Cost without cache discount — for showing savings
-  const totalCostWithoutCache = agents.reduce((sum, a) => sum + computeCost(a.model, a.input, a.output, 0, 0, atMs), 0);
   return {
     agents: costed,
-    totalCost,
-    totalCostWithoutCache,
+    totalCost: costed.reduce((sum, a) => sum + a.cost, 0),
+    totalCostWithoutCache: agents.reduce((sum, a) => sum + computeCost(a.model, a.input, a.output, 0, 0, atMs), 0),
     totalInput,
     totalOutput,
     totalCached,
   };
 }
 
-export function CostDisplay({ breakdown, activeProvider, onToggle }: {
-  breakdown: CostBreakdown;
-  activeProvider: string | null;
-  onToggle: (type: string) => void;
-}) {
-  const [hover, setHover] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+const compact = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 2 });
 
-  useClickOutside(ref, () => setHover(false));
-
+export function CostDisplay({ breakdown }: { breakdown: CostBreakdown }) {
+  const tokens = compact.format(breakdown.totalInput + breakdown.totalOutput);
   return (
-    <div className="relative px-10 pt-2" ref={ref}>
-      <div className="flex items-center justify-between">
+    <HoverCard openDelay={150} closeDelay={100}>
+      <HoverCardTrigger asChild>
         <button
           type="button"
-          className={theme.tokenSummary}
-          onMouseEnter={() => setHover(true)}
-          onMouseLeave={() => setHover(false)}
-          onClick={() => setHover((v) => !v)}
+          className="hidden h-7 shrink-0 rounded-md px-1.5 text-xs text-muted-foreground tabular-nums transition-colors outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 sm:inline-flex sm:items-center"
         >
-          {breakdown.totalInput.toLocaleString()} in &middot; {breakdown.totalOutput.toLocaleString()} out
-          {breakdown.totalCost > 0 && <> &middot; {formatCost(breakdown.totalCost)}</>}
+          {tokens} tokens{breakdown.totalCost > 0 && <> · {formatCost(breakdown.totalCost)}</>}
         </button>
-        <ProviderToggle activeProvider={activeProvider} onToggle={onToggle} />
-      </div>
-      {hover && breakdown.agents.length > 0 && (
-        <div className={`bottom-full left-10 mb-1 ${theme.popoverWide}`}>
-          <div className={theme.popoverLabel}>Cost Breakdown</div>
+      </HoverCardTrigger>
+      <HoverCardContent side="top" align="end" className="w-80">
+        <p className="mb-3 text-sm font-semibold">Cost for this investigation</p>
+        <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1.5 text-[13px]/[18px] tabular-nums">
           {breakdown.agents.map((a, i) => (
-            <div key={i} className={theme.popoverItemRow}>
-              <span className="truncate mr-2">
+            <div key={i} className="contents">
+              <dt className="min-w-0 truncate text-ink-2">
                 {a.label}
-                {a.model && <span className="text-[#9c9890] ml-1">({a.model})</span>}
-              </span>
-              <span className="shrink-0 tabular-nums">{formatCost(a.cost)}</span>
+                {a.model && <span className="text-muted-foreground"> · {a.model}</span>}
+              </dt>
+              <dd className="text-right">{formatCost(a.cost)}</dd>
             </div>
           ))}
-          {breakdown.agents.length > 1 && (
-            <>
-              <div className={theme.popoverDivider} />
-              <div className="flex items-center justify-between text-[11px] text-[#4a4540] font-sans font-medium">
-                <span>Total</span>
-                <span className="tabular-nums">{formatCost(breakdown.totalCost)}</span>
-              </div>
-            </>
-          )}
-          {breakdown.totalCached > 0 && (
-            <div className={theme.popoverFootnote}>
-              {breakdown.totalCached.toLocaleString()} cached tokens
-              {breakdown.totalCostWithoutCache > breakdown.totalCost && (
-                <> &middot; saved {formatCost(breakdown.totalCostWithoutCache - breakdown.totalCost)}</>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
+          <div className="contents font-semibold">
+            <dt className="mt-1 border-t pt-2">Total</dt>
+            <dd className="mt-1 border-t pt-2 text-right">{formatCost(breakdown.totalCost)}</dd>
+          </div>
+        </dl>
+        <p className="mt-3 text-xs text-muted-foreground tabular-nums">
+          {breakdown.totalInput.toLocaleString()} in · {breakdown.totalOutput.toLocaleString()} out
+          {breakdown.totalCached > 0 && <> · {breakdown.totalCached.toLocaleString()} cached</>}
+          {breakdown.totalCostWithoutCache > breakdown.totalCost && <> · saved {formatCost(breakdown.totalCostWithoutCache - breakdown.totalCost)}</>}
+        </p>
+      </HoverCardContent>
+    </HoverCard>
   );
 }

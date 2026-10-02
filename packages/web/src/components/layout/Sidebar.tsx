@@ -1,20 +1,45 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { DEFAULT_SESSION_TITLE, FEATURES, ImportedAnalysisSchema, SESSION_KIND } from "@tracer-sh/shared";
-import { useFileDrop, usePersistedState, useSessionLiveUpdates } from "../../lib/hooks";
-import { theme } from "../../lib/theme";
+import { useCallback, useEffect, useState } from "react";
+import { Activity, CircleCheck, LayoutDashboard, MessageSquare, MoreHorizontal, Plus, Settings } from "lucide-react";
+import { toast } from "sonner";
+import { FEATURES, SESSION_KIND } from "@tracer-sh/shared";
+import { cn } from "@/lib/utils";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuAction,
+  SidebarMenuBadge,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  useSidebar,
+} from "@/components/ui/sidebar";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useSessionLiveUpdates } from "../../lib/hooks";
 import { trpc } from "../../lib/trpc";
 import { WEB_CONFIG } from "../../lib/config";
-import { decodePngPayload } from "../../lib/png-steg";
-import { ScrollableList } from "./ScrollableList";
-import { ConfirmDialog } from "../ui/ConfirmDialog";
+import { RecentSessions } from "./RecentSessions";
 import { UpdateModal } from "./UpdateModal";
 
 declare const __APP_VERSION__: string;
 
 export type Page = "dashboard" | "debug" | "monitors" | "settings";
-type Group = "monitors" | "api" | "imported";
 
-interface SidebarProps {
+interface AppSidebarProps {
   currentPage: Page;
   onNavigate: (page: Page) => void;
   currentSessionId: string | null;
@@ -23,63 +48,9 @@ interface SidebarProps {
   currentDashboardId: string | null;
   onSelectDashboard: (id: string) => void;
   onNewDashboard: () => void;
-  currentBuilderSessionId: string | null;
-  onSelectBuilderChat: (sessionId: string) => void;
 }
 
-const Chevron = ({ open }: { open: boolean }) => (
-  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" className={`shrink-0 transition-transform ${open ? "rotate-90" : ""}`}>
-    <path d="M3.5 2L6.5 5L3.5 8" />
-  </svg>
-);
-
-const NavIcon = ({ page }: { page: Page }) => {
-  const props = { width: 16, height: 16, fill: "none", stroke: "currentColor", strokeWidth: 1.5 };
-  switch (page) {
-    case "dashboard":
-      return <svg {...props} viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="1.5" /></svg>;
-    case "debug":
-      return <svg {...props} viewBox="0 0 16 16"><path d="M8 1.5L14.5 8L8 14.5L1.5 8Z" /></svg>;
-    case "monitors":
-      return <svg {...props} viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" /></svg>;
-    case "settings":
-      return <svg {...props} viewBox="0 0 16 16"><path d="M3 4.5h10M3 8h10M3 11.5h10" /></svg>;
-  }
-};
-
-function SessionRow({ title, active, highlighted, animateIn, onSelect, onDelete }: {
-  title: string;
-  active: boolean;
-  highlighted: boolean;
-  animateIn: boolean;
-  onSelect: () => void;
-  onDelete: (e: React.MouseEvent) => void;
-}) {
-  // Captured at mount so the classes stay stable and each animation plays once.
-  const [enter] = useState(animateIn);
-  const [firstTitle] = useState(title);
-  return (
-    <button
-      onClick={onSelect}
-      className={`${active ? theme.sessionItemActive : theme.sessionItem} ${enter ? "animate-row-in" : ""}`}
-    >
-      <span
-        key={title}
-        className={`truncate flex-1 text-left transition-colors ${highlighted ? "text-[#2b5ea7] underline" : ""} ${
-          title !== firstTitle ? "animate-title-in" : ""
-        }`}
-        title={title}
-      >
-        {title}
-      </span>
-      <span onClick={onDelete} className={theme.sessionDeleteBtn}>
-        ×
-      </span>
-    </button>
-  );
-}
-
-export function Sidebar({
+export function AppSidebar({
   currentPage,
   onNavigate,
   currentSessionId,
@@ -88,27 +59,13 @@ export function Sidebar({
   currentDashboardId,
   onSelectDashboard,
   onNewDashboard,
-  currentBuilderSessionId,
-  onSelectBuilderChat,
-}: SidebarProps) {
-  // Live updates arrive over the session change stream; focus refetch is only a safety net.
+}: AppSidebarProps) {
+  const { setOpenMobile } = useSidebar();
   const sessionsQuery = trpc.sessions.list.useQuery(undefined, { refetchOnWindowFocus: true });
-  const dashboardsQuery = trpc.dashboards.list.useQuery(undefined, {
-    enabled: FEATURES.dashboards && currentPage === "dashboard",
-  });
-  const builderChatsQuery = trpc.monitors.builderChats.useQuery(undefined, {
-    enabled: FEATURES.monitors,
-    refetchOnWindowFocus: true,
-  });
+  const monitorsQuery = trpc.monitors.list.useQuery(undefined, { enabled: FEATURES.monitors });
   const activeStatusQuery = trpc.sessions.activeCount.useQuery(undefined, { refetchOnWindowFocus: true });
   const utils = trpc.useUtils();
   useSessionLiveUpdates();
-
-  // Rows present at first load render still; only rows that arrive later animate in.
-  const [sessionsReady, setSessionsReady] = useState(false);
-  const [chatsReady, setChatsReady] = useState(false);
-  useEffect(() => { if (sessionsQuery.data) setSessionsReady(true); }, [sessionsQuery.data]);
-  useEffect(() => { if (builderChatsQuery.data) setChatsReady(true); }, [builderChatsQuery.data]);
 
   const markViewedMutation = trpc.sessions.markViewed.useMutation();
 
@@ -126,329 +83,231 @@ export function Sidebar({
     markViewedMutation.mutate({ id: currentSessionId });
   }, [sessionsQuery.data, currentSessionId, currentPage]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const { regularSessions, importedSessions, apiSessions } = useMemo(() => {
-    const all = sessionsQuery.data ?? [];
-    const regular = all.filter((s) => s.kind !== SESSION_KIND.IMPORTED && s.kind !== SESSION_KIND.API);
-    const imported = all.filter((s) => s.kind === SESSION_KIND.IMPORTED);
-    const api = all.filter((s) => s.kind === SESSION_KIND.API);
-    return { regularSessions: regular, importedSessions: imported, apiSessions: api };
-  }, [sessionsQuery.data]);
-
-  const builderChats = builderChatsQuery.data ?? [];
   const doneSessionCount = currentPage === "debug" && sessionsQuery.data
     ? sessionsQuery.data.filter(s => s.status === "done" && s.id !== currentSessionId && s.kind !== SESSION_KIND.API).length
     : (activeStatusQuery.data?.done ?? 0);
+  const inSavedSession = !!sessionsQuery.data?.some(s => s.id === currentSessionId);
 
-  const deleteSessionMutation = trpc.sessions.delete.useMutation();
-  const deleteDashboardMutation = trpc.dashboards.delete.useMutation();
+  const go = (fn: () => void) => {
+    fn();
+    setOpenMobile(false);
+  };
 
-  const [confirmTarget, setConfirmTarget] = useState<{ type: "session" | "dashboard"; id: string } | null>(null);
+  const onDeleted = useCallback((id: string) => {
+    if (id === currentSessionId) onNewSession();
+  }, [currentSessionId, onNewSession]);
 
+  const onImported = useCallback((id: string) => {
+    onSelectSession(id);
+    setOpenMobile(false);
+  }, [onSelectSession, setOpenMobile]);
+
+  return (
+    <Sidebar>
+      <SidebarHeader className="gap-3 px-3 pt-4">
+        <div className="flex items-center gap-2 px-1">
+          <img src="/logo.svg" alt="" className="size-5" />
+          <span className="text-base font-semibold tracking-tight">Tracer</span>
+        </div>
+        <Button variant="outline" className="w-full justify-start bg-card" onClick={() => go(onNewSession)}>
+          <Plus />
+          New investigation
+        </Button>
+      </SidebarHeader>
+
+      <SidebarContent>
+        <SidebarGroup className="px-3 py-1">
+          <SidebarMenu>
+            {FEATURES.dashboards && (
+              <DashboardNav
+                active={currentPage === "dashboard"}
+                currentDashboardId={currentDashboardId}
+                onOpen={() => go(() => onNavigate("dashboard"))}
+                onSelect={(id) => go(() => onSelectDashboard(id))}
+                onNew={() => go(onNewDashboard)}
+                onDeleted={(id) => { if (id === currentDashboardId) onNavigate("dashboard"); }}
+              />
+            )}
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                isActive={currentPage === "debug" && !inSavedSession}
+                onClick={() => go(() => onNavigate("debug"))}
+              >
+                <MessageSquare />
+                <span>Investigations</span>
+              </SidebarMenuButton>
+              {doneSessionCount > 0 && (
+                <SidebarMenuBadge className="text-primary" aria-label={`${doneSessionCount} unread`}>
+                  {doneSessionCount}
+                </SidebarMenuBadge>
+              )}
+            </SidebarMenuItem>
+            {FEATURES.monitors && (
+              <SidebarMenuItem>
+                <SidebarMenuButton isActive={currentPage === "monitors"} onClick={() => go(() => onNavigate("monitors"))}>
+                  <Activity />
+                  <span>Monitors</span>
+                </SidebarMenuButton>
+                {monitorsQuery.data && (
+                  <SidebarMenuBadge className="text-muted-foreground tabular-nums">{monitorsQuery.data.length}</SidebarMenuBadge>
+                )}
+              </SidebarMenuItem>
+            )}
+          </SidebarMenu>
+        </SidebarGroup>
+
+        <RecentSessions
+          currentSessionId={currentPage === "debug" ? currentSessionId : null}
+          onSelectSession={(id) => go(() => onSelectSession(id))}
+          onDeleted={onDeleted}
+          onImported={onImported}
+        />
+      </SidebarContent>
+
+      <SidebarFooter className="flex-row items-center gap-2 border-t border-sidebar-border px-3 py-2">
+        <VersionStatus />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Settings"
+              aria-current={currentPage === "settings" ? "page" : undefined}
+              className={cn(currentPage === "settings" && "bg-sidebar-accent text-foreground")}
+              onClick={() => go(() => onNavigate("settings"))}
+            >
+              <Settings />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top">Settings</TooltipContent>
+        </Tooltip>
+      </SidebarFooter>
+    </Sidebar>
+  );
+}
+
+function VersionStatus() {
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const updateCheck = trpc.update.check.useQuery(undefined, {
     staleTime: WEB_CONFIG.updateCheckStaleTimeMs,
   });
-  const updateAvailable = updateCheck.data?.available === true;
+  const version = updateCheck.data?.currentVersion ?? __APP_VERSION__;
 
-  const handleDeleteSession = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    setConfirmTarget({ type: "session", id });
-  };
-
-  const handleDeleteDashboard = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    setConfirmTarget({ type: "dashboard", id });
-  };
-
-  // ── Import analysis from a Tracer "Download as image" PNG ────────────────
-  const [importError, setImportError] = useState<string | null>(null);
-  const importMutation = trpc.sessions.importAnalysis.useMutation();
-
-  const importPng = useCallback(async (file: File) => {
-    if (file.type !== "image/png") { setImportError("Only PNG files are supported."); return; }
-    if (file.size > 10 * 1024 * 1024) { setImportError("PNG is too large (>10 MB)."); return; }
-    try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      let payload: Uint8Array | null;
-      try { payload = await decodePngPayload(bytes); }
-      catch { setImportError("Not a valid PNG file."); return; }
-      if (!payload) { setImportError("No analysis data found in this image."); return; }
-      let parsed;
-      try { parsed = ImportedAnalysisSchema.parse(JSON.parse(new TextDecoder().decode(payload))); }
-      catch { setImportError("Analysis data is malformed or from an incompatible version."); return; }
-      const { id } = await importMutation.mutateAsync(parsed);
-      utils.sessions.list.setData(undefined, (prev) => {
-        const row = {
-          id,
-          title: parsed.sourceTitle.slice(0, 80) || DEFAULT_SESSION_TITLE,
-          status: "idle" as const,
-          kind: SESSION_KIND.IMPORTED as string | null,
-          updatedAt: Math.floor(Date.now() / 1000),
-          titlePending: false,
-        };
-        return prev ? [row, ...prev] : [row];
-      });
-      setImportError(null);
-      if (currentPage !== "debug") onNavigate("debug");
-      onSelectSession(id);
-    } catch { setImportError("Couldn't import analysis."); }
-  }, [importMutation, utils, onSelectSession, onNavigate, currentPage]);
-
-  const onImportFiles = useCallback((files: FileList) => {
-    if (files.length > 1) { setImportError("Drop a single PNG to import."); return; }
-    importPng(files[0]);
-  }, [importPng]);
-  const { dragActive: importDragActive, dropProps: importDropProps } = useFileDrop(onImportFiles);
-
-  const handleConfirmDelete = () => {
-    if (!confirmTarget) return;
-    if (confirmTarget.type === "session") {
-      deleteSessionMutation.mutate(
-        { id: confirmTarget.id },
-        {
-          onSuccess: () => {
-            utils.sessions.list.invalidate();
-            utils.monitors.builderChats.invalidate();
-            utils.monitors.triggers.invalidate();
-            utils.monitors.list.invalidate();
-            if (currentSessionId === confirmTarget.id) onNewSession();
-            if (currentBuilderSessionId === confirmTarget.id) onNavigate("monitors");
-          },
-        },
-      );
-    } else {
-      deleteDashboardMutation.mutate(
-        { id: confirmTarget.id },
-        {
-          onSuccess: () => {
-            utils.dashboards.list.invalidate();
-            if (currentDashboardId === confirmTarget.id) {
-              onNavigate("dashboard");
-            }
-          },
-        },
-      );
-    }
-    setConfirmTarget(null);
-  };
-
-  // One of Monitors, API and Imported is expanded at a time.
-  const [openGroup, setOpenGroup] = usePersistedState<Group | null>("tracer:sidebarGroup", "monitors");
-  const toggleGroup = (g: Group) => setOpenGroup(openGroup === g ? null : g);
-  // The open group takes up to 40% of the sidebar and scrolls past that; Debug gets the rest.
-  const groupClass = (g: Group) => `shrink-0 flex flex-col ${openGroup === g ? "max-h-[40%]" : ""}`;
-  const groupToggle = (g: Group, count?: number) => (
-    <button onClick={() => toggleGroup(g)} className="shrink-0 flex items-center gap-1.5 p-2 text-[11px] text-[#9c9890] hover:text-[#2b5ea7]" aria-label={`Toggle ${g}`}>
-      {count !== undefined && count > 0 && count}
-      <Chevron open={openGroup === g} />
-    </button>
-  );
-  const renderGroupHeader = (g: Group, label: string, icon: React.ReactNode, count: number) => (
-    <div className={`shrink-0 flex items-center rounded-sm ${theme.navInactive}`}>
-      <button onClick={() => toggleGroup(g)} className="flex-1 flex items-center gap-3 px-3 py-2 text-sm text-left">
-        <span className="w-5 flex items-center justify-center shrink-0">{icon}</span>
-        {label}
-      </button>
-      {groupToggle(g, count)}
-    </div>
-  );
-
-  const renderNavButton = (page: Page, label: string) => (
-    <button
-      onClick={() => { onNavigate(page); if (page === "monitors") setOpenGroup("monitors"); }}
-      className={`shrink-0 w-full flex items-center gap-3 px-3 py-2 rounded-sm text-sm transition-colors ${
-        currentPage === page ? theme.navActive : theme.navInactive
-      }`}
-    >
-      {page === "debug" && doneSessionCount > 0 ? (
-        <span className="relative flex items-center justify-center w-5 shrink-0">
-          <NavIcon page={page} />
-          <span
-            className="absolute inset-0 flex items-center justify-center"
-            style={{ animation: "fill-up-down 4s ease-in-out infinite" }}
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1.5L14.5 8L8 14.5L1.5 8Z" fill="#2b5ea7" stroke="none" /></svg>
+  if (updateCheck.data?.available) {
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => setShowUpdateModal(true)}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+        >
+          <span className="flex size-3.5 shrink-0 items-center justify-center" aria-hidden="true">
+            <span className="size-1.5 rounded-full bg-primary animate-pulse-dot" />
           </span>
-        </span>
-      ) : (
-        <span className="w-5 flex items-center justify-center shrink-0"><NavIcon page={page} /></span>
-      )}
-      {label}
-    </button>
-  );
-
-  const renderSessionRow = (session: (typeof regularSessions)[number]) => (
-    <SessionRow
-      key={session.id}
-      title={session.title}
-      active={currentSessionId === session.id}
-      highlighted={(session.status === "streaming" || session.status === "done") && session.id !== currentSessionId}
-      animateIn={sessionsReady}
-      onSelect={() => onSelectSession(session.id)}
-      onDelete={(e) => handleDeleteSession(e, session.id)}
-    />
-  );
+          <span className="truncate">
+            Tracer {version} · <span className="text-primary">update available</span>
+          </span>
+        </button>
+        <UpdateModal open={showUpdateModal} onClose={() => setShowUpdateModal(false)} />
+      </>
+    );
+  }
 
   return (
-    <div className={`flex flex-col h-full ${theme.sidebar}`}>
-      <div className="p-6">
-        <h1 className={`text-2xl font-bold ${theme.sidebarLogo} flex items-center gap-2`}>
-          <img src="/logo.svg" alt="" className="w-6 h-6" />
-          Tracer
-        </h1>
-        <p className={`text-xs mt-1 ${theme.sidebarSubtitle}`}>
-          Observability Platform
-        </p>
-      </div>
+    <>
+      {updateCheck.data && <CircleCheck className="size-3.5 shrink-0 text-success" aria-hidden="true" />}
+      <span className="flex-1 truncate text-xs text-muted-foreground tabular-nums">
+        Tracer {version}{updateCheck.data && " · up to date"}
+      </span>
+    </>
+  );
+}
 
-      <nav className="flex-1 min-h-0 px-3 flex flex-col">
-        {FEATURES.dashboards && (
-          <div className="shrink-0">
-            {renderNavButton("dashboard", "Dashboard")}
-            {currentPage === "dashboard" && (
-              <div className="mt-1 space-y-0.5">
-                <button onClick={onNewDashboard} className={theme.sessionNewBtn}>
-                  <span className="text-[10px]">+</span>
-                  New dashboard
-                </button>
-                <ScrollableList>
-                  {dashboardsQuery.data?.map((dashboard) => (
-                    <button
-                      key={dashboard.id}
-                      onClick={() => onSelectDashboard(dashboard.id)}
-                      className={currentDashboardId === dashboard.id ? theme.sessionItemActive : theme.sessionItem}
-                    >
-                      <span className="truncate flex-1 text-left">{dashboard.title}</span>
-                      <span onClick={(e) => handleDeleteDashboard(e, dashboard.id)} className={theme.sessionDeleteBtn}>
-                        ×
-                      </span>
-                    </button>
-                  ))}
-                </ScrollableList>
-              </div>
-            )}
-          </div>
-        )}
+interface DashboardNavProps {
+  active: boolean;
+  currentDashboardId: string | null;
+  onOpen: () => void;
+  onSelect: (id: string) => void;
+  onNew: () => void;
+  onDeleted: (id: string) => void;
+}
 
-        <section className="flex-1 min-h-0 flex flex-col">
-          {renderNavButton("debug", "Debug")}
-          <button onClick={onNewSession} className={`${theme.sessionNewBtn} mt-1 shrink-0`}>
-            <span className="text-[10px]">+</span>
-            New chat
-          </button>
-          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-none space-y-0.5 mt-0.5">
-            {regularSessions.map(renderSessionRow)}
-          </div>
-        </section>
+function DashboardNav({ active, currentDashboardId, onOpen, onSelect, onNew, onDeleted }: DashboardNavProps) {
+  const dashboardsQuery = trpc.dashboards.list.useQuery(undefined, { enabled: active });
+  const utils = trpc.useUtils();
+  const deleteMutation = trpc.dashboards.delete.useMutation();
+  const [deleting, setDeleting] = useState<{ id: string; title: string } | null>(null);
 
-        {FEATURES.monitors && (
-          <section className={`${groupClass("monitors")} pt-2`}>
-            <div className="shrink-0 flex items-center">
-              <div className="flex-1">{renderNavButton("monitors", "Monitors")}</div>
-              {groupToggle("monitors", builderChats.length)}
-            </div>
-            {openGroup === "monitors" && <div className="flex-1 min-h-0 overflow-y-auto scrollbar-none space-y-0.5 mt-1">
-              {builderChats.length === 0 ? (
-                <div className="px-3 py-1 text-[11px] text-[#9c9890]/70">No monitor chats yet</div>
-              ) : builderChats.map((s) => {
-                const active = currentPage === "monitors" && currentBuilderSessionId === s.id;
-                return (
-                  <SessionRow
-                    key={s.id}
-                    title={s.title}
-                    active={active}
-                    highlighted={(s.status === "streaming" || s.status === "done") && !active}
-                    animateIn={chatsReady}
-                    onSelect={() => onSelectBuilderChat(s.id)}
-                    onDelete={(e) => handleDeleteSession(e, s.id)}
-                  />
-                );
-              })}
-            </div>}
-          </section>
-        )}
+  const confirmDelete = () => {
+    if (!deleting) return;
+    const { id } = deleting;
+    deleteMutation.mutate(
+      { id },
+      {
+        onSuccess: () => {
+          utils.dashboards.list.invalidate();
+          onDeleted(id);
+          toast("Dashboard deleted");
+        },
+        onError: () => toast.error("Couldn't delete the dashboard"),
+      },
+    );
+  };
 
-        <section className={groupClass("api")}>
-          {renderGroupHeader("api", "API", <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M5.5 3.5L1.5 8L5.5 12.5M10.5 3.5L14.5 8L10.5 12.5" /></svg>, apiSessions.length)}
-          {openGroup === "api" && <div className="flex-1 min-h-0 overflow-y-auto scrollbar-none space-y-0.5">
-            {apiSessions.map(renderSessionRow)}
-          </div>}
-        </section>
-
-        <section className={groupClass("imported")}>
-          {renderGroupHeader("imported", "Imported", <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M8 2v8M4.5 6.5L8 10l3.5-3.5M2.5 13.5h11" /></svg>, importedSessions.length)}
-          {openGroup === "imported" && <div className="flex-1 min-h-0 overflow-y-auto scrollbar-none space-y-0.5">
-            <label
-              className={`mx-2 mb-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[11px] rounded border border-dashed cursor-pointer transition-colors ${
-                importDragActive
-                  ? "border-[#2b5ea7] bg-[#eaf0f8] text-[#2b5ea7]"
-                  : "border-[#d4d2cd] text-[#9c9890] hover:text-[#2b5ea7] hover:border-[#2b5ea7]"
-              }`}
-              {...importDropProps}
-            >
-              <input
-                type="file"
-                accept="image/png"
-                className="hidden"
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) importPng(f); e.target.value = ""; }}
-              />
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                <polyline points="17 8 12 3 7 8" />
-                <line x1="12" y1="3" x2="12" y2="15" />
-              </svg>
-              Import analysis image
-            </label>
-            {importError && <div className="mx-2 mb-1 text-[10px] text-[#b33a2a]">{importError}</div>}
-            {importedSessions.map(renderSessionRow)}
-          </div>}
-        </section>
-      </nav>
-
-      <div className="px-3 pb-2">
-        <button
-          onClick={() => onNavigate("settings")}
-          className={`w-full flex items-center gap-3 px-3 py-2 rounded-sm text-sm transition-colors ${
-            currentPage === "settings"
-              ? theme.navActive
-              : theme.navInactive
-          }`}
-        >
-          <span className="w-5 flex items-center justify-center shrink-0"><NavIcon page="settings" /></span>
-          Settings
-        </button>
-      </div>
-      <div className={`p-4 ${theme.sidebarFooter}`}>
-        <button
-          onClick={() => updateAvailable && setShowUpdateModal(true)}
-          className={`font-mono text-[10px] tracking-wider inline-flex items-center gap-1.5 ${
-            updateAvailable ? "cursor-pointer hover:text-[#2b5ea7]" : "cursor-default"
-          }`}
-        >
-          v{updateCheck.data?.currentVersion ?? __APP_VERSION__}
-          {updateAvailable ? (
-            <span className="w-2 h-2 rounded-full bg-[#2b5ea7] animate-pulse" />
-          ) : updateCheck.data && !updateCheck.isLoading ? (
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="text-[#2a7a4a]">
-              <path d="M2 5.5L4 7.5L8 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          ) : null}
-        </button>
-      </div>
-
-      <UpdateModal open={showUpdateModal} onClose={() => setShowUpdateModal(false)} />
-
-      <ConfirmDialog
-        open={confirmTarget !== null}
-        title={confirmTarget?.type === "session" ? "Delete session" : "Delete dashboard"}
-        message={
-          confirmTarget?.type === "session"
-            ? "Delete this chat session?"
-            : "Delete this dashboard and all its widgets?"
-        }
-        onConfirm={handleConfirmDelete}
-        onCancel={() => setConfirmTarget(null)}
-      />
-    </div>
+  return (
+    <>
+      <SidebarMenuItem>
+        <SidebarMenuButton isActive={active && !currentDashboardId} onClick={onOpen}>
+          <LayoutDashboard />
+          <span>Dashboard</span>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+      {active && (
+        <>
+          <SidebarMenuItem>
+            <SidebarMenuButton size="sm" className="pl-8 text-muted-foreground" onClick={onNew}>
+              <Plus />
+              <span>New dashboard</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          {dashboardsQuery.data?.map((d) => (
+            <SidebarMenuItem key={d.id}>
+              <SidebarMenuButton size="sm" className="pl-8" isActive={currentDashboardId === d.id} onClick={() => onSelect(d.id)}>
+                <span>{d.title}</span>
+              </SidebarMenuButton>
+              <DropdownMenu>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <DropdownMenuTrigger asChild>
+                      <SidebarMenuAction showOnHover aria-label={`More actions for ${d.title}`} className="[@media(hover:none)]:opacity-100">
+                        <MoreHorizontal />
+                      </SidebarMenuAction>
+                    </DropdownMenuTrigger>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">More actions</TooltipContent>
+                </Tooltip>
+                <DropdownMenuContent side="right" align="start" className="w-48">
+                  <DropdownMenuItem variant="destructive" onSelect={() => setDeleting(d)}>Delete</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </SidebarMenuItem>
+          ))}
+        </>
+      )}
+      <AlertDialog open={deleting !== null} onOpenChange={(open) => !open && setDeleting(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this dashboard?</AlertDialogTitle>
+            <AlertDialogDescription>
+              "{deleting?.title}" and all its widgets are removed. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={confirmDelete}>Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }

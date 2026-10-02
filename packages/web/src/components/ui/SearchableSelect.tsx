@@ -1,5 +1,11 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { createPortal } from "react-dom";
+import { useMemo, useState, type ReactNode } from "react";
+import { Check, ChevronDown, Star } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 
 interface Option {
   value: string;
@@ -17,11 +23,12 @@ interface SearchableSelectProps {
   storageKey?: string;
   /** When true, the dropdown expands to fit content instead of matching button width. */
   fitContent?: boolean;
-  /** When true, the button is non-interactive and visually dimmed. */
   disabled?: boolean;
+  id?: string;
+  className?: string;
 }
 
-export function useStarred(storageKey: string | undefined): [Set<string>, (value: string) => void] {
+function useStarred(storageKey: string | undefined): [Set<string>, (value: string) => void] {
   const key = storageKey ? `tracer:starred:${storageKey}` : null;
   const [starred, setStarred] = useState<Set<string>>(() => {
     if (!key) return new Set();
@@ -46,51 +53,25 @@ export function useStarred(storageKey: string | undefined): [Set<string>, (value
   return [starred, toggle];
 }
 
-export function SearchableSelect({ options, value, onChange, placeholder = "Select...", storageKey, fitContent, disabled }: SearchableSelectProps) {
-  const [open, setOpen] = useState(false);
+interface SearchableOptionsProps {
+  options: Option[];
+  value: string;
+  onSelect: (value: string) => void;
+  storageKey?: string;
+  loading?: boolean;
+  searchLabel?: string;
+}
+
+/** Search box plus a starred-first option list, for use inside a PopoverContent. */
+export function SearchableOptions({ options, value, onSelect, storageKey, loading, searchLabel = "Search" }: SearchableOptionsProps) {
   const [search, setSearch] = useState("");
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
   const [starred, toggleStar] = useStarred(storageKey);
-  const [pos, setPos] = useState({ top: 0, left: 0, minWidth: 0 });
-
-  // Close on click outside the dropdown portal
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (buttonRef.current?.contains(e.target as Node)) return;
-      if (dropdownRef.current?.contains(e.target as Node)) return;
-      setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  // Compute position from button rect
-  const updatePos = useCallback(() => {
-    if (!buttonRef.current) return;
-    const rect = buttonRef.current.getBoundingClientRect();
-    setPos({ top: rect.bottom + 4, left: rect.left, minWidth: rect.width });
-  }, []);
-
-  useEffect(() => {
-    if (open) {
-      updatePos();
-      setSearch("");
-      requestAnimationFrame(() => inputRef.current?.focus());
-    }
-  }, [open, updatePos]);
-
-  const selected = options.find((o) => o.value === value);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     const matches = q
       ? options.filter((o) => o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q))
       : options;
-
     return [...matches].sort((a, b) => {
       const aS = starred.has(a.value) ? 0 : 1;
       const bS = starred.has(b.value) ? 0 : 1;
@@ -99,94 +80,105 @@ export function SearchableSelect({ options, value, onChange, placeholder = "Sele
     });
   }, [options, search, starred]);
 
-  // Scroll selected into view on open
-  useEffect(() => {
-    if (open && value && listRef.current) {
-      const el = listRef.current.querySelector(`[data-value="${CSS.escape(value)}"]`);
-      if (el) el.scrollIntoView({ block: "nearest" });
-    }
-  }, [open, value]);
-
-  const dropdown = open
-    ? createPortal(
-        <div
-          ref={dropdownRef}
-          className="fixed z-[100] bg-white border border-[#d4d2cd] rounded shadow-lg"
-          style={{ top: pos.top, left: pos.left, minWidth: pos.minWidth, width: fitContent ? "max-content" : pos.minWidth }}
-        >
-          <div className="p-1.5 border-b border-[#e8e6e1]">
-            <input
-              ref={inputRef}
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={`Search...`}
-              className="w-full px-2 py-1.5 text-xs text-[#2c2c2c] font-sans bg-[#f5f4f0] border border-[#e8e6e1] rounded focus:outline-none focus:border-[#2b5ea7] placeholder:text-[#9c9890]"
-              onKeyDown={(e) => {
-                if (e.key === "Escape") setOpen(false);
-                if (e.key === "Enter" && filtered.length > 0) {
-                  onChange(filtered[0].value);
-                  setOpen(false);
-                }
-              }}
-            />
-          </div>
-          <div ref={listRef} className="max-h-[280px] overflow-y-auto">
-            {filtered.length === 0 ? (
-              <div className="px-3 py-3 text-xs text-[#9c9890] text-center">No projects found</div>
-            ) : (
-              filtered.map((opt) => {
-                const isSelected = opt.value === value;
-                const isStarred = starred.has(opt.value);
-                return (
-                  <div
-                    key={opt.value}
-                    data-value={opt.value}
-                    className={`flex items-center gap-1.5 px-2 py-1.5 text-xs font-sans cursor-pointer transition-colors ${
-                      isSelected
-                        ? "bg-[#2b5ea7]/10 text-[#2b5ea7]"
-                        : "text-[#2c2c2c] hover:bg-[#f5f4f0]"
-                    }`}
-                    onClick={() => { onChange(opt.value); setOpen(false); }}
+  let body: ReactNode;
+  if (loading) body = <p className="px-3 py-3 text-center text-[13px] text-muted-foreground">Loading</p>;
+  else if (filtered.length === 0) body = <p className="px-3 py-3 text-center text-[13px] text-muted-foreground">No matches</p>;
+  else
+    body = (
+      <ul role="listbox" aria-label={searchLabel} className="max-h-72 overflow-y-auto p-1">
+        {filtered.map((opt) => {
+          const selected = opt.value === value;
+          const isStarred = starred.has(opt.value);
+          return (
+            <li key={opt.value} role="option" aria-selected={selected} className="group/opt flex items-center gap-0.5 rounded-sm hover:bg-accent">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={isStarred ? `Unstar ${opt.label}` : `Star ${opt.label}`}
+                    aria-pressed={isStarred}
+                    onClick={() => toggleStar(opt.value)}
+                    className={cn(
+                      "flex size-7 shrink-0 items-center justify-center rounded-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+                      isStarred ? "text-warning" : "text-muted-foreground/60 hover:text-muted-foreground",
+                    )}
                   >
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); toggleStar(opt.value); }}
-                      className={`shrink-0 w-4 h-4 flex items-center justify-center text-[10px] transition-colors ${
-                        isStarred ? "text-[#d4a017]" : "text-[#d4d2cd] hover:text-[#9c9890]"
-                      }`}
-                      title={isStarred ? "Unstar" : "Star to pin to top"}
-                    >
-                      {isStarred ? "★" : "☆"}
-                    </button>
-                    <span className={fitContent ? "whitespace-nowrap" : "truncate flex-1"}>{opt.label}</span>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>,
-        document.body,
-      )
-    : null;
+                    <Star className={cn("size-3.5", isStarred && "fill-current")} aria-hidden="true" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>{isStarred ? "Unstar" : "Star to pin to top"}</TooltipContent>
+              </Tooltip>
+              <button
+                type="button"
+                onClick={() => onSelect(opt.value)}
+                className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1.5 pr-2 text-left text-[13px] outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+              >
+                <span className="min-w-0 flex-1 truncate">{opt.label}</span>
+                {selected && <Check className="size-3.5 shrink-0 text-primary" aria-hidden="true" />}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    );
 
   return (
     <>
-      <button
-        ref={buttonRef}
-        type="button"
-        onClick={() => !disabled && setOpen(!open)}
-        disabled={disabled}
-        className="w-full bg-white border border-[#d4d2cd] rounded px-3 py-2 text-xs text-[#2c2c2c] font-sans text-left flex items-center justify-between focus:outline-none focus:border-[#2b5ea7] hover:border-[#b0ada6] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        <span className={selected ? "text-[#2c2c2c] truncate" : "text-[#9c9890]"}>
-          {selected ? (selected.displayLabel ?? selected.label) : placeholder}
-        </span>
-        <span className="text-[#9c9890] text-[10px] ml-2 shrink-0 transition-transform duration-200" style={{ transform: open ? "rotate(180deg)" : "rotate(0deg)" }}>
-          ▾
-        </span>
-      </button>
-      {dropdown}
+      <div className="border-b p-1.5">
+        <Input
+          autoFocus
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search"
+          aria-label={searchLabel}
+          className="h-8 text-[13px]"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && filtered.length > 0) {
+              e.preventDefault();
+              onSelect(filtered[0].value);
+            }
+          }}
+        />
+      </div>
+      {body}
     </>
+  );
+}
+
+export function SearchableSelect({ options, value, onChange, placeholder = "Select", storageKey, fitContent, disabled, id, className }: SearchableSelectProps) {
+  const [open, setOpen] = useState(false);
+  const selected = options.find((o) => o.value === value);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          id={id}
+          type="button"
+          variant="outline"
+          disabled={disabled}
+          className={cn("w-full justify-between bg-card px-2.5 font-normal", className)}
+        >
+          <span className={cn("truncate", !selected && "text-muted-foreground")}>
+            {selected ? (selected.displayLabel ?? selected.label) : placeholder}
+          </span>
+          <ChevronDown className="text-muted-foreground" aria-hidden="true" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className={cn("p-0", fitContent ? "w-auto max-w-[min(32rem,90vw)] min-w-(--radix-popover-trigger-width)" : "w-(--radix-popover-trigger-width)")}
+      >
+        <SearchableOptions
+          options={options}
+          value={value}
+          storageKey={storageKey}
+          onSelect={(v) => {
+            onChange(v);
+            setOpen(false);
+          }}
+        />
+      </PopoverContent>
+    </Popover>
   );
 }

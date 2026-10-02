@@ -1,31 +1,16 @@
-import type React from "react";
+import { ArrowDown, Loader2 } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { IconButton } from "./IconButton";
 
-/** Animated bouncing dots shown while waiting for a response. */
-export function ThinkingDots({ className }: { className: string }) {
+export function WorkingIndicator({ label = "Working", className }: { label?: string; className?: string }) {
   return (
-    <div className={className}>
-      <span className="inline-flex items-center gap-1">
-        {THINKING_DELAYS.map((delay) => (
-          <span
-            key={delay}
-            className="inline-block w-1.5 h-1.5 rounded-full bg-current"
-            style={THINKING_DOT_STYLES[delay]}
-          />
-        ))}
-      </span>
-    </div>
+    <p role="status" className={cn("flex items-center gap-2 text-[13px]/[18px] text-muted-foreground", className)}>
+      <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+      {label}
+    </p>
   );
 }
-const THINKING_DELAYS = [0, 150, 300] as const;
-const THINKING_DOT_STYLES: Record<number, React.CSSProperties> = {
-  0:   { animation: "dot-bounce 1.2s ease-in-out infinite", animationDelay: "0ms" },
-  150: { animation: "dot-bounce 1.2s ease-in-out infinite", animationDelay: "150ms" },
-  300: { animation: "dot-bounce 1.2s ease-in-out infinite", animationDelay: "300ms" },
-};
 
-/**
- * Floating button that appears when the user scrolls away from the bottom.
- */
 export function ScrollToBottomButton({
   isAtBottom,
   scrollToBottom,
@@ -34,18 +19,14 @@ export function ScrollToBottomButton({
   scrollToBottom: (opts?: { animation?: "instant" | "smooth" }) => void;
 }) {
   if (isAtBottom) return null;
-
   return (
-    <button
-      type="button"
+    <IconButton
+      label="Scroll to bottom"
+      variant="outline"
+      className="absolute bottom-full left-1/2 mb-1.5 -translate-x-1/2 rounded-full bg-card shadow-sm animate-in fade-in duration-150"
       onClick={() => scrollToBottom({ animation: "instant" })}
-      className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 bg-[#2b5ea7] text-white rounded-full p-2 shadow-lg hover:bg-[#1e4a8a] transition-colors"
-      title="Scroll to bottom"
-      aria-label="Scroll to bottom"
     >
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-        <polyline points="6 9 12 15 18 9" />
-      </svg>
-    </button>
+      <ArrowDown />
+    </IconButton>
   );
 }

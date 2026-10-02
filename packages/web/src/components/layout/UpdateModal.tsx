@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { theme } from "../../lib/theme";
+import { Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { trpc } from "../../lib/trpc";
 import { WEB_CONFIG } from "../../lib/config";
-import { Modal } from "../ui/Modal";
 
 interface UpdateModalProps {
   open: boolean;
@@ -19,18 +20,14 @@ async function waitForServerThenReload() {
     try {
       const res = await fetch("/api/trpc/update.check", { cache: "no-store" });
       if (res.ok) break;
-    } catch { /* server still down — keep polling */ }
+    } catch { /* server still down */ }
     await delay(WEB_CONFIG.updateRestartPollMs);
   }
   window.location.reload();
 }
 
 function CommandBlock({ command }: { command: string }) {
-  return (
-    <code className="block mt-2 p-2 bg-[#1a1a1a] rounded font-mono text-xs text-[#e0e0e0]">
-      {command}
-    </code>
-  );
+  return <code className="block rounded-md border bg-muted px-3 py-2 font-mono text-xs text-foreground select-all">{command}</code>;
 }
 
 export function UpdateModal({ open, onClose }: UpdateModalProps) {
@@ -42,9 +39,7 @@ export function UpdateModal({ open, onClose }: UpdateModalProps) {
 
   const data = updateCheck.data;
   const canSelfUpdate = data?.canSelfUpdate === true;
-  // Match the command that actually updates this install method: re-run npx for
-  // an ephemeral copy, pull+rebuild for a source checkout, otherwise re-install
-  // globally (`npm update -g` won't reliably upgrade across versions).
+  // npx re-runs an ephemeral copy, a source checkout pulls and rebuilds; `npm update -g` won't reliably cross versions.
   const manualCommand =
     data?.method === "npx"
       ? "npx tracer-sh@latest"
@@ -55,8 +50,7 @@ export function UpdateModal({ open, onClose }: UpdateModalProps) {
   const perform = trpc.update.perform.useMutation({
     onSuccess: (res) => {
       if (res.ok) {
-        // The server installs the new version and restarts; the launcher brings
-        // it back up. Wait for it to answer again, then reload the new UI build.
+        // The launcher restarts the server; reload once it answers to pick up the new UI build.
         setRestarting(true);
         void waitForServerThenReload();
       } else {
@@ -69,52 +63,50 @@ export function UpdateModal({ open, onClose }: UpdateModalProps) {
   const updating = perform.isPending || restarting;
 
   return (
-    <Modal open={open} onClose={updating ? () => {} : onClose}>
-      <div className={theme.dialogTitle}>Update Available</div>
-      <div className="text-sm text-[#666666] mb-4 space-y-1">
-        <p>
-          Current version: <span className="font-mono">{data?.currentVersion}</span>
-        </p>
-        <p>
-          Latest version: <span className="font-mono">{data?.latestVersion}</span>
-        </p>
-      </div>
+    <Dialog open={open} onOpenChange={(next) => !next && !updating && onClose()}>
+      <DialogContent showCloseButton={!updating}>
+        <DialogHeader>
+          <DialogTitle>Update available</DialogTitle>
+          <DialogDescription>
+            Tracer <span className="font-mono text-foreground">{data?.latestVersion}</span> is out. You have{" "}
+            <span className="font-mono text-foreground">{data?.currentVersion}</span>.
+          </DialogDescription>
+        </DialogHeader>
 
-      {restarting ? (
-        <div className="text-sm text-[#666666] mb-4">
-          <p>Installed. Restarting Tracer — this page will reload automatically.</p>
-        </div>
-      ) : canSelfUpdate ? (
-        <>
-          {error && (
-            <div className="text-sm text-[#b3261e] mb-4">
-              <p>Update failed: {error}</p>
-              <p className="mt-2 text-[#666666]">You can update manually instead:</p>
+        {restarting ? (
+          <p role="status" className="flex items-center gap-2 text-sm text-ink-2">
+            <Loader2 className="size-4 animate-spin text-muted-foreground" aria-hidden="true" />
+            Installed. Restarting Tracer. This page reloads on its own.
+          </p>
+        ) : canSelfUpdate ? (
+          error && (
+            <div role="alert" className="space-y-2 text-sm">
+              <p className="text-destructive">Update failed: {error}</p>
+              <p className="text-muted-foreground">You can update manually instead:</p>
               <CommandBlock command={manualCommand} />
             </div>
-          )}
-          <div className="flex justify-end gap-2">
-            <button onClick={onClose} className={theme.secondaryBtn} disabled={updating}>
-              Close
-            </button>
-            <button onClick={() => { setError(null); perform.mutate(); }} className={theme.primaryBtn} disabled={updating}>
-              {updating ? "Updating…" : "Update now"}
-            </button>
-          </div>
-        </>
-      ) : (
-        <>
-          <div className="text-sm text-[#666666] mb-4">
-            <p>This instance runs from a source checkout. Update it with:</p>
+          )
+        ) : (
+          <div className="space-y-2 text-sm">
+            <p className="text-muted-foreground">This instance runs from a source checkout. Update it with:</p>
             <CommandBlock command={manualCommand} />
           </div>
-          <div className="flex justify-end">
-            <button onClick={onClose} className={theme.secondaryBtn}>
+        )}
+
+        {!restarting && (
+          <DialogFooter>
+            <Button variant="outline" onClick={onClose} disabled={updating}>
               Close
-            </button>
-          </div>
-        </>
-      )}
-    </Modal>
+            </Button>
+            {canSelfUpdate && (
+              <Button onClick={() => { setError(null); perform.mutate(); }} disabled={updating}>
+                {updating && <Loader2 className="animate-spin" aria-hidden="true" />}
+                {updating ? "Updating" : "Update now"}
+              </Button>
+            )}
+          </DialogFooter>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }

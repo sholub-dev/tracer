@@ -1,0 +1,389 @@
+import { memo, useRef } from "react";
+import { AlertCircle, ChevronRight, ClipboardCheck, Copy, History, LayoutGrid, Timer, type LucideIcon } from "lucide-react";
+import { Streamdown } from "streamdown";
+import { CLIENT_TOOL_NAMES, type ProgressPart } from "@tracer-sh/shared";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { cn } from "@/lib/utils";
+import { MD_CONTROLS, MD_LINK_SAFETY } from "../../lib/markdown";
+import ResultView, { JsonTree } from "../charts/ResultView";
+import { useProgress, type ProgressStore } from "../../lib/progress-store";
+import { MonitorSavedCard, type MonitorSavedOutput } from "../monitors/MonitorSavedCard";
+import { ProviderDot } from "../common/ProviderDot";
+import { WorkingIndicator } from "./ChatIndicators";
+import { IconButton } from "./IconButton";
+import { copyText } from "./MessageActions";
+import { ReasoningBlock } from "./ReasoningBlock";
+import { ANSWER_PROSE_COMPACT } from "./prose";
+import { providerLabel } from "../../lib/providers";
+
+export interface ToolPart {
+  type: string;
+  toolCallId?: string;
+  state?: string;
+  output?: unknown;
+  errorText?: string;
+  input?: Record<string, unknown>;
+}
+
+interface SubAgentOutput {
+  analysis?: string;
+  queries?: Array<{ query: string; results: unknown }>;
+  parts?: ProgressPart[];
+  error?: string;
+}
+
+const SMALL_TOOLS: Record<string, { done: string; loading: string; errorLabel: string; icon: LucideIcon }> = {
+  [CLIENT_TOOL_NAMES.CREATE_WIDGET]: { done: "Widget created", loading: "Creating widget", errorLabel: "Widget error", icon: LayoutGrid },
+  [CLIENT_TOOL_NAMES.UPDATE_WIDGET]: { done: "Widget updated", loading: "Updating widget", errorLabel: "Widget error", icon: LayoutGrid },
+  [CLIENT_TOOL_NAMES.DELETE_WIDGET]: { done: "Widget deleted", loading: "Deleting widget", errorLabel: "Widget error", icon: LayoutGrid },
+  "tool-read_past_session": { done: "Read a past investigation", loading: "Reading a past investigation", errorLabel: "Past investigation not available", icon: History },
+  "tool-report_issue_status": { done: "Reported alert status", loading: "Reporting alert status", errorLabel: "Alert status not recorded", icon: ClipboardCheck },
+  "tool-report_alert_summary": { done: "Reported alert summary", loading: "Reporting alert summary", errorLabel: "Alert summary not recorded", icon: ClipboardCheck },
+  "tool-set_timer": { done: "Follow-up timer set", loading: "Setting follow-up timer", errorLabel: "Follow-up timer not set", icon: Timer },
+};
+
+const MONITOR_TOOLS = new Set<string>([CLIENT_TOOL_NAMES.SAVE_MONITOR, CLIENT_TOOL_NAMES.DELETE_MONITOR]);
+
+// Bare names are from older sessions; GCP's MCP tools have dynamic names, so anything else is GCP.
+const PROVIDER_BY_TOOL: Record<string, string> = {
+  "tool-execute_nrql": "newrelic",
+  "tool-nrql": "newrelic",
+  "tool-newrelic": "newrelic",
+  "tool-execute_hogql": "posthog",
+  "tool-hogql": "posthog",
+  "tool-posthog": "posthog",
+  "tool-get_jira_issue": "jira",
+  "tool-add_jira_comment": "jira",
+};
+
+export const isMonitorTool = (type: string) => MONITOR_TOOLS.has(type);
+
+export const providerOf = (type: string) => PROVIDER_BY_TOOL[type] ?? "gcp";
+
+/** Parts that never render: the analysis marker, removed propose_monitor drafts, and a recorded alert summary (shown as the panel). */
+export function isHiddenPart(part: { type: string; state?: string }) {
+  return (
+    part.type === CLIENT_TOOL_NAMES.BEGIN_ANALYSIS ||
+    part.type === "tool-propose_monitor" ||
+    part.type === "step-start" ||
+    (part.type === "tool-report_alert_summary" && part.state === "output-available")
+  );
+}
+
+export function isProviderTool(type: string) {
+  return type.startsWith("tool-") && !(type in SMALL_TOOLS) && !MONITOR_TOOLS.has(type) && !isHiddenPart({ type });
+}
+
+function isSubAgentOutput(output: unknown): output is SubAgentOutput {
+  if (!output || typeof output !== "object" || Array.isArray(output)) return false;
+  return "parts" in output || "queries" in output || "analysis" in output || "error" in output;
+}
+
+function legacyToParts(output: SubAgentOutput): ProgressPart[] {
+  const parts: ProgressPart[] = (output.queries ?? []).map((q) => ({ type: "query", query: q.query, results: q.results }));
+  if (output.analysis) parts.push({ type: "text", content: output.analysis });
+  return parts;
+}
+
+/** Ordered progress parts of a provider tool: live progress first, then the saved output. */
+function stepParts(part: ToolPart, progress: ProgressPart[] | undefined): ProgressPart[] {
+  const output = part.state === "output-available" ? part.output : undefined;
+  if (progress?.length) return progress;
+  if (isSubAgentOutput(output)) return output.parts?.length ? output.parts : legacyToParts(output);
+  return [];
+}
+
+export function stepQueryCount(part: ToolPart, store: ProgressStore): number {
+  return stepParts(part, store.getSnapshot(part.toolCallId ?? "")?.parts).filter((p) => p.type === "query").length;
+}
+
+function stepTitle(part: ToolPart, provider: string): string {
+  const task = part.input?.task;
+  if (typeof task === "string" && task) return task;
+  if (part.type === "tool-get_jira_issue") return `Jira issue ${String(part.input?.issueKey ?? "")}`.trim();
+  if (part.type === "tool-add_jira_comment") return `Comment on ${String(part.input?.issueKey ?? "Jira")}`;
+  if (provider === "gcp") return part.type.slice(5).replace(/_/g, " ");
+  return `${providerLabel(provider)} query`;
+}
+
+const QueryBlock = memo(function QueryBlock({ query }: { query: string }) {
+  return (
+    <div className="relative">
+      <pre className="max-h-64 overflow-auto rounded-md border bg-background py-2.5 pr-11 pl-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-ink-2">
+        <code>{query}</code>
+      </pre>
+      <IconButton label="Copy query" size="icon-xs" className="absolute top-1.5 right-1.5 text-muted-foreground" onClick={() => copyText(query, "Query copied")}>
+        <Copy />
+      </IconButton>
+    </div>
+  );
+});
+
+function ErrorLine({ children }: { children: string }) {
+  return (
+    <p role="alert" className="flex items-start gap-2 text-[13px]/[18px] text-destructive">
+      <AlertCircle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+      {children}
+    </p>
+  );
+}
+
+export function Narration({ content, isAnimating }: { content: string; isAnimating: boolean }) {
+  if (!content.trim()) return null;
+  return (
+    <div className="max-w-[68ch] text-sm leading-relaxed text-ink-2">
+      <Streamdown isAnimating={isAnimating} controls={MD_CONTROLS} linkSafety={MD_LINK_SAFETY}>{content}</Streamdown>
+    </div>
+  );
+}
+
+function ProgressItems({ parts, isAnimating }: { parts: ProgressPart[]; isAnimating: boolean }) {
+  let inAnalysis = false;
+  return (
+    <>
+      {parts.map((p, i) => {
+        if (p.type === "analysis-start") {
+          inAnalysis = true;
+          return null;
+        }
+        if (p.type === "query") {
+          return (
+            <div key={i} className="space-y-2">
+              {p.query && <QueryBlock query={p.query} />}
+              <ResultView data={p.results} />
+            </div>
+          );
+        }
+        if (p.type === "reasoning") return <ReasoningBlock key={i} content={p.content} isAnimating={isAnimating} />;
+        if (p.type === "tool-call") return isAnimating ? <WorkingIndicator key={i} label={`Running ${p.toolName.replace(/_/g, " ")}`} /> : null;
+        if (inAnalysis && p.type === "text") {
+          return (
+            <div key={i} className={ANSWER_PROSE_COMPACT}>
+              <Streamdown isAnimating={isAnimating} controls={MD_CONTROLS} linkSafety={MD_LINK_SAFETY}>{p.content}</Streamdown>
+            </div>
+          );
+        }
+        return <Narration key={i} content={p.content} isAnimating={isAnimating} />;
+      })}
+    </>
+  );
+}
+
+interface JiraIssueView {
+  key: string;
+  summary: string;
+  description: string | null;
+  status: string;
+  issueType: string | null;
+  priority: string | null;
+  assignee: string | null;
+  reporter: string | null;
+  labels?: string[];
+  components?: string[];
+  fixVersions?: string[];
+  created: string | null;
+  updated: string | null;
+  dueDate: string | null;
+  resolution: string | null;
+  comments?: Array<{ id: string | null; author: string | null; body: string | null; created: string | null }>;
+}
+
+function jiraIssueOf(o: unknown): JiraIssueView | null {
+  const issue = o && typeof o === "object" && "issue" in o ? (o as { issue: unknown }).issue : null;
+  return issue && typeof issue === "object" ? (issue as JiraIssueView) : null;
+}
+
+function jiraCommentUrl(o: unknown): string | null {
+  const r = (o ?? {}) as { posted?: unknown; url?: unknown };
+  return r.posted === true && typeof r.url === "string" ? r.url : null;
+}
+
+const jiraDate = (s: string | null) => (s ? s.slice(0, 10) : null);
+
+const JiraIssueCard = memo(function JiraIssueCard({ issue }: { issue: JiraIssueView }) {
+  // Older chats stored a slimmer issue shape, so every list may be missing.
+  const labels = issue.labels ?? [];
+  const comments = issue.comments ?? [];
+  const rows = ([
+    ["Type", issue.issueType],
+    ["Priority", issue.priority],
+    ["Assignee", issue.assignee],
+    ["Reporter", issue.reporter],
+    ["Resolution", issue.resolution],
+    ["Due", jiraDate(issue.dueDate)],
+    ["Created", jiraDate(issue.created)],
+    ["Updated", jiraDate(issue.updated)],
+    ["Components", issue.components?.length ? issue.components.join(", ") : null],
+    ["Fix versions", issue.fixVersions?.length ? issue.fixVersions.join(", ") : null],
+  ] as Array<[string, string | null]>).filter((r): r is [string, string] => !!r[1]);
+
+  return (
+    <div className="space-y-3 rounded-lg border bg-card p-4 text-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-mono text-xs text-jira">{issue.key}</span>
+        <span className="inline-flex h-5 items-center rounded-md bg-muted px-2 text-xs font-medium text-ink-2">{issue.status}</span>
+      </div>
+      <p className="font-medium text-pretty">{issue.summary}</p>
+      {rows.length > 0 && (
+        <dl className="grid grid-cols-[6rem_1fr] gap-x-4 gap-y-1 text-[13px]/[18px] sm:grid-cols-[6rem_1fr_6rem_1fr]">
+          {rows.map(([k, v]) => (
+            <div key={k} className="contents">
+              <dt className="text-muted-foreground">{k}</dt>
+              <dd className="min-w-0 truncate">{v}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {labels.length > 0 && (
+        <ul className="flex flex-wrap gap-1" aria-label="Labels">
+          {labels.map((l) => (
+            <li key={l} className="rounded-md bg-muted px-1.5 py-0.5 text-xs text-ink-2">{l}</li>
+          ))}
+        </ul>
+      )}
+      {issue.description && <p className="border-t pt-3 whitespace-pre-wrap text-ink-2">{issue.description}</p>}
+      {comments.length > 0 && (
+        <div className="space-y-2 border-t pt-3">
+          <p className="text-xs text-muted-foreground">Comments ({comments.length})</p>
+          {comments.map((c, i) => (
+            <div key={c.id ?? i} className="text-[13px]/[18px]">
+              <p className="text-muted-foreground">
+                <span className="font-medium text-foreground">{c.author ?? "Unknown"}</span>
+                {jiraDate(c.created) && <> · {jiraDate(c.created)}</>}
+              </p>
+              {c.body && <p className="whitespace-pre-wrap text-ink-2">{c.body}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+});
+
+function StepBody({ part, progressStore }: { part: ToolPart; progressStore: ProgressStore }) {
+  const progress = useProgress(progressStore, part.toolCallId);
+  const complete = part.state === "output-available";
+  const output = complete ? part.output : undefined;
+
+  if (part.state === "output-error") return <ErrorLine>{part.errorText ?? "The query failed"}</ErrorLine>;
+  if (isSubAgentOutput(output) && output.error) return <ErrorLine>{output.error}</ErrorLine>;
+
+  if (complete && part.type === "tool-get_jira_issue") {
+    const issue = jiraIssueOf(output);
+    if (issue) return <JiraIssueCard issue={issue} />;
+  }
+  if (complete && part.type === "tool-add_jira_comment") {
+    const url = jiraCommentUrl(output);
+    if (url) {
+      return (
+        <p className="text-sm text-ink-2">
+          Comment posted.{" "}
+          <a href={url} target="_blank" rel="noopener noreferrer" className="text-primary underline-offset-4 hover:underline">
+            View in Jira
+          </a>
+        </p>
+      );
+    }
+  }
+
+  const parts = stepParts(part, progress?.parts);
+  if (parts.length > 0 || !complete) {
+    const query = typeof part.input?.query === "string" ? part.input.query : null;
+    return (
+      <>
+        {parts.length === 0 && query && <QueryBlock query={query} />}
+        <ProgressItems parts={parts} isAnimating={!complete} />
+        {!complete && <WorkingIndicator label={`Querying ${providerLabel(providerOf(part.type))}`} />}
+      </>
+    );
+  }
+
+  // Raw outputs: GCP MCP results and pre-progress sessions.
+  const query = typeof part.input?.query === "string" ? part.input.query : part.input && Object.keys(part.input).length ? JSON.stringify(part.input, null, 2) : null;
+  return (
+    <>
+      {query && <QueryBlock query={query} />}
+      {output != null && <ResultView data={output} />}
+    </>
+  );
+}
+
+type StepProps = { part: ToolPart; progressStore: ProgressStore };
+
+// The AI SDK clones the streaming message per chunk, so part identity changes even when nothing read here did.
+function stepPropsEqual(prev: StepProps, next: StepProps): boolean {
+  if (prev.progressStore !== next.progressStore) return false;
+  const a = prev.part;
+  const b = next.part;
+  if (a === b) return true;
+  if (a.toolCallId !== b.toolCallId || a.type !== b.type || a.state !== b.state) return false;
+  if (a.state === "output-available" || a.state === "output-error") return true;
+  return a.output === b.output && a.errorText === b.errorText && a.input?.task === b.input?.task && a.input?.query === b.input?.query;
+}
+
+export const ProviderStep = memo(function ProviderStep({ part, progressStore }: StepProps) {
+  const provider = providerOf(part.type);
+  return (
+    <li className="animate-in fade-in duration-200">
+      <div className="flex items-center gap-2">
+        <ProviderDot provider={provider} />
+        <span className="sr-only">{providerLabel(provider)}:</span>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium">{stepTitle(part, provider)}</span>
+      </div>
+      <div className="mt-2 ml-4 space-y-2">
+        <StepBody part={part} progressStore={progressStore} />
+      </div>
+    </li>
+  );
+}, stepPropsEqual);
+
+function smallToolLabel(part: ToolPart, spec: (typeof SMALL_TOOLS)[string]): string {
+  const output = (part.output ?? {}) as Record<string, unknown>;
+  if ("error" in output) return `${spec.errorLabel}: ${String(output.error)}`;
+  if ("cancelled" in output) return "Follow-up timer cancelled";
+  const note = typeof part.input?.note === "string" && part.input.note ? `: ${part.input.note}` : "";
+  if (typeof output.dueAt === "string") return `${spec.done} for ${output.dueAt}${note}`;
+  if (part.type === "tool-report_issue_status" && Array.isArray(part.input?.issues)) {
+    const statuses = [...new Set((part.input.issues as Array<{ status?: string }>).map((i) => i.status).filter(Boolean))];
+    if (statuses.length) return `${spec.done}: ${statuses.join(", ")}`;
+  }
+  return spec.done;
+}
+
+/** Monitor saves, small tool lines (timer, widgets, triage reports) and anything else that is not a provider query. */
+export const OtherToolPart = memo(function OtherToolPart({ part }: { part: ToolPart }) {
+  // Outputs present on mount come from history, not a save that just happened.
+  const savedLive = useRef(part.state !== "output-available").current;
+
+  if (MONITOR_TOOLS.has(part.type)) {
+    if (part.state === "output-available") return <MonitorSavedCard output={(part.output ?? {}) as MonitorSavedOutput} fresh={savedLive} />;
+    if (part.state === "output-error") return <ErrorLine>{part.errorText ?? "Monitor save failed"}</ErrorLine>;
+    return <WorkingIndicator label="Working on the monitor" />;
+  }
+
+  const spec = SMALL_TOOLS[part.type];
+  if (!spec) return null;
+  if (part.state === "output-error") return <ErrorLine>{`${spec.errorLabel}: ${part.errorText ?? "failed"}`}</ErrorLine>;
+  if (part.state !== "output-available") return <WorkingIndicator label={spec.loading} />;
+  const failed = !!part.output && typeof part.output === "object" && "error" in part.output;
+  const Icon = failed ? AlertCircle : spec.icon;
+  return (
+    <Collapsible>
+      <CollapsibleTrigger
+        className={cn(
+          "group/trigger -ml-1.5 flex max-w-full items-start gap-2 rounded-md px-1.5 py-1 text-left text-[13px]/[18px] outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50",
+          failed ? "text-destructive" : "text-ink-2",
+        )}
+      >
+        <Icon className={cn("mt-0.5 size-3.5 shrink-0", !failed && "text-muted-foreground")} aria-hidden="true" />
+        <span className="min-w-0">{smallToolLabel(part, spec)}</span>
+        <ChevronRight className="mt-0.5 size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 group-data-[state=open]/trigger:rotate-90" aria-hidden="true" />
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="mt-1 ml-4 rounded-md border bg-background px-3 py-2 font-mono text-xs">
+          <JsonTree data={part.output} />
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+});

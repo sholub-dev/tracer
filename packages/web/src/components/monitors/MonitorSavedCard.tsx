@@ -1,7 +1,8 @@
 import { memo, useEffect } from "react";
-import { theme } from "../../lib/theme";
+import { AlertCircle, CircleCheck } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import { trpc } from "../../lib/trpc";
-import { Badge } from "../ui/Badge";
 
 export interface MonitorSavedOutput {
   monitorId?: string;
@@ -29,26 +30,31 @@ export const MonitorSavedCard = memo(function MonitorSavedCard({ output, fresh }
 
   if (output.error || !monitorId) {
     return (
-      <div className="my-3">
-        <div className={theme.toolLabel}>Monitor</div>
-        <div className={theme.resultErrorMessage}>{output.error ?? "Monitor was not saved"}</div>
+      <div role="alert" className="flex items-center gap-2.5 rounded-lg border border-destructive/25 bg-destructive-tint px-3 py-2.5 text-sm text-destructive">
+        <AlertCircle className="size-4 shrink-0" aria-hidden="true" />
+        {output.error ?? "Monitor was not saved"}
       </div>
     );
   }
 
+  const facts = [
+    output.run !== undefined && `Run ${output.run ? "on" : "off"}`,
+    output.alert !== undefined && `Alert ${output.alert ? "on" : "off"}`,
+    output.sampleValue !== undefined && `Sample ${output.sampleValue}`,
+  ].filter(Boolean);
+
   return (
-    <div className="my-2 flex items-center gap-3 font-sans text-xs text-[#666666]">
-      <span title={output.name} className="min-w-0 truncate text-[#2c2c2c]">
-        {output.deleted ? "Deleted" : output.created ? "Created" : "Updated"} monitor "{output.name}"
+    <div className="flex items-center gap-2.5 rounded-lg border bg-card px-3 py-2.5 animate-in fade-in duration-200">
+      <CircleCheck className="size-4 shrink-0 text-success" aria-hidden="true" />
+      <span className="min-w-0 flex-1">
+        <span title={output.name} className="block truncate text-sm font-medium">
+          {output.deleted ? "Deleted" : output.created ? "Created" : "Updated"} "{output.name}"
+        </span>
+        {facts.length > 0 && <span className="block truncate text-xs text-muted-foreground tabular-nums">{facts.join(" · ")}</span>}
       </span>
-      {output.run !== undefined && <span className="shrink-0">Run {output.run ? "on" : "off"}</span>}
-      {output.alert !== undefined && <span className="shrink-0">Alert {output.alert ? "on" : "off"}</span>}
-      {output.sampleValue !== undefined && (
-        <span className="shrink-0">Sample <span className="font-mono text-[#444444]">{output.sampleValue}</span></span>
-      )}
       {output.wouldTrigger !== undefined && (
-        <Badge variant={output.wouldTrigger ? "error" : "success"}>
-          {output.wouldTrigger ? "Would fire now" : "Would not fire"}
+        <Badge className={cn("rounded-md", output.wouldTrigger ? "bg-destructive-tint text-destructive" : "bg-muted text-ink-2")}>
+          {output.wouldTrigger ? "Would fire now" : "Would not fire now"}
         </Badge>
       )}
     </div>

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { trpc } from "../../lib/trpc";
-import { theme } from "../../lib/theme";
+import { Loader2 } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useContainerSize } from "../../lib/hooks";
-import { Spinner } from "../ui/Spinner";
 import ResultView from "./ResultView";
 import type { Threshold } from "./ChartView";
 
@@ -62,16 +62,14 @@ export function QueryChart({ provider, query, height, className, refreshKey = 0,
       style={growWithLegend ? { minHeight: showSpinner ? height : undefined } : { height, ...(height ? {} : { flex: 1, minHeight: 0 }) }}
     >
       {showOverlay && (
-        <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/60">
-          <Spinner size="sm" />
+        <div role="status" aria-label="Loading" className="absolute inset-0 z-10 flex items-center justify-center bg-background/60">
+          <Loader2 className="size-4 animate-spin text-muted-foreground" />
         </div>
       )}
       {showSpinner ? (
-        <div className="flex items-center justify-center h-full">
-          <Spinner size="sm" />
-        </div>
+        <Skeleton role="status" aria-label="Loading" className="h-full w-full" style={growWithLegend ? { height } : undefined} />
       ) : error ? (
-        <div className={`text-xs ${theme.errorText} p-2`}>{error}</div>
+        <div role="alert" className="p-2 text-[13px] leading-[18px] text-destructive">{error}</div>
       ) : (
         <ResultView
           data={data}

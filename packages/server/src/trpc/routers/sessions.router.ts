@@ -77,14 +77,13 @@ export const sessionsRouter = router({
       };
     }),
 
-  /** The session's follow-up timer; `fireAt` is null while its wake-up is running. */
+  /** The session's pending follow-up timer; a fired one is not shown. */
   timer: publicProcedure
     .input(z.object({ id: z.string() }))
     .query(({ ctx, input }) => {
       const row = ctx.db.select({ fireAt: sessionTimers.fireAt, note: sessionTimers.note })
         .from(sessionTimers).where(eq(sessionTimers.sessionId, input.id)).get();
-      // A wake-up cut off by a restart leaves a fired row behind.
-      return row && (row.fireAt !== null || ctx.activeStreams.has(input.id)) ? row : null;
+      return row?.fireAt ? { fireAt: row.fireAt, note: row.note } : null;
     }),
 
   getCost: publicProcedure

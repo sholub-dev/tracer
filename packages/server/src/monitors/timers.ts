@@ -29,7 +29,6 @@ export async function fireDueTimers(context: Context, start = startAgentSession)
       continue;
     }
     db.update(sessionTimers).set({ fireAt: null }).where(eq(sessionTimers.sessionId, sessionId)).run();
-    sessionChanged(sessionId);
     started++;
     let extras: Wakeup | undefined;
     try {

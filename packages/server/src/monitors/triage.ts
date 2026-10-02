@@ -109,7 +109,7 @@ export function recordIssues(db: Db, ids: { monitorId: string; triggerId: string
 const issueList = (issues: { issueId: string; conditionName: string; title: string }[]) =>
   issues.map((i) => `- ${i.issueId}: ${i.conditionName || "unknown condition"} | ${i.title}`);
 
-// Shown to the agent so it can explain, in later chat turns too, what its report does in New Relic.
+// In the tool result too, so later chat turns can explain what the report did in New Relic.
 export const TRIAGE_EFFECT = "Alert triage is on: after this run Tracer acts on these issues from your report_issue_status. Stopped: Tracer acks and closes the issue in New Relic, which closes its JSM alert. Ongoing or recurring: left open and followed up if you set a timer. Unknown: left open and people are pinged.";
 const REPORT_INSTRUCTION = "call report_issue_status once with the severity and, for each issue id above, its status: stopped, ongoing, recurring or unknown.";
 const FOLLOW_UP_INSTRUCTION = `If any issue is ongoing or recurring, call set_timer with ${CONFIG.timerMinMinutes} minutes: while an incident is live, checking too often is better than waiting too long. Without a timer it is left open.`;
@@ -120,7 +120,6 @@ export function issuesPrompt(open: AiIssue[]): string[] {
     "",
     "New Relic issues of this firing that are still open:",
     ...issueList(open.map((i) => ({ issueId: i.issueId, conditionName: conditionOf(i), title: titleOf(i) }))),
-    TRIAGE_EFFECT,
     `Before report_alert_summary, ${REPORT_INSTRUCTION} Base it on the data up to now.`,
     FOLLOW_UP_INSTRUCTION,
   ];
@@ -371,7 +370,6 @@ export async function wakeupExtras(context: Context, sessionId: string): Promise
       "",
       "New Relic issues still being followed up:",
       ...issueList(active),
-      TRIAGE_EFFECT,
       `Look at the data since the last check only, with the fewest queries possible. Then ${REPORT_INSTRUCTION}`,
       FOLLOW_UP_INSTRUCTION,
     ],

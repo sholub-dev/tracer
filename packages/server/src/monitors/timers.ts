@@ -6,6 +6,7 @@ import { CONFIG } from "../config.js";
 import { startAgentSession } from "../agents/start-session.js";
 import { formatLocalTime, getTimezone } from "../lib/current-context.js";
 import { wakeupExtras, type Wakeup } from "./triage.js";
+import { sessionChanged } from "../lib/session-events.js";
 
 /** Runs each scheduler tick: wakes the sessions whose follow-up timer is due. */
 export async function fireDueTimers(context: Context, start = startAgentSession): Promise<void> {
@@ -19,13 +20,16 @@ export async function fireDueTimers(context: Context, start = startAgentSession)
   for (const { timer, kind } of due) {
     if (started >= CONFIG.timerMaxWakeupsPerTick) break;
     const { sessionId } = timer;
-    const retryLater = () => db.update(sessionTimers).set({ fireAt: unixNow() + CONFIG.timerBusyRetrySeconds })
-      .where(eq(sessionTimers.sessionId, sessionId)).run();
+    const retryLater = () => {
+      db.update(sessionTimers).set({ fireAt: unixNow() + CONFIG.timerBusyRetrySeconds }).where(eq(sessionTimers.sessionId, sessionId)).run();
+      sessionChanged(sessionId);
+    };
     if (context.activeStreams.has(sessionId)) {
       retryLater();
       continue;
     }
     db.update(sessionTimers).set({ fireAt: null }).where(eq(sessionTimers.sessionId, sessionId)).run();
+    sessionChanged(sessionId);
     started++;
     let extras: Wakeup | undefined;
     try {
@@ -48,6 +52,7 @@ export async function fireDueTimers(context: Context, start = startAgentSession)
       } else {
         // Keep a timer the woken run already set again.
         db.delete(sessionTimers).where(and(eq(sessionTimers.sessionId, sessionId), isNull(sessionTimers.fireAt))).run();
+        sessionChanged(sessionId);
       }
     } catch (err) {
       extras?.revert?.();

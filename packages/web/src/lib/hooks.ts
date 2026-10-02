@@ -130,13 +130,17 @@ export function useSessionLiveUpdates() {
     onStarted: () => {
       invalidateLists();
       utils.sessions.getTitle.invalidate();
+      utils.sessions.timer.invalidate();
     },
     onData: ({ id }) => {
       pending.current.add(id);
       timer.current ??= setTimeout(() => {
         timer.current = null;
         invalidateLists();
-        for (const sessionId of pending.current) utils.sessions.getTitle.invalidate({ id: sessionId });
+        for (const sessionId of pending.current) {
+          utils.sessions.getTitle.invalidate({ id: sessionId });
+          utils.sessions.timer.invalidate({ id: sessionId });
+        }
         pending.current.clear();
       }, WEB_CONFIG.sessionEventCoalesceMs);
     },

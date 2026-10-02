@@ -6,6 +6,7 @@ import type { Db } from "../db/client.js";
 import { chatSessions, sessionTimers } from "../db/schema.js";
 import { CONFIG } from "../config.js";
 import { formatLocalTime, getTimezone } from "../lib/current-context.js";
+import { sessionChanged } from "../lib/session-events.js";
 
 const NOTE_MAX_CHARS = 300;
 
@@ -27,6 +28,7 @@ export function setTimerTool(db: Db, sessionId: string): Tool<TimerInput, TimerR
     execute: async ({ minutes, note }) => {
       if (minutes === 0) {
         db.delete(sessionTimers).where(eq(sessionTimers.sessionId, sessionId)).run();
+        sessionChanged(sessionId);
         return { cancelled: true };
       }
       if (minutes < CONFIG.timerMinMinutes || minutes > CONFIG.timerMaxMinutes) {
@@ -43,6 +45,7 @@ export function setTimerTool(db: Db, sessionId: string): Tool<TimerInput, TimerR
       const row = { fireAt, note: note.trim().slice(0, NOTE_MAX_CHARS), setAt: now };
       db.insert(sessionTimers).values({ sessionId, ...row })
         .onConflictDoUpdate({ target: sessionTimers.sessionId, set: row }).run();
+      sessionChanged(sessionId);
       return { dueAt: formatLocalTime(fireAt, getTimezone(db)) };
     },
   });

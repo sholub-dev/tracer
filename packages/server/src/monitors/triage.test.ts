@@ -9,7 +9,7 @@ import type { ProviderRegistry } from "../providers/registry.js";
 import { CONFIG } from "../config.js";
 import { NewRelicProvider } from "../providers/newrelic/newrelic.provider.js";
 import type { AiIssue } from "../providers/newrelic/nerdgraph.client.js";
-import { applyTriage, checkWatches, decide, incidentQuery, incidentRefs, reportIssueStatusTool, wakeupExtras, type DecideInput } from "./triage.js";
+import { applyTriage, checkWatches, decide, incidentQuery, incidentRefs, reportIssueStatusTool, TRIAGE_EFFECT, wakeupExtras, type DecideInput } from "./triage.js";
 import { firingRerun } from "./scheduler.js";
 import { writeSlackConfig } from "../integrations/slack.js";
 
@@ -108,7 +108,7 @@ test("report_issue_status rejects ids outside the firing and records allowed one
   const run = (input: Parameters<NonNullable<typeof t.execute>>[0]) => t.execute!(input, { toolCallId: "c", messages: [] } as never);
   assert.ok("error" in (await run({ severity: "low", issues: [{ issueId: "a", status: "stopped", reason: "errors back to 0 since 13:58" }, { issueId: "zzz", status: "stopped", reason: "errors back to 0 since 13:58" }] }) as object));
   assert.equal(db.select().from(schema.alertIssues).get()?.verdict, null);
-  assert.deepEqual(await run({ severity: "high", issues: [{ issueId: "a", status: "ongoing", reason: "errors back to 0 since 13:58" }] }), { recorded: 1 });
+  assert.deepEqual(await run({ severity: "high", issues: [{ issueId: "a", status: "ongoing", reason: "errors back to 0 since 13:58" }] }), { recorded: 1, next: TRIAGE_EFFECT });
   const row = db.select().from(schema.alertIssues).get();
   assert.equal(row?.verdict, "ongoing");
   assert.equal(row?.severity, "high");

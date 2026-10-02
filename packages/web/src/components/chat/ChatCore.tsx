@@ -20,6 +20,7 @@ import { MessageParts } from "./MessageParts";
 import { ThinkingDots, ScrollToBottomButton } from "./ChatIndicators";
 import { handleProgressData, normalizeClipboard, stopChat } from "../../lib/chat-utils";
 import { CopyMessageButton } from "./CopyMessageButton";
+import { FollowUpTimerBar } from "./FollowUpTimerBar";
 import { WEB_CONFIG } from "../../lib/config";
 import { preloadResultChunks } from "../charts/ResultView";
 
@@ -587,6 +588,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
           <ScrollToBottomButton isAtBottom={isAtBottom} scrollToBottom={scrollToBottom} />
         </div>
 
+        <FollowUpTimerBar sessionId={chatId} />
         {beforeInput}
         {!readOnly && (
         <form onSubmit={handleSubmit} className={v.inputArea}>

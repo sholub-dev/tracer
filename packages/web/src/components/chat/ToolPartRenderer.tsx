@@ -18,7 +18,7 @@ interface ToolPart {
   state?: string;
   output?: unknown;
   errorText?: string;
-  input?: { task?: string; query?: string };
+  input?: { task?: string; query?: string; note?: string; minutes?: number };
 }
 
 interface SubAgentOutput {
@@ -512,7 +512,10 @@ export const ToolPartRenderer = memo(function ToolPartRenderer({ part, progressS
       return (
         <div>
           <div className={theme.toolLabel}>
-            {hasError ? crudLabel.errorLabel : crudLabel.done}
+            {hasError ? crudLabel.errorLabel
+              : output && "cancelled" in output ? "Follow-up timer cancelled"
+              : typeof output?.dueAt === "string" ? `${crudLabel.done} for ${output.dueAt}: ${part.input?.note ?? ""}`
+              : crudLabel.done}
           </div>
           <details className="mb-2">
             <summary className={theme.toolQueryToggle}>Show details</summary>

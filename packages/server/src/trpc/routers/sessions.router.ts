@@ -15,7 +15,7 @@ import {
   splitAtAnalysis,
 } from "@tracer-sh/shared";
 import { publicProcedure, router } from "../trpc.js";
-import { chatSessions, agentRuns, monitorTriggers } from "../../db/schema.js";
+import { chatSessions, agentRuns, monitorTriggers, sessionTimers } from "../../db/schema.js";
 import { generateSessionSummary } from "../../agents/utility/summary.js";
 import { sessionChanged, sessionEvents } from "../../lib/session-events.js";
 
@@ -75,6 +75,16 @@ export const sessionsRouter = router({
         id: row.id, title: row.title, status: row.status, kind: row.kind, messagesJson: row.messages, updatedAt: row.updatedAt,
         summary: row.summary, summaryUpTo: row.summaryUpTo, summaryCreatedAt: row.summaryCreatedAt,
       };
+    }),
+
+  /** The session's follow-up timer; `fireAt` is null while its wake-up is running. */
+  timer: publicProcedure
+    .input(z.object({ id: z.string() }))
+    .query(({ ctx, input }) => {
+      const row = ctx.db.select({ fireAt: sessionTimers.fireAt, note: sessionTimers.note })
+        .from(sessionTimers).where(eq(sessionTimers.sessionId, input.id)).get();
+      // A wake-up cut off by a restart leaves a fired row behind.
+      return row && (row.fireAt !== null || ctx.activeStreams.has(input.id)) ? row : null;
     }),
 
   getCost: publicProcedure

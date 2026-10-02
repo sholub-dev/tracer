@@ -229,6 +229,15 @@ function DebugChat({ chatId, initialMessages, costBreakdown, activeProvider, set
   const coreRef = useRef<ChatCoreRef>(null);
   const hasMarkedViewed = useRef(false);
   const utils = trpc.useUtils();
+
+  // A run the server starts here (follow-up timer, API) flips the page to the live stream view.
+  const listStatus = trpc.sessions.list.useQuery(undefined, { select: (l) => l.find((s) => s.id === chatId)?.status }).data;
+  const prevListStatus = useRef(listStatus);
+  useEffect(() => {
+    const started = listStatus === "streaming" && prevListStatus.current !== "streaming";
+    prevListStatus.current = listStatus;
+    if (started && !isStreaming) utils.sessions.get.fetch({ id: chatId }, { staleTime: 0 }).catch(() => {});
+  }, [listStatus]); // eslint-disable-line react-hooks/exhaustive-deps
   const markViewed = trpc.sessions.markViewed.useMutation();
   const truncateMessages = trpc.sessions.truncateMessages.useMutation();
   const saveMessages = trpc.sessions.saveMessages.useMutation();

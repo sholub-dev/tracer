@@ -73,7 +73,9 @@ test("monitorAlert builds one compact section and a footer, escapes", () => {
     { type: "section", text: { type: "mrkdwn", text: [
       text,
       "*Root cause:* pay-db ran out of connections.",
-      "*Policy:* Errors  ·  *Started:* 10:02 UTC  ·  *Status:* stopped (last error at 10:09 UTC)",
+      "*Policy:* Errors",
+      "*Started:* 10:02 UTC",
+      "*Status:* stopped (last error at 10:09 UTC)",
       "• *pay-api* `/pay`: 40 × Timeout. Pay fails. Funnel: Checkout",
       "• `/cart`: 1 × &lt;Err&gt;",
       "*Seen before:* No.",

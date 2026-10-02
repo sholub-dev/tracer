@@ -5,9 +5,10 @@ import { substituteWindow, unixNow } from "@tracer-sh/shared";
 import { QueryChart } from "../charts/QueryChart";
 
 const CHART_HEIGHT = 180;
-const DAY = 86_400;
-// Fixed buckets per range preset (24h, 7d, 30d, 90d); NRQL's AUTO picks 6h buckets for 7d.
-const BUCKET_SECONDS: Record<number, number> = { [DAY]: 900, [7 * DAY]: 3600, [30 * DAY]: 21_600, [90 * DAY]: DAY };
+const HOUR = 3600;
+const DAY = 24 * HOUR;
+// Fixed buckets per range preset; NRQL's AUTO picks 6h buckets for 7d.
+const BUCKET_SECONDS: Record<number, number> = { [HOUR]: 120, [3 * HOUR]: 300, [6 * HOUR]: 600, [DAY]: 900, [7 * DAY]: 3600, [30 * DAY]: 21_600, [90 * DAY]: DAY };
 
 interface MonitorChartProps {
   provider: string;

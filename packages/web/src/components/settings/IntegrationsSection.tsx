@@ -219,7 +219,10 @@ function AlertTriageRow() {
         />
         <span className="font-medium">Alert triage</span>
       </div>
-      <div className="text-xs opacity-40 mt-1">Off: analysis only. On: acks, closes and escalates New Relic alerts for you</div>
+      <div className="text-xs opacity-40 mt-1">
+        <div>Off: monitors only post their analysis.</div>
+        <div>On: Tracer acks, closes and escalates New Relic alerts.</div>
+      </div>
     </div>
   );
 }

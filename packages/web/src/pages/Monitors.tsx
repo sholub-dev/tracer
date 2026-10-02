@@ -19,12 +19,15 @@ type Editing = { sessionId: string; prefill: string };
 const newBuilderId = () => `${SESSION_PREFIX.MONITORS}${crypto.randomUUID()}`;
 const LIST_POLL_MS = 30_000;
 const RANGE_PRESETS = [
+  { label: "1h", since: "1 hour ago" },
+  { label: "3h", since: "3 hours ago" },
+  { label: "6h", since: "6 hours ago" },
   { label: "24h", since: "24 hours ago" },
   { label: "7d", since: "7 days ago" },
   { label: "30d", since: "30 days ago" },
   { label: "90d", since: "90 days ago" },
 ] as const;
-const DEFAULT_RANGE = RANGE_PRESETS[0].since;
+const DEFAULT_RANGE = "24 hours ago";
 
 type CardWidth = 50 | 75 | 100;
 const WIDTHS: CardWidth[] = [50, 75, 100];

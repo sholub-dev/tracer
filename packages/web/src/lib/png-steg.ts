@@ -1,14 +1,4 @@
-/**
- * LSB steganography — encode/decode an opaque byte payload into the low bit
- * of R/G/B channels of each fully-opaque pixel. Used to carry the analysis
- * JSON inside an exported PNG in a way that survives image pipelines which
- * strip ancillary chunks but preserve pixels losslessly (Slack, Discord,
- * email, AirDrop).
- *
- * Frame format: [magic "TRC1" (4 bytes)] [length u32 big-endian (4 bytes)] [payload].
- *
- * Does NOT survive lossy re-encoding (JPEG conversion, aggressive resize).
- */
+// Carries a payload in the RGB low bits of opaque pixels: survives chunk-stripping (Slack, email), not lossy re-encoding.
 
 const MAGIC = Uint8Array.from([0x54, 0x52, 0x43, 0x31]); // "TRC1"
 const LENGTH_FIELD_BYTES = 4; // u32 big-endian
@@ -75,10 +65,7 @@ function canvasToPngBytes(canvas: HTMLCanvasElement): Promise<Uint8Array> {
   });
 }
 
-/**
- * Encode `payload` into the pixels of `pngBytes` and return a fresh PNG.
- * Throws if the image lacks capacity to hold the header + payload.
- */
+/** Encodes `payload` into the pixels of `pngBytes`; throws if the image is too small to hold it. */
 export async function encodePngWithPayload(pngBytes: Uint8Array, payload: Uint8Array): Promise<Uint8Array> {
   const bmp = await loadBitmap(pngBytes);
   try {
@@ -97,10 +84,7 @@ export async function encodePngWithPayload(pngBytes: Uint8Array, payload: Uint8A
   }
 }
 
-/**
- * Return the payload bytes carried by `pngBytes`, or null if no Tracer header
- * is present (unrelated PNG, or LSBs were destroyed by re-encoding).
- */
+/** The payload in `pngBytes`, or null when there is no Tracer header (unrelated or re-encoded PNG). */
 export async function decodePngPayload(pngBytes: Uint8Array): Promise<Uint8Array | null> {
   const bmp = await loadBitmap(pngBytes);
   try {

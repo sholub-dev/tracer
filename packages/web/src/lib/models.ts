@@ -18,7 +18,7 @@ export function effectivePrices(m: ModelInfo, atMs = Date.now()): { inputPrice: 
 }
 
 /** A provider + model pair, the unit of model selection across the UI. */
-export interface ModelRef {
+interface ModelRef {
   provider: string;
   modelId: string;
 }
@@ -26,7 +26,7 @@ export interface ModelRef {
 export const modelKey = (m: ModelRef): string => `${m.provider}:${m.modelId}`;
 
 /** Human labels for the LLM providers (the `provider` field of a ModelRef). */
-export const LLM_PROVIDER_LABELS: Record<string, string> = {
+const LLM_PROVIDER_LABELS: Record<string, string> = {
   anthropic: "Anthropic",
   google: "Google AI",
   "google-vertex": "Vertex AI",

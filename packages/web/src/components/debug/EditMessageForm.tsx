@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { theme } from "../../lib/theme";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 
 export function EditMessageForm({ initialText, onSave, onCancel }: {
   initialText: string;
@@ -8,26 +9,28 @@ export function EditMessageForm({ initialText, onSave, onCancel }: {
 }) {
   const [text, setText] = useState(initialText);
   return (
-    <>
-      <textarea
-        className={theme.chatEditTextarea}
+    <div className="ml-auto w-full max-w-[85%] space-y-2 sm:max-w-[75%]">
+      <Textarea
+        aria-label="Edit message"
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); onSave(text); }
-          if (e.key === "Escape") onCancel();
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            onSave(text);
+          }
+          if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          }
         }}
-        rows={Math.max(2, text.split("\n").length)}
         autoFocus
+        className="max-h-[50svh] min-h-20 rounded-xl bg-card text-base md:text-base"
       />
-      <div className={theme.chatEditActions}>
-        <button type="button" onClick={() => onSave(text)} className={theme.chatEditSave} disabled={!text.trim()}>
-          Save & Send
-        </button>
-        <button type="button" onClick={onCancel} className={theme.chatEditCancel}>
-          Cancel
-        </button>
+      <div className="flex justify-end gap-2">
+        <Button size="sm" variant="ghost" onClick={onCancel}>Cancel</Button>
+        <Button size="sm" onClick={() => onSave(text)} disabled={!text.trim()}>Save and send</Button>
       </div>
-    </>
+    </div>
   );
 }

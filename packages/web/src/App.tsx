@@ -1,8 +1,10 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
+import { type CSSProperties, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
 import { FEATURES } from "@tracer-sh/shared";
+import { Loader2 } from "lucide-react";
 import { Shell } from "./components/layout/Shell";
-import { Sidebar, type Page } from "./components/layout/Sidebar";
-import { Spinner } from "./components/ui/Spinner";
+import { AppSidebar, type Page } from "./components/layout/Sidebar";
+import { Toaster } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 const Debug = lazy(() => import("./pages/Debug").then(m => ({ default: m.Debug })));
 const Settings = lazy(() => import("./pages/Settings").then(m => ({ default: m.Settings })));
@@ -36,8 +38,7 @@ function getRouteFromPath(): RouteState {
   return { page, sessionId, dashboardId, builderSessionId };
 }
 
-// Stable reference for useSyncExternalStore — must return the same object for
-// identical URLs to avoid infinite re-renders.
+// useSyncExternalStore needs the same object for the same URL, or it re-renders forever.
 let cachedPath = "";
 let cachedRoute: RouteState = getRouteFromPath();
 
@@ -61,7 +62,11 @@ function pushPath(path: string, replace = false) {
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
-const PageFallback = () => <Spinner size="lg" centered />;
+const PageFallback = () => (
+  <div role="status" aria-label="Loading" className="flex h-full items-center justify-center">
+    <Loader2 className="size-5 animate-spin text-muted-foreground" />
+  </div>
+);
 
 export function App() {
   const {
@@ -115,43 +120,55 @@ export function App() {
   }, []);
 
   return (
-    <Shell
-      sidebar={
-        <Sidebar
-          currentPage={currentPage}
-          onNavigate={navigate}
-          currentSessionId={currentSessionId}
-          onSelectSession={selectSession}
-          onNewSession={newSession}
-          currentDashboardId={currentDashboardId}
-          onSelectDashboard={selectDashboard}
-          onNewDashboard={newDashboard}
-          currentBuilderSessionId={currentBuilderSessionId}
-          onSelectBuilderChat={openBuilderChat}
-        />
-      }
-    >
-      <Suspense fallback={<PageFallback />}>
-        {Dashboard && currentPage === "dashboard" && (
-          <Dashboard
-            key={currentDashboardId ?? "default"}
-            dashboardId={currentDashboardId}
+    <TooltipProvider delayDuration={400}>
+      <Shell
+        sidebar={
+          <AppSidebar
+            currentPage={currentPage}
+            onNavigate={navigate}
+            currentSessionId={currentSessionId}
+            onSelectSession={selectSession}
+            onNewSession={newSession}
+            currentDashboardId={currentDashboardId}
             onSelectDashboard={selectDashboard}
+            onNewDashboard={newDashboard}
           />
-        )}
-        {currentPage === "debug" && currentSessionId && (
-          <Debug key={currentSessionId} sessionId={currentSessionId} isNew={currentSessionId === newSessionId} />
-        )}
-        {Monitors && currentPage === "monitors" && (
-          <Monitors
-            builderSessionId={currentBuilderSessionId ?? undefined}
-            onNavigate={selectSession}
-            onOpenBuilder={openBuilderChat}
-            onCloseBuilder={closeBuilderChat}
-          />
-        )}
-        {currentPage === "settings" && <Settings />}
-      </Suspense>
-    </Shell>
+        }
+      >
+        <Suspense fallback={<PageFallback />}>
+          {Dashboard && currentPage === "dashboard" && (
+            <Dashboard
+              key={currentDashboardId ?? "default"}
+              dashboardId={currentDashboardId}
+              onSelectDashboard={selectDashboard}
+            />
+          )}
+          {currentPage === "debug" && currentSessionId && (
+            <Debug key={currentSessionId} sessionId={currentSessionId} isNew={currentSessionId === newSessionId} onDeleted={() => startNewSession(true)} />
+          )}
+          {Monitors && currentPage === "monitors" && (
+            <Monitors
+              builderSessionId={currentBuilderSessionId ?? undefined}
+              onNavigate={selectSession}
+              onOpenBuilder={openBuilderChat}
+              onCloseBuilder={closeBuilderChat}
+            />
+          )}
+          {currentPage === "settings" && <Settings />}
+        </Suspense>
+      </Shell>
+      <Toaster
+        position="bottom-center"
+        theme="dark"
+        style={
+          {
+            "--normal-bg": "var(--foreground)",
+            "--normal-text": "var(--background)",
+            "--normal-border": "var(--foreground)",
+            "--border-radius": "var(--radius)",
+          } as CSSProperties
+        }
+      />
+    </TooltipProvider>
   );
 }

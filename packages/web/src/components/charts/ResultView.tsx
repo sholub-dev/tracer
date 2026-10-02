@@ -1,10 +1,12 @@
 import { lazy, memo, Suspense, useState, type ComponentProps, type ReactNode } from "react";
 import { Streamdown } from "streamdown";
-import { theme } from "../../lib/theme";
+import { Button } from "@/components/ui/button";
+import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 import { MD_LINK_SAFETY } from "../../lib/markdown";
 import type { Threshold } from "./ChartView";
 import { HIDDEN_KEYS, formatValue, isPercentileResult, buildColumns, pivotCompareWith, coerceNumeric, type Column } from "../../lib/result-utils";
-import { ScalarCards } from "./ScalarCards";
+import { KeyFigures } from "./KeyFigures";
 
 // Lazy so recharts and react-json-view-lite stay out of the chat entry chunk.
 const LazyTimeseriesChart = lazy(() => import("./ChartView").then((m) => ({ default: m.TimeseriesChart })));
@@ -13,14 +15,10 @@ const LazyJsonTree = lazy(() => import("../ui/JsonTree").then((m) => ({ default:
 
 type ContainerSize = { width: number; height: number };
 
-// Reserves the chart's rendered height (plot + legend inside the card) so loading causes no layout jump.
+// Reserves the chart's rendered height (plot + legend) so loading causes no layout jump.
 function ChartFallback({ containerSize, plotHeight }: { containerSize?: ContainerSize; plotHeight: number }) {
   if (containerSize) return <div style={{ height: Math.max(containerSize.height - 8, 80) }} />;
-  return (
-    <div className={theme.chartContainer}>
-      <div style={{ height: plotHeight + 36 }} />
-    </div>
-  );
+  return <div className="my-2" style={{ height: plotHeight + 36 }} />;
 }
 
 function TimeseriesChart(props: ComponentProps<typeof LazyTimeseriesChart>) {
@@ -33,7 +31,7 @@ function TimeseriesChart(props: ComponentProps<typeof LazyTimeseriesChart>) {
 
 function HistogramChart(props: ComponentProps<typeof LazyHistogramChart>) {
   return (
-    <Suspense fallback={<ChartFallback containerSize={props.containerSize} plotHeight={260} />}>
+    <Suspense fallback={<ChartFallback containerSize={props.containerSize} plotHeight={240} />}>
       <LazyHistogramChart {...props} />
     </Suspense>
   );
@@ -58,7 +56,7 @@ export function JsonTree(props: ComponentProps<typeof LazyJsonTree>) {
 
 function CellText({ value }: { value: string }) {
   return (
-    <span className={theme.tableCellText} title={value}>
+    <span className="line-clamp-2 cursor-default" title={value}>
       {value}
     </span>
   );
@@ -84,54 +82,84 @@ function CappedRows<T>({ items, colSpan, render }: { items: readonly T[]; colSpa
     <>
       {visible.map(render)}
       {!showAll && items.length > ROW_CAP && (
-        <tr>
-          <td colSpan={colSpan} className={theme.tableCell}>
-            <button type="button" onClick={() => setExpandedFor(items)} className="text-xs underline text-[#2b5ea7]">
+        <TableRow className="hover:bg-transparent">
+          <TableCell colSpan={colSpan} className="py-1">
+            <Button variant="link" size="xs" className="px-0" onClick={() => setExpandedFor(items)}>
               Show all {items.length} rows
-            </button>
-          </td>
-        </tr>
+            </Button>
+          </TableCell>
+        </TableRow>
       )}
     </>
   );
 }
 
-function DataTable({ columns, rows }: { columns: Column[]; rows: Record<string, unknown>[] }) {
+// shadcn's <Table> wraps its own scroll box, which would break the sticky header; the outer box scrolls instead.
+function ResultTable({ head, children }: { head: ReactNode; children: ReactNode }) {
   return (
-    <div className={`${theme.tableContainer} my-2`}>
-      <table className="w-full">
-        <thead className="sticky top-0 z-10">
-          <tr className={theme.tableHeaderRow}>
-            {columns.map((col) => (
-              <th key={col.key} className={theme.tableHeaderCell}>{col.label}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          <CappedRows
-            items={rows}
-            colSpan={columns.length}
-            render={(row, i) => (
-              <tr key={i} className={theme.tableRow}>
-                {columns.map((col) => (
-                  <td key={col.key} className={theme.tableCell}>
-                    <CellValue value={col.get(row)} colKey={col.key} />
-                  </td>
-                ))}
-              </tr>
-            )}
-          />
-        </tbody>
+    <div className="my-2 max-h-[440px] overflow-auto rounded-md border border-border bg-card">
+      <table className="w-full caption-bottom text-[13px] leading-[18px] tabular-nums">
+        <TableHeader className="sticky top-0 z-10 bg-card shadow-[inset_0_-1px_0_var(--border)] [&_tr]:border-b-0">
+          <TableRow className="hover:bg-transparent">{head}</TableRow>
+        </TableHeader>
+        <TableBody>{children}</TableBody>
       </table>
     </div>
   );
 }
 
-export default memo(function ResultView({ data, containerSize, threshold, chartType }: { data: unknown; containerSize?: { width: number; height: number }; threshold?: Threshold; chartType?: string }) {
+function Th({ children, numeric }: { children: ReactNode; numeric?: boolean }) {
+  return <TableHead className={cn("h-8 px-3 text-xs font-medium text-muted-foreground", numeric && "text-right")}>{children}</TableHead>;
+}
+
+function Td({ children, numeric }: { children: ReactNode; numeric?: boolean }) {
+  return <TableCell className={cn("max-w-[300px] px-3 py-1.5 whitespace-normal text-foreground", numeric && "text-right")}>{children}</TableCell>;
+}
+
+const isNumeric = (value: unknown) => coerceNumeric(value) !== null;
+
+function DataTable({ columns, rows }: { columns: Column[]; rows: Record<string, unknown>[] }) {
+  const numeric = columns.map((col) => isNumeric(col.get(rows[0])));
+  return (
+    <ResultTable head={columns.map((col, c) => <Th key={col.key} numeric={numeric[c]}>{col.label}</Th>)}>
+      <CappedRows
+        items={rows}
+        colSpan={columns.length}
+        render={(row, i) => (
+          <TableRow key={i} className="hover:bg-muted/40">
+            {columns.map((col, c) => (
+              <Td key={col.key} numeric={numeric[c]}>
+                <CellValue value={col.get(row)} colKey={col.key} />
+              </Td>
+            ))}
+          </TableRow>
+        )}
+      />
+    </ResultTable>
+  );
+}
+
+function ValueList({ label, items }: { label: string; items: readonly unknown[] }) {
+  return (
+    <ResultTable head={<Th>{label}</Th>}>
+      <CappedRows
+        items={items}
+        colSpan={1}
+        render={(item, i) => (
+          <TableRow key={i} className="hover:bg-muted/40">
+            <Td><CellText value={formatValue(item)} /></Td>
+          </TableRow>
+        )}
+      />
+    </ResultTable>
+  );
+}
+
+export default memo(function ResultView({ data, containerSize, threshold, chartType }: { data: unknown; containerSize?: ContainerSize; threshold?: Threshold; chartType?: string }) {
   // Markdown summary from LLM summarizer
   if (typeof data === "string") {
     return (
-      <div className={theme.analysisBlock}>
+      <div className="my-2 rounded-md border border-border bg-card px-4 py-3 text-sm leading-relaxed text-foreground">
         <Streamdown linkSafety={MD_LINK_SAFETY}>{data}</Streamdown>
       </div>
     );
@@ -140,7 +168,7 @@ export default memo(function ResultView({ data, containerSize, threshold, chartT
   // Error response from tool
   if (data && typeof data === "object" && !Array.isArray(data) && "error" in data) {
     return (
-      <div className={theme.resultErrorMessage}>
+      <div role="alert" className="my-2 rounded-md border border-destructive/25 bg-destructive-tint px-3 py-2 text-[13px] leading-[18px] text-destructive">
         {String((data as Record<string, unknown>).error)}
       </div>
     );
@@ -151,56 +179,26 @@ export default memo(function ResultView({ data, containerSize, threshold, chartT
   }
 
   if (!Array.isArray(data) || data.length === 0) {
-    return <div className={theme.toolLoading}>No results returned.</div>;
+    return <p className="text-[13px] leading-[18px] text-muted-foreground">No results returned.</p>;
   }
 
-  // Array of primitives (strings, numbers, etc.) — render as simple value list
   if (data.every((v: unknown) => typeof v !== "object" || v === null)) {
-    return (
-      <div className={`${theme.tableContainer} my-2`}>
-        <table className="w-full">
-          <thead className="sticky top-0 z-10">
-            <tr className={theme.tableHeaderRow}>
-              <th className={theme.tableHeaderCell}>Value</th>
-            </tr>
-          </thead>
-          <tbody>
-            <CappedRows
-              items={data}
-              colSpan={1}
-              render={(item, i) => (
-                <tr key={i} className={theme.tableRow}>
-                  <td className={theme.tableCell}>
-                    <CellText value={formatValue(item)} />
-                  </td>
-                </tr>
-              )}
-            />
-          </tbody>
-        </table>
-      </div>
-    );
+    return <ValueList label="Value" items={data} />;
   }
 
   const rows = data as Record<string, unknown>[];
 
-  // ── chartType override: when explicitly set, skip auto-detection ──
+  // chartType override: when explicitly set, skip auto-detection
   if (chartType && chartType !== "auto") {
     if (chartType === "timeseries") return <TimeseriesChart rows={rows} containerSize={containerSize} threshold={threshold} />;
     if (chartType === "histogram" && rows.length >= 1) return <HistogramChart row={rows[0]} containerSize={containerSize} />;
     if (chartType === "scalar") {
       const columns = buildColumns([rows[0]]);
-      const metricKeys = columns.filter((c) => !c.key.startsWith("facet"));
-      return <ScalarCards columns={metricKeys} row={rows[0]} />;
+      return <KeyFigures columns={columns.filter((c) => !c.key.startsWith("facet"))} row={rows[0]} />;
     }
-    // "table" → skip all auto-detection, render as table
-    if (chartType === "table") {
-      const columns = buildColumns(rows);
-      return <DataTable columns={columns} rows={rows} />;
-    }
+    if (chartType === "table") return <DataTable columns={buildColumns(rows)} rows={rows} />;
   }
 
-  // ── Auto chart detection (before table/card rendering) ──
   const hasTimeKeys = "beginTimeSeconds" in rows[0];
   const hasHistogram = rows.length === 1 && Object.keys(rows[0]).some((k) => k.startsWith("histogram."));
 
@@ -213,128 +211,69 @@ export default memo(function ResultView({ data, containerSize, threshold, chartT
     if (visibleKeys.length === 1) {
       const val = rows[0][visibleKeys[0]];
       if (Array.isArray(val) && val.every((v) => typeof v !== "object" || v === null)) {
-        return (
-          <div className={`${theme.tableContainer} my-2`}>
-            <table className="w-full">
-              <thead className="sticky top-0 z-10">
-                <tr className={theme.tableHeaderRow}>
-                  <th className={theme.tableHeaderCell}>{visibleKeys[0]}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <CappedRows
-                  items={val}
-                  colSpan={1}
-                  render={(item, i) => (
-                    <tr key={i} className={theme.tableRow}>
-                      <td className={theme.resultListItem}>{String(item)}</td>
-                    </tr>
-                  )}
-                />
-              </tbody>
-            </table>
-          </div>
-        );
+        return <ValueList label={visibleKeys[0]} items={val} />;
       }
     }
   }
 
-  const hasComparison = "comparison" in rows[0];
-
   // COMPARE WITH pivot view
-  if (hasComparison) {
+  if ("comparison" in rows[0]) {
     const { facetLabel, valueKeys, periods, grouped } = pivotCompareWith(rows);
-    const hasFacets = "facet" in rows[0];
 
-    // Scalar comparison (no facet) — render as compact comparison table
-    if (!hasFacets) {
+    // Scalar comparison (no facet): one row per metric
+    if (!("facet" in rows[0])) {
       const single = [...grouped.values()][0];
       return (
-        <div className={`${theme.tableContainer} my-2`}>
-          <table className="w-full">
-            <thead className="sticky top-0 z-10">
-              <tr className={theme.tableHeaderRow}>
-                <th className={theme.tableHeaderCell}>Metric</th>
-                {periods.map((p) => (
-                  <th key={p} className={theme.tableHeaderCell}>{p}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {valueKeys.map((k) => (
-                <tr key={k} className={theme.tableRow}>
-                  <td className={theme.tableCell}>
-                    <CellText value={k} />
-                  </td>
-                  {periods.map((p) => (
-                    <td key={p} className={theme.tableCell}>
-                      <CellValue value={single?.byPeriod.get(p)?.[k]} colKey={k} />
-                    </td>
-                  ))}
-                </tr>
+        <ResultTable head={<><Th>Metric</Th>{periods.map((p) => <Th key={p} numeric>{p}</Th>)}</>}>
+          {valueKeys.map((k) => (
+            <TableRow key={k} className="hover:bg-muted/40">
+              <Td><CellText value={k} /></Td>
+              {periods.map((p) => (
+                <Td key={p} numeric><CellValue value={single?.byPeriod.get(p)?.[k]} colKey={k} /></Td>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </TableRow>
+          ))}
+        </ResultTable>
       );
     }
 
-    // Faceted comparison — pivot table
+    // Faceted comparison: pivot table
     return (
-      <div className={`${theme.tableContainer} my-2`}>
-        <table className="w-full">
-          <thead className="sticky top-0 z-10">
-            <tr className={theme.tableHeaderRow}>
-              <th className={theme.tableHeaderCell}>{facetLabel}</th>
+      <ResultTable
+        head={
+          <>
+            <Th>{facetLabel}</Th>
+            {valueKeys.map((k) => periods.map((p) => <Th key={`${k}-${p}`} numeric>{valueKeys.length > 1 ? `${k} (${p})` : p}</Th>))}
+          </>
+        }
+      >
+        <CappedRows
+          items={[...grouped.values()]}
+          colSpan={1 + valueKeys.length * periods.length}
+          render={(group, i) => (
+            <TableRow key={i} className="hover:bg-muted/40">
+              <Td><CellValue value={group.label} colKey={facetLabel} /></Td>
               {valueKeys.map((k) =>
                 periods.map((p) => (
-                  <th key={`${k}-${p}`} className={theme.tableHeaderCell}>
-                    {valueKeys.length > 1 ? `${k} (${p})` : p}
-                  </th>
+                  <Td key={`${k}-${p}`} numeric><CellValue value={group.byPeriod.get(p)?.[k]} colKey={k} /></Td>
                 )),
               )}
-            </tr>
-          </thead>
-          <tbody>
-            <CappedRows
-              items={[...grouped.values()]}
-              colSpan={1 + valueKeys.length * periods.length}
-              render={(group, i) => (
-                <tr key={i} className={theme.tableRow}>
-                  <td className={theme.tableCell}>
-                    <CellValue value={group.label} colKey={facetLabel} />
-                  </td>
-                  {valueKeys.map((k) =>
-                    periods.map((p) => (
-                      <td key={`${k}-${p}`} className={theme.tableCell}>
-                        <CellValue value={group.byPeriod.get(p)?.[k]} colKey={k} />
-                      </td>
-                    )),
-                  )}
-                </tr>
-              )}
-            />
-          </tbody>
-        </table>
-      </div>
+            </TableRow>
+          )}
+        />
+      </ResultTable>
     );
   }
 
   const columns = buildColumns(rows);
-
-  // Scalar: single row, no facet, all values numeric
-  const hasFacet = "facet" in rows[0];
   const metricKeys = columns.filter((c) => !c.key.startsWith("facet"));
   const isScalar =
     rows.length === 1 &&
-    !hasFacet &&
+    !("facet" in rows[0]) &&
     metricKeys.length > 0 &&
-    metricKeys.every((c) => coerceNumeric(c.get(rows[0])) !== null);
+    metricKeys.every((c) => isNumeric(c.get(rows[0])));
 
-  if (isScalar) {
-    return <ScalarCards columns={metricKeys} row={rows[0]} />;
-  }
+  if (isScalar) return <KeyFigures columns={metricKeys} row={rows[0]} />;
 
-  // Table
   return <DataTable columns={columns} rows={rows} />;
 });

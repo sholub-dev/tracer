@@ -1,10 +1,10 @@
-import { useMemo, useRef, useState, useEffect, useCallback, type RefObject } from "react";
+import { useMemo, useRef, useState, useEffect, useCallback } from "react";
 import { trpc } from "./trpc";
 import { AVAILABLE_MODELS } from "./models";
 import { WEB_CONFIG } from "./config";
 
-/** Chat scroll that follows content growth; any upward scroll pauses it until the bottom is reached again. */
-export function useChatScroll() {
+/** Chat scroll that follows content growth; any upward scroll pauses it until the bottom is reached again. A new `mountKey` re-attaches to a swapped container. */
+export function useChatScroll(mountKey?: unknown) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const shouldAutoScroll = useRef(true);
@@ -43,7 +43,7 @@ export function useChatScroll() {
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mountKey]);
 
   // ResizeObserver on inner content div — auto-scrolls on any content growth
   useEffect(() => {
@@ -54,7 +54,7 @@ export function useChatScroll() {
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [scrollToBottom]);
+  }, [scrollToBottom, mountKey]);
 
   return { scrollRef, contentRef, isAtBottom, scrollToBottom, scrollToTop };
 }
@@ -147,32 +147,23 @@ export function useSessionLiveUpdates() {
   });
 }
 
-/** Track whether a scrollable element can scroll up/down, for fade indicators */
-export function useScrollFade(ref: RefObject<HTMLElement | null>) {
-  const [showTopFade, setShowTopFade] = useState(false);
-  const [showBottomFade, setShowBottomFade] = useState(false);
-
+/** Escape calls `onStop` while `active`, unless an open dialog or menu took the key. */
+export function useEscapeToStop(active: boolean, onStop: () => void) {
+  const onStopRef = useRef(onStop);
+  onStopRef.current = onStop;
   useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const check = () => {
-      setShowTopFade(el.scrollTop > 0);
-      setShowBottomFade(el.scrollTop + el.clientHeight < el.scrollHeight - 1);
+    if (!active) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (document.querySelector("[role=dialog],[role=alertdialog],[role=menu]")) return;
+      onStopRef.current();
     };
-    check();
-    el.addEventListener("scroll", check, { passive: true });
-    const ro = new ResizeObserver(check);
-    ro.observe(el);
-    return () => { el.removeEventListener("scroll", check); ro.disconnect(); };
-  }, [ref]);
-
-  return { showTopFade, showBottomFade };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [active]);
 }
 
-/**
- * Polled gcloud ADC auth status, shared (react-query dedups the key) by the GCP provider's
- * project selector and the Vertex card so an expired/missing session surfaces on its own.
- */
+/** Polled gcloud auth status, shared by the GCP project picker and the Vertex card. */
 export function useGcpAuthStatus() {
   return trpc.provider.gcpAuthStatus.useQuery(undefined, {
     refetchInterval: WEB_CONFIG.sessionStaleTimeMs,
@@ -193,12 +184,7 @@ export function useConfiguredProviders(): Set<string> {
   }, [anthropicKey, googleKey, vertexConfig]);
 }
 
-/**
- * Selectable models filtered to configured providers (falls back to all). Vertex models
- * are discovered dynamically from the configured project and merged with the static list.
- * `isLoading` is true while that discovery is in flight, so callers can avoid acting on the
- * interim list (e.g. resetting a saved Vertex selection that hasn't been discovered yet).
- */
+/** Models of configured providers plus discovered Vertex models; `isLoading` covers that discovery. */
 export function useAvailableModels(): {
   models: Array<{ provider: string; modelId: string }>;
   isLoading: boolean;
@@ -220,8 +206,7 @@ export function useAvailableModels(): {
   return { models, isLoading: vertexEnabled && vertexLoading };
 }
 
-/** File drag-and-drop. Spread `dropProps` on the target; `dragActive` is true while
- *  files are over it (a depth counter avoids child-bubbling flicker). */
+/** File drag-and-drop; a depth counter keeps `dragActive` steady while dragging over children. */
 export function useFileDrop(onFiles: (files: FileList) => void, enabled = true) {
   const [dragActive, setDragActive] = useState(false);
   const depth = useRef(0);
@@ -258,22 +243,3 @@ export function usePersistedState<T>(key: string, initial: T): [T, (value: T) =>
   return [value, setValue];
 }
 
-/** Calls callback when a click occurs outside the referenced element. */
-export function useClickOutside<T extends HTMLElement>(
-  ref: RefObject<T | null>,
-  callback: () => void,
-): void {
-  // Stable ref so the effect never re-runs just because an inline lambda was recreated
-  const callbackRef = useRef(callback);
-  useEffect(() => { callbackRef.current = callback; });
-
-  useEffect(() => {
-    function handleMouseDown(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        callbackRef.current();
-      }
-    }
-    document.addEventListener("mousedown", handleMouseDown);
-    return () => document.removeEventListener("mousedown", handleMouseDown);
-  }, [ref]);
-}

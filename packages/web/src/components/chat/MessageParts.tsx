@@ -1,299 +1,170 @@
-import React, { useRef, useCallback, useEffect, useState } from "react";
-import { createPortal } from "react-dom";
-import { Streamdown } from "streamdown";
-import { MD_CONTROLS, MD_LINK_SAFETY } from "../../lib/markdown";
-import { ANALYSIS_MARKER, findAnalysisMarker } from "@tracer-sh/shared";
-import { ToolPartRenderer } from "./ToolPartRenderer";
-import { ReasoningBlock } from "./ReasoningBlock";
-import { AnalysisContainer } from "./AnalysisContainer";
-import type { ProgressStore } from "../../lib/progress-store";
-import { theme } from "../../lib/theme";
+import React from "react";
 import type { UIMessage } from "ai";
-import { CopyMessageButton } from "./CopyMessageButton";
-import { encodePngWithPayload } from "../../lib/png-steg";
+import { ChevronRight, Download, FileText, Loader2 } from "lucide-react";
+import { Streamdown } from "streamdown";
+import { ANALYSIS_MARKER, findAnalysisMarker } from "@tracer-sh/shared";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import { MD_CONTROLS, MD_LINK_SAFETY } from "../../lib/markdown";
+import type { ProgressStore } from "../../lib/progress-store";
+import { ReasoningBlock } from "./ReasoningBlock";
+import { Narration, OtherToolPart, ProviderStep, isHiddenPart, isMonitorTool, isProviderTool, providerOf, stepQueryCount, type ToolPart } from "./ToolParts";
+import { providerLabel } from "../../lib/providers";
+import { ANSWER_PROSE, ANSWER_PROSE_COMPACT } from "./prose";
 
-interface MessagePartsProps {
-  parts: UIMessage["parts"];
-  isAnimating: boolean;
-  progressStore: ProgressStore;
-  sourceTitle?: string;
-  sourceCreatedAt?: number;
-  resolveSourceTitle?: () => Promise<string | undefined>;
-}
-
-/** Analysis container with its own copy/download buttons. */
-function AnalysisSection({
-  parts,
-  children,
-  sourceTitle,
-  sourceCreatedAt,
-  resolveSourceTitle,
-}: {
-  parts: UIMessage["parts"];
-  children: React.ReactNode;
-  sourceTitle?: string;
-  sourceCreatedAt?: number;
-  resolveSourceTitle?: () => Promise<string | undefined>;
-}) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [downloadError, setDownloadError] = useState<string | null>(null);
-
-  const handleDownload = useCallback(async () => {
-    const el = containerRef.current;
-    if (!el) return;
-    try {
-      const { domToPng } = await import("modern-screenshot");
-      const dataUrl = await domToPng(el, { scale: 2 });
-      const bytes = new Uint8Array(await (await fetch(dataUrl)).arrayBuffer());
-
-      // Resolve the freshest title at click time — session titles are generated
-      // asynchronously after the first response and the prop may still hold
-      // "New chat" for a moment after the stream ends.
-      const resolvedTitle = (await resolveSourceTitle?.()) ?? sourceTitle ?? "";
-
-      // Carry all parts from the analysis slice as-is: text, reasoning, and
-      // tool invocations (with their inputs and outputs) so charts, tables,
-      // and sub-agent results render on re-import. The begin_analysis marker
-      // has already been excluded by the slicing logic above.
-      const payload = JSON.stringify({
-        v: 1,
-        kind: "analysis",
-        sourceTitle: resolvedTitle,
-        sourceCreatedAt: sourceCreatedAt ?? Math.floor(Date.now() / 1000),
-        parts,
-      });
-
-      if (payload.length > 2 * 1024 * 1024) {
-        setDownloadError("Analysis too large to embed metadata");
-        setTimeout(() => setDownloadError(null), 2500);
-        return;
-      }
-
-      const out = await encodePngWithPayload(bytes, new TextEncoder().encode(payload));
-      const blob = new Blob([out.buffer as ArrayBuffer], { type: "image/png" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      const now = new Date();
-      const stamp = `${now.toISOString().slice(0, 10)}-${String(now.getHours()).padStart(2, "0")}-${String(now.getMinutes()).padStart(2, "0")}`;
-      a.download = `analysis-${stamp}.png`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-    } catch {
-      // Silent fail — domToPng or chunk write not supported
-    }
-  }, [parts, sourceTitle, sourceCreatedAt, resolveSourceTitle]);
-
-  return (
-    <AnalysisContainer
-      containerRef={containerRef}
-      actions={
-        <div className="flex items-center gap-0.5 opacity-0 group-hover/analysis:opacity-100 transition-opacity">
-          {downloadError && (
-            <span className="text-[10px] text-[#b33a2a] mr-1">{downloadError}</span>
-          )}
-          <CopyMessageButton contentRef={containerRef} parts={parts} size={12} />
-          <button
-            type="button"
-            onClick={handleDownload}
-            className={theme.chatActionButton}
-            title="Download as image"
-            aria-label="Download as image"
-          >
-            <DownloadIcon size={12} />
-          </button>
-        </div>
-      }
-    >
-      {children}
-    </AnalysisContainer>
-  );
-}
-
+type Part = UIMessage["parts"][number];
 type FilePartLike = { type: "file"; mediaType?: string; url: string; filename?: string };
 
-// Overlay rather than a link: browsers block top-level data: URL navigation.
-function FileAttachment({ part }: { part: FilePartLike }) {
-  const [open, setOpen] = useState(false);
+export function FileAttachment({ part, className }: { part: FilePartLike; className?: string }) {
+  const [open, setOpen] = React.useState(false);
   const isImage = part.mediaType?.startsWith("image/");
+  const label = part.filename ?? part.mediaType ?? "attachment";
   return (
     <>
       {isImage ? (
-        <button type="button" onClick={() => setOpen(true)} className="block my-2 cursor-zoom-in" aria-label="Open image">
-          <img
-            src={part.url}
-            alt={part.filename ?? "attached image"}
-            className="max-h-64 max-w-full rounded border border-[#d4d2cd]"
-          />
+        <button type="button" onClick={() => setOpen(true)} className={cn("block cursor-zoom-in rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50", className)} aria-label={`Open ${label}`}>
+          <img src={part.url} alt={label} className="max-h-64 max-w-full rounded-md border" />
         </button>
       ) : (
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          className="inline-flex items-center gap-2 my-1 px-3 py-2 rounded border border-[#d4d2cd] bg-white text-sm text-[#444444] hover:border-[#2b5ea7] hover:text-[#2b5ea7] transition-colors font-sans"
-        >
-          <FileIcon />
-          <span className="truncate max-w-[240px]">{part.filename ?? part.mediaType ?? "file"}</span>
-        </button>
+        <Button variant="outline" size="sm" className={cn("max-w-full", className)} onClick={() => setOpen(true)}>
+          <FileText />
+          <span className="truncate">{label}</span>
+        </Button>
       )}
-      {open && <AttachmentOverlay part={part} onClose={() => setOpen(false)} />}
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="flex h-[85svh] max-w-[min(64rem,calc(100%-2rem))] flex-col gap-3 sm:max-w-[min(64rem,calc(100%-2rem))]">
+          <DialogHeader className="flex-row items-center gap-3 pr-8">
+            <DialogTitle className="min-w-0 flex-1 truncate">{label}</DialogTitle>
+            <DialogDescription className="sr-only">Attachment preview</DialogDescription>
+            <Button variant="outline" size="sm" asChild>
+              <a href={part.url} download={part.filename ?? "attachment"}>
+                <Download />
+                Download
+              </a>
+            </Button>
+          </DialogHeader>
+          <div className="flex min-h-0 flex-1 items-center justify-center">
+            {isImage ? (
+              <img src={part.url} alt={label} className="max-h-full max-w-full object-contain" />
+            ) : (
+              <iframe src={part.url} title={label} className="size-full rounded-md border bg-card" />
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
 
-function AttachmentOverlay({ part, onClose }: { part: FilePartLike; onClose: () => void }) {
-  // Capture phase + preventDefault so ChatCore's Escape-to-stop skips this press.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.preventDefault();
-      onClose();
-    };
-    document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
-
-  const label = part.filename ?? part.mediaType ?? "attachment";
-  // Portaled: message rows use content-visibility, which confines fixed descendants to the row.
-  return createPortal(
-    <div className="fixed inset-0 z-50 flex flex-col bg-black/70" onClick={onClose}>
-      <div className="flex items-center justify-between gap-4 px-4 py-2.5 text-white text-sm font-sans">
-        <span className="truncate">{label}</span>
-        <div className="flex items-center gap-4 shrink-0">
-          <a href={part.url} download={part.filename ?? "attachment"} onClick={(e) => e.stopPropagation()} className="hover:underline">
-            Download
-          </a>
-          <button type="button" onClick={onClose} aria-label="Close" className="text-lg leading-none hover:text-[#9c9890]">×</button>
-        </div>
-      </div>
-      <div className="flex-1 min-h-0 p-4 flex items-center justify-center">
-        {part.mediaType?.startsWith("image/") ? (
-          <img src={part.url} alt={label} className="max-h-full max-w-full object-contain" onClick={(e) => e.stopPropagation()} />
-        ) : (
-          <iframe src={part.url} title={label} className="w-full h-full bg-white rounded" onClick={(e) => e.stopPropagation()} />
-        )}
-      </div>
-    </div>,
-    document.body,
-  );
-}
-
-function FileIcon({ size = 14 }: { size?: number }) {
+function AnswerText({ text, isAnimating, compact }: { text: string; isAnimating: boolean; compact: boolean }) {
+  if (!text.trim()) return null;
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-      <polyline points="14 2 14 8 20 8" />
-    </svg>
+    <div className={compact ? ANSWER_PROSE_COMPACT : ANSWER_PROSE}>
+      <Streamdown isAnimating={isAnimating} controls={MD_CONTROLS} linkSafety={MD_LINK_SAFETY}>{text}</Streamdown>
+    </div>
   );
 }
 
-function DownloadIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-      <polyline points="7 10 12 15 17 10" />
-      <line x1="12" y1="15" x2="12" y2="3" />
-    </svg>
-  );
+interface Props {
+  parts: UIMessage["parts"];
+  isAnimating: boolean;
+  progressStore: ProgressStore;
+  compact?: boolean;
 }
 
+/** One reply: the provider work folds into an "Investigated" section, the answer reads as prose below it. */
 export const MessageParts = React.memo(
-  function MessageParts({ parts, isAnimating, progressStore, sourceTitle, sourceCreatedAt, resolveSourceTitle }: MessagePartsProps) {
+  function MessageParts({ parts, isAnimating, progressStore, compact = false }: Props) {
     if (parts.length === 0 && !isAnimating) {
-      return <span className="text-sm italic text-[#9c9890]">(interrupted)</span>;
+      return <p className="text-sm text-muted-foreground">Interrupted before a reply.</p>;
     }
 
-    // Tool-based marker (begin_analysis) takes priority over the legacy
-    // text marker — shared with the compaction split/render helpers.
+    // The analysis marker splits work from answer; without one, the answer is everything after the last query.
     const marker = findAnalysisMarker(parts);
+    let workEnd = 0;
+    if (marker) workEnd = marker.partIdx;
+    else parts.forEach((p, i) => { if (isProviderTool(p.type)) workEnd = i + 1; });
 
-    function renderPart(part: UIMessage["parts"][number], i: number | string, textOverride?: string) {
-      if (part.type === "reasoning") {
-        return <ReasoningBlock key={i} content={part.text} isAnimating={isAnimating} />;
+    const work: Array<{ part: Part; key: string; text?: string }> = [];
+    const answer: Array<{ part: Part; key: string; text?: string }> = [];
+    const aside: Array<{ part: Part; key: string }> = [];
+    parts.forEach((part, i) => {
+      if (isHiddenPart(part as ToolPart)) return;
+      if (marker && i === marker.partIdx) {
+        if (marker.kind === "text" && part.type === "text") {
+          work.push({ part, key: `${i}`, text: part.text.slice(0, marker.charIdx) });
+          answer.push({ part, key: `${i}-after`, text: part.text.slice(marker.charIdx + ANALYSIS_MARKER.length) });
+        }
+        return;
       }
-      if (part.type === "text") {
-        const text = textOverride ?? part.text;
-        if (!text.trim()) return null;
+      if (i >= workEnd) answer.push({ part, key: `${i}` });
+      else if (part.type === "file" || isMonitorTool(part.type)) aside.push({ part, key: `${i}` });
+      else work.push({ part, key: `${i}` });
+    });
+
+    const steps = work.filter((w) => isProviderTool(w.part.type));
+    const running = isAnimating && answer.length === 0;
+
+    const renderWork = ({ part, key, text }: (typeof work)[number]) => {
+      if (part.type === "text") return <li key={key}><Narration content={text ?? part.text} isAnimating={isAnimating} /></li>;
+      if (part.type === "reasoning") return <li key={key}><ReasoningBlock content={part.text} isAnimating={isAnimating} /></li>;
+      if (isProviderTool(part.type)) return <ProviderStep key={key} part={part as ToolPart} progressStore={progressStore} />;
+      return <li key={key}><OtherToolPart part={part as ToolPart} /></li>;
+    };
+
+    const renderAnswer = ({ part, key, text }: (typeof answer)[number]) => {
+      if (part.type === "text") return <AnswerText key={key} text={text ?? part.text} isAnimating={isAnimating} compact={compact} />;
+      if (part.type === "reasoning") return <ReasoningBlock key={key} content={part.text} isAnimating={isAnimating} />;
+      if (part.type === "file") return <FileAttachment key={key} part={part as FilePartLike} />;
+      if (isProviderTool(part.type)) {
         return (
-          <Streamdown key={i} isAnimating={isAnimating} controls={MD_CONTROLS} linkSafety={MD_LINK_SAFETY}>
-            {text}
-          </Streamdown>
+          <ol key={key}>
+            <ProviderStep part={part as ToolPart} progressStore={progressStore} />
+          </ol>
         );
       }
-      if (part.type === "file") {
-        return <FileAttachment key={i} part={part as FilePartLike} />;
-      }
-      return (
-        <ToolPartRenderer
-          key={i}
-          part={part as Parameters<typeof ToolPartRenderer>[0]["part"]}
-          progressStore={progressStore}
-        />
+      return <OtherToolPart key={key} part={part as ToolPart} />;
+    };
+
+    let investigation: React.ReactNode = null;
+    if (steps.length > 0) {
+      const providers = [...new Set(steps.map((s) => providerLabel(providerOf(s.part.type))))].join(", ");
+      const queries = steps.reduce((n, s) => n + stepQueryCount(s.part as ToolPart, progressStore), 0);
+      const label = [running ? "Investigating" : "Investigated", providers, queries > 0 && `${queries} ${queries === 1 ? "query" : "queries"}`]
+        .filter(Boolean)
+        .join(" · ");
+      investigation = (
+        <Collapsible defaultOpen={isAnimating}>
+          <CollapsibleTrigger className="group/trigger -ml-1.5 inline-flex max-w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[13px]/[18px] text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50">
+            <ChevronRight className="size-3.5 shrink-0 transition-transform duration-200 ease-out group-data-[state=open]/trigger:rotate-90" aria-hidden="true" />
+            {running && <Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />}
+            <span className="min-w-0 truncate">{label}</span>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <ol className="mt-3 space-y-5">{work.map(renderWork)}</ol>
+          </CollapsibleContent>
+        </Collapsible>
       );
-    }
-
-    if (!marker) {
-      return <>{parts.map((part, i) => renderPart(part, i))}</>;
-    }
-
-    const before: React.ReactNode[] = [];
-    const after: React.ReactNode[] = [];
-
-    for (let i = 0; i < parts.length; i++) {
-      if (i < marker.partIdx) {
-        before.push(renderPart(parts[i], i));
-      } else if (i === marker.partIdx) {
-        if (marker.kind === "text") {
-          const markerPart = parts[i] as { type: "text"; text: string };
-          const textBefore = markerPart.text.slice(0, marker.charIdx);
-          const textAfter = markerPart.text.slice(marker.charIdx + ANALYSIS_MARKER.length);
-          if (textBefore.trim()) before.push(renderPart(parts[i], i, textBefore));
-          if (textAfter.trim()) after.push(renderPart(parts[i], `${i}-after`, textAfter));
-        }
-        // tool-based marker: entire part is the marker, skip it
-      } else {
-        after.push(renderPart(parts[i], i));
-      }
-    }
-
-    // Build a parts slice for the analysis section (for CopyMessageButton)
-    const analysisParts: UIMessage["parts"] = [];
-    for (let i = marker.partIdx; i < parts.length; i++) {
-      const p = parts[i];
-      if (i === marker.partIdx) {
-        if (marker.kind === "text" && p.type === "text") {
-          const textAfter = p.text.slice(marker.charIdx + ANALYSIS_MARKER.length);
-          if (textAfter.trim()) analysisParts.push({ type: "text", text: textAfter });
-        }
-      } else {
-        analysisParts.push(p);
-      }
+    } else if (work.length > 0) {
+      investigation = <ol className="space-y-3">{work.map(renderWork)}</ol>;
     }
 
     return (
-      <>
-        {before}
-        <AnalysisSection parts={analysisParts} sourceTitle={sourceTitle} sourceCreatedAt={sourceCreatedAt} resolveSourceTitle={resolveSourceTitle}>
-          {after}
-        </AnalysisSection>
-      </>
+      <div className={cn("space-y-4", compact && "space-y-3")}>
+        {investigation}
+        {aside.map(({ part, key }) => (part.type === "file" ? <FileAttachment key={key} part={part as FilePartLike} /> : <OtherToolPart key={key} part={part as ToolPart} />))}
+        {answer.map(renderAnswer)}
+      </div>
     );
   },
   (prev, next) => {
-    // Always re-render streaming messages (content is changing)
     if (prev.isAnimating || next.isAnimating) return false;
-    // Source metadata feeds the "download as image" payload — a late-arriving
-    // title must trigger a re-render so the AnalysisSection closure sees it.
-    if (prev.sourceTitle !== next.sourceTitle) return false;
-    if (prev.sourceCreatedAt !== next.sourceCreatedAt) return false;
-    // Completed messages: parts are stable, skip re-render
+    if (prev.compact !== next.compact || prev.progressStore !== next.progressStore) return false;
     if (prev.parts === next.parts) return true;
-    // When a tool part transitions state (e.g. input-available → output-available),
-    // the array length stays the same but the part object is a new reference.
+    // A tool part changing state keeps the array length but swaps the part object.
     if (prev.parts.length !== next.parts.length) return false;
-    for (let i = 0; i < prev.parts.length; i++) {
-      if (prev.parts[i] !== next.parts[i]) return false;
-    }
-    return true;
+    return prev.parts.every((p, i) => p === next.parts[i]);
   },
 );

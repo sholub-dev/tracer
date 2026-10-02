@@ -15,8 +15,8 @@ export function DashboardChatPanel({ dashboardId, className }: DashboardChatPane
     <PanelChat
       chatId={`__dashboard__:${dashboardId}`}
       apiEndpoint="/api/dashboard-chat"
-      title="Dashboard Builder"
-      placeholder="Create a widget..."
+      title="Dashboard builder"
+      placeholder="Describe a widget to add"
       extraBody={extraBody}
       onData={(part) => {
         if (part.type === "data-widget-changed") {

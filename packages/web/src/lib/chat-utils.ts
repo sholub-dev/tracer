@@ -36,8 +36,7 @@ export function handleProgressData(
       if (tcIdx !== -1) parts.splice(tcIdx, 1);
       parts.push({ type: "query", query: data.part.query as string, results: data.part.results });
     } else if (data.part.type === "begin-analysis") {
-      // The sub-agent called begin_analysis — everything after this is its final Analysis,
-      // rendered in the distinct Analysis box (same as direct mode).
+      // After begin_analysis, everything the sub-agent writes is its final Analysis.
       parts.push({ type: "analysis-start" });
     } else if (data.part.type === "mark-summary") {
       // Legacy: older sub-agents marked the last text part as a summary block.
@@ -61,13 +60,7 @@ export function stopChat(sessionId: string): Promise<void> {
   }).then(() => {}, () => {});
 }
 
-/**
- * Normalize clipboard on copy: provides clean plain text only.
- * Fixes two issues:
- * 1. Nested block elements (Streamdown div → p) add trailing newlines on triple-click
- * 2. Streamdown renders emails/links as <button> elements (link safety) which Slack
- *    and other apps interpret as block elements, replacing them with line breaks
- */
+/** Copies plain text only: Streamdown's nested blocks and link buttons otherwise paste as stray line breaks. */
 export function normalizeClipboard(e: React.ClipboardEvent) {
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed) return;

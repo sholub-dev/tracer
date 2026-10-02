@@ -1,22 +1,88 @@
-import React, { useState, useRef, useEffect, useMemo, useCallback, createRef } from "react";
+import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import type { UIMessage } from "ai";
-import { theme } from "../lib/theme";
+import { Loader2, Pencil, Trash2 } from "lucide-react";
+import { toast } from "sonner";
+import {
+  DEFAULT_SESSION_TITLE,
+  SESSION_KIND,
+  UNIFIED_SCOPE,
+  analysisSectionParts,
+  compactionUpTo,
+  isAnalysisMessage,
+} from "@tracer-sh/shared";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { trpc } from "../lib/trpc";
-import { LiveStreamView } from "../components/chat/LiveStreamView";
-import { ChatCore, type ChatCoreRef } from "../components/chat/ChatCore";
-import { CopyMessageButton } from "../components/chat/CopyMessageButton";
-import { SessionSummaryBlock } from "../components/chat/SessionSummaryBlock";
-import { ConfirmDialog } from "../components/ui/ConfirmDialog";
-import { ProviderToggle } from "../components/ui/ProviderToggle";
-import { DEFAULT_SESSION_TITLE, SESSION_KIND, UNIFIED_SCOPE, analysisSectionParts, compactionUpTo, isAnalysisMessage } from "@tracer-sh/shared";
-import { SessionTitle } from "../components/debug/SessionTitle";
-import { CostDisplay, computeCostBreakdown, type CostBreakdown } from "../components/debug/CostDisplay";
-import { EditMessageForm } from "../components/debug/EditMessageForm";
 import { useParsedMessages } from "../lib/chat-utils";
+import { formatTime } from "../lib/monitor-utils";
+import type { ProgressStore } from "../lib/progress-store";
+import { LiveStreamView } from "../components/chat/LiveStreamView";
+import { COLUMN, ChatCore, type ChatCoreRef, type RenderView } from "../components/chat/ChatCore";
+import { POST_MORTEM_PROMPT, monitorNameOf, transcriptOf } from "../components/chat/MessageView";
+import { copyText } from "../components/chat/MessageActions";
+import { SessionSummaryBlock } from "../components/chat/SessionSummaryBlock";
+import { SourcesToggle } from "../components/chat/SourcesToggle";
+import { SessionHeader } from "../components/debug/SessionHeader";
+import { CostDisplay, computeCostBreakdown } from "../components/debug/CostDisplay";
+import { EditMessageForm } from "../components/debug/EditMessageForm";
+import { NewInvestigation } from "../components/debug/NewInvestigation";
 
-export function Debug({ sessionId, isNew }: { sessionId: string; isNew: boolean }) {
-  // Default everyone into the cross-provider "ALL" (unified) scope; a stored preference
-  // (set when the user picks a specific provider) overrides it and carries across sessions.
+const KIND_LABELS: Record<string, string> = {
+  [SESSION_KIND.MONITOR]: "Alert",
+  [SESSION_KIND.API]: "API",
+  [SESSION_KIND.IMPORTED]: "Imported",
+};
+
+function sessionMeta(kind: string | null | undefined, messages: UIMessage[], at: number | undefined): string[] {
+  return [
+    KIND_LABELS[kind ?? ""] ?? "Chat",
+    kind === SESSION_KIND.MONITOR ? monitorNameOf(messages) : undefined,
+    at ? formatTime(at) : undefined,
+  ].filter((s): s is string => !!s);
+}
+
+function useDeleteSession(sessionId: string, onDeleted: () => void) {
+  const utils = trpc.useUtils();
+  const mutation = trpc.sessions.delete.useMutation();
+  return () =>
+    mutation.mutate(
+      { id: sessionId },
+      {
+        onSuccess: () => {
+          utils.sessions.list.invalidate();
+          utils.monitors.triggers.invalidate();
+          utils.monitors.list.invalidate();
+          toast("Investigation deleted");
+          onDeleted();
+        },
+        onError: () => toast.error("Couldn't delete the investigation"),
+      },
+    );
+}
+
+function CompactBanner({ children, action }: { children: React.ReactNode; action?: React.ReactNode }) {
+  return (
+    <div className={cn(COLUMN, "pb-3")}>
+      <div role="status" className="flex items-center gap-3 rounded-lg bg-primary-tint px-4 py-2.5 text-sm text-ink-2 animate-in fade-in duration-200">
+        {children}
+        {action}
+      </div>
+    </div>
+  );
+}
+
+export function Debug({ sessionId, isNew, onDeleted }: { sessionId: string; isNew: boolean; onDeleted: () => void }) {
+  // Everyone starts in the cross-provider unified scope; picking a provider is remembered across sessions.
   const [activeProvider, setActiveProviderRaw] = useState<string | null>(
     () => localStorage.getItem("tracer:activeProvider") ?? UNIFIED_SCOPE,
   );
@@ -27,31 +93,23 @@ export function Debug({ sessionId, isNew }: { sessionId: string; isNew: boolean 
 
   const utils = trpc.useUtils();
   const markViewed = trpc.sessions.markViewed.useMutation();
+  const deleteSession = useDeleteSession(sessionId, onDeleted);
 
   const sessionQuery = trpc.sessions.get.useQuery({ id: sessionId }, { gcTime: 0, enabled: !isNew });
   const sessionStatus = sessionQuery.data?.status;
 
-  // Mark session as viewed immediately on select — optimistically update caches
+  // Mark the session viewed on select, updating the list caches optimistically.
   useEffect(() => {
-    const listData = utils.sessions.list.getData();
-    const session = listData?.find((s) => s.id === sessionId);
+    const session = utils.sessions.list.getData()?.find((s) => s.id === sessionId);
     if (!session || session.status === "idle" || session.status === "streaming") return;
-
-    // Optimistically clear the per-session indicator in the list cache
-    utils.sessions.list.setData(undefined, (prev) =>
-      prev?.map((s) => (s.id === sessionId ? { ...s, status: "idle" } : s)),
-    );
-    // Optimistically decrement the nav badge count
-    utils.sessions.activeCount.setData(undefined, (prev) =>
-      prev ? { ...prev, done: Math.max(0, prev.done - 1) } : prev,
-    );
+    utils.sessions.list.setData(undefined, (prev) => prev?.map((s) => (s.id === sessionId ? { ...s, status: "idle" } : s)));
+    utils.sessions.activeCount.setData(undefined, (prev) => (prev ? { ...prev, done: Math.max(0, prev.done - 1) } : prev));
     markViewed.mutate({ id: sessionId });
   }, [sessionId, sessionStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const initialMessages = useParsedMessages(sessionQuery.data?.messagesJson);
 
-  // Separate cost query — decoupled from sessions.get so invalidating cost
-  // data after streaming never triggers the loading state that unmounts the chat.
+  // Separate from sessions.get so refreshing cost after a stream never unmounts the chat.
   const costQuery = trpc.sessions.getCost.useQuery({ id: sessionId });
   const costBreakdown = useMemo(() => {
     const d = costQuery.data;
@@ -59,29 +117,23 @@ export function Debug({ sessionId, isNew }: { sessionId: string; isNew: boolean 
     const updatedAt = sessionQuery.data?.updatedAt;
     return computeCostBreakdown(d.agents, updatedAt ? updatedAt * 1000 : undefined);
   }, [costQuery.data, sessionQuery.data?.updatedAt]);
+  const cost = costBreakdown && (costBreakdown.totalInput > 0 || costBreakdown.totalOutput > 0) ? <CostDisplay breakdown={costBreakdown} /> : null;
+  const sources = <SourcesToggle activeProvider={activeProvider} onToggle={setActiveProvider} />;
 
-  // Wait for session data to load when resuming
   let body: React.ReactNode;
   if (sessionQuery.isLoading) {
     body = (
-      <div className={theme.chatContainer}>
-        <div className="flex items-center justify-center h-full">
-          <span className={theme.chatEmptyState}>Loading session...</span>
-        </div>
+      <div role="status" aria-label="Loading investigation" className="flex h-full items-center justify-center">
+        <Loader2 className="size-5 animate-spin text-muted-foreground" />
       </div>
     );
   } else if (sessionQuery.data?.status === "streaming") {
-    // Compacted session: hide summarized messages here too (display-only —
-    // LiveStreamView never sends message content anywhere).
-    const liveData = sessionQuery.data;
+    // A compacted session hides its summarized messages here too (display-only).
+    const live = sessionQuery.data;
     const liveMsgs = initialMessages ?? [];
-    const liveUpTo =
-      liveData.summary && liveData.summaryUpTo && liveData.summaryUpTo <= liveMsgs.length
-        ? liveData.summaryUpTo
-        : 0;
+    const liveUpTo = live.summary && live.summaryUpTo && live.summaryUpTo <= liveMsgs.length ? live.summaryUpTo : 0;
     const liveTail = liveUpTo > 0 ? liveMsgs.slice(liveUpTo) : liveMsgs;
-    // A kept analysis boundary heads the tail — show only its analysis
-    // section, like the regular compacted view (display-only).
+    // A kept analysis boundary heads the tail; show only its analysis section, like the regular compacted view.
     if (liveUpTo > 0 && liveTail[0]?.role === "assistant") {
       const parts = analysisSectionParts(liveTail[0].parts);
       if (parts) liveTail[0] = { ...liveTail[0], parts };
@@ -93,21 +145,23 @@ export function Debug({ sessionId, isNew }: { sessionId: string; isNew: boolean 
         initialMessages={liveTail}
         onComplete={() => sessionQuery.refetch()}
         header={
-          <>
-            <SessionTitle chatId={sessionId} hasMessages isLoading={false} onPostMortem={() => {}} streaming />
-            {liveUpTo > 0 && liveData.summary && (
-              <div className="px-10">
-                <SessionSummaryBlock
-                  summary={liveData.summary}
-                  summarizedCount={liveUpTo}
-                  createdAt={liveData.summaryCreatedAt}
-                  readOnly
-                />
-              </div>
-            )}
-          </>
+          <SessionHeader
+            chatId={sessionId}
+            title={live.title === DEFAULT_SESSION_TITLE ? undefined : live.title}
+            meta={sessionMeta(live.kind, liveMsgs, live.updatedAt)}
+            streaming
+            onPostMortem={() => {}}
+            onCopyText={() => copyText(transcriptOf(live.title, liveMsgs), "Copied as text")}
+            onDelete={deleteSession}
+          />
         }
-        beforeInput={<div className="px-10 pt-2 flex justify-end"><ProviderToggle activeProvider={activeProvider} onToggle={setActiveProvider} /></div>}
+        beforeMessages={
+          liveUpTo > 0 && live.summary ? (
+            <SessionSummaryBlock summary={live.summary} summarizedCount={liveUpTo} createdAt={live.summaryCreatedAt} readOnly />
+          ) : undefined
+        }
+        sources={sources}
+        cost={cost}
       />
     );
   } else if (sessionQuery.data?.kind === SESSION_KIND.IMPORTED) {
@@ -117,6 +171,7 @@ export function Debug({ sessionId, isNew }: { sessionId: string; isNew: boolean 
         sessionId={sessionId}
         sessionTitle={sessionQuery.data.title}
         initialMessages={initialMessages ?? []}
+        onDelete={deleteSession}
       />
     );
   } else {
@@ -125,14 +180,16 @@ export function Debug({ sessionId, isNew }: { sessionId: string; isNew: boolean 
         key={sessionId}
         chatId={sessionId}
         initialMessages={initialMessages}
-        costBreakdown={costBreakdown}
+        sources={sources}
+        cost={cost}
         activeProvider={activeProvider}
-        setActiveProvider={setActiveProvider}
         sessionTitle={sessionQuery.data?.title}
+        sessionKind={sessionQuery.data?.kind}
         sessionUpdatedAt={sessionQuery.data?.updatedAt}
         summary={sessionQuery.data?.summary}
         summaryUpTo={sessionQuery.data?.summaryUpTo}
         summaryCreatedAt={sessionQuery.data?.summaryCreatedAt}
+        onDelete={deleteSession}
       />
     );
   }
@@ -140,95 +197,79 @@ export function Debug({ sessionId, isNew }: { sessionId: string; isNew: boolean 
   return <div className="relative h-full">{body}</div>;
 }
 
-// ── Read-only view for imported sessions ─────────────────────────────────────
-
 interface ImportedViewProps {
   sessionId: string;
   sessionTitle: string;
   initialMessages: UIMessage[];
+  onDelete: () => void;
 }
 
-function ImportedView({ sessionId, sessionTitle, initialMessages }: ImportedViewProps) {
-  const first = initialMessages[0] as UIMessage & {
-    metadata?: { sourceTitle?: string; sourceCreatedAt?: number };
-  } | undefined;
+function ImportedView({ sessionId, sessionTitle, initialMessages, onDelete }: ImportedViewProps) {
+  const first = initialMessages[0] as (UIMessage & { metadata?: { sourceTitle?: string; sourceCreatedAt?: number } }) | undefined;
   const sourceTitle = first?.metadata?.sourceTitle ?? sessionTitle;
   const sourceCreatedAt = first?.metadata?.sourceCreatedAt;
-
-  const formattedDate = useMemo(() => {
-    if (!sourceCreatedAt) return "";
-    try {
-      return new Date(sourceCreatedAt * 1000).toLocaleDateString(undefined, {
-        year: "numeric", month: "short", day: "numeric",
-      });
-    } catch {
-      return "";
-    }
-  }, [sourceCreatedAt]);
-
-  const banner = (
-    <div className={theme.titleBar}>
-      {sourceTitle && <h2 className={theme.titleText}>{sourceTitle}</h2>}
-      <div className="text-xs text-[#9c9890] mt-1">
-        Imported{formattedDate ? ` · originally ${formattedDate}` : ""}
-      </div>
-    </div>
-  );
+  const date = sourceCreatedAt ? new Date(sourceCreatedAt * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "";
 
   return (
-    <div className={theme.chatContainer}>
-      <ChatCore
-        chatId={sessionId}
-        apiEndpoint="/api/chat"
-        initialMessages={initialMessages}
-        variant="full"
-        readOnly
-        sourceTitle={sourceTitle}
-        sourceCreatedAt={sourceCreatedAt}
-        scrollHeader={banner}
-      />
-    </div>
+    <ChatCore
+      chatId={sessionId}
+      apiEndpoint="/api/chat"
+      initialMessages={initialMessages}
+      readOnly
+      readOnlyNotice={
+        <p className="rounded-xl border bg-card px-4 py-3 text-center text-[13px]/[18px] text-muted-foreground">
+          Imported from an image{date ? ` of ${date}` : ""}. Read-only.
+        </p>
+      }
+      sourceTitle={sourceTitle}
+      sourceCreatedAt={sourceCreatedAt}
+      scrollHeader={
+        <SessionHeader
+          chatId={sessionId}
+          title={sourceTitle}
+          meta={["Imported", ...(date ? [`originally ${date}`] : [])]}
+          readOnly
+          onCopyText={() => copyText(transcriptOf(sourceTitle, initialMessages), "Copied as text")}
+          onDelete={onDelete}
+        />
+      }
+    />
   );
 }
 
 interface DebugChatProps {
   chatId: string;
   initialMessages?: UIMessage[];
-  costBreakdown: CostBreakdown | null;
+  sources: React.ReactNode;
+  cost: React.ReactNode;
   activeProvider: string | null;
-  setActiveProvider: (type: string) => void;
   sessionTitle?: string;
+  sessionKind?: string | null;
   sessionUpdatedAt?: number;
   summary?: string | null;
   summaryUpTo?: number | null;
   summaryCreatedAt?: number | null;
+  onDelete: () => void;
 }
 
-function DebugChat({ chatId, initialMessages, costBreakdown, activeProvider, setActiveProvider, sessionTitle, sessionUpdatedAt, summary, summaryUpTo, summaryCreatedAt }: DebugChatProps) {
+function DebugChat({ chatId, initialMessages, sources, cost, activeProvider, sessionTitle, sessionKind, sessionUpdatedAt, summary, summaryUpTo, summaryCreatedAt, onDelete }: DebugChatProps) {
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [hasMessages, setHasMessages] = useState(!!initialMessages?.length);
-  // Compaction needs a boundary to pick — without one, selection mode would
-  // be a dead end with no buttons.
-  const [hasBoundary, setHasBoundary] = useState(
-    () => hasCompactBoundary(initialMessages ?? []),
-  );
+  // Compaction needs a boundary to pick; without one, selection mode would be a dead end.
+  const [hasBoundary, setHasBoundary] = useState(() => hasCompactBoundary(initialMessages ?? []));
   const [showOriginals, setShowOriginals] = useState(false);
-  // Compacting is a deliberate two-step flow: the header "Compact" button
-  // enters selection mode, then the user picks the boundary message.
+  // Compacting is two steps: the header's Compact enters selection mode, then the user picks the boundary.
   const [selectingCompact, setSelectingCompact] = useState(false);
-  // In-flight compaction: `upTo` is the exclusive end of the range that gets
-  // hidden (the summaryUpTo the server will store); `count` is the number of
-  // messages feeding the summary (an analysis boundary stays visible but its
-  // tool work is summarized too, so count can exceed upTo).
+  // `upTo` ends the hidden range (exclusive); `count` can exceed it since a kept analysis boundary is summarized too.
   const [compacting, setCompacting] = useState<{ upTo: number; count: number } | null>(null);
-  const [compactError, setCompactError] = useState<string | null>(null);
   const isCompacting = compacting !== null;
   const coreRef = useRef<ChatCoreRef>(null);
   const hasMarkedViewed = useRef(false);
   const utils = trpc.useUtils();
+  const [startedAt] = useState(() => Math.floor(Date.now() / 1000));
 
   // A run the server starts here (follow-up timer, API) flips the page to the live stream view.
   const listStatus = trpc.sessions.list.useQuery(undefined, { select: (l) => l.find((s) => s.id === chatId)?.status }).data;
@@ -245,24 +286,33 @@ function DebugChat({ chatId, initialMessages, costBreakdown, activeProvider, set
   const updateSummaryMutation = trpc.sessions.updateSummary.useMutation();
   const clearSummaryMutation = trpc.sessions.clearSummary.useMutation();
 
-  // Drop the summary from the query cache (mirrors a server-side clear, e.g.
-  // when a truncation cut into the summarized prefix).
+  // Drop the summary from the cache (mirrors a server-side clear, e.g. a truncation into the summarized prefix).
   const clearSummaryCache = () => {
-    utils.sessions.get.setData({ id: chatId }, (prev) =>
-      prev ? { ...prev, summary: null, summaryUpTo: null, summaryCreatedAt: null } : prev,
-    );
+    utils.sessions.get.setData({ id: chatId }, (prev) => (prev ? { ...prev, summary: null, summaryUpTo: null, summaryCreatedAt: null } : prev));
     setShowOriginals(false);
   };
 
-  // Truncate the persisted history in lockstep with the client list; the
-  // server reports whether the truncation invalidated the summary.
+  // Truncate the persisted history in lockstep with the client list; the server says whether the summary was invalidated.
   const truncateTo = async (keepCount: number) => {
     const res = await truncateMessages.mutateAsync({ id: chatId, keepCount });
     if (res.summaryCleared) clearSummaryCache();
   };
 
   const titleQuery = trpc.sessions.getTitle.useQuery({ id: chatId }, { enabled: hasMessages });
+  const titlePending = titleQuery.data?.titlePending ?? true;
   const liveTitle = titleQuery.data?.title ?? sessionTitle;
+  const headerTitle = !titlePending ? titleQuery.data?.title : sessionTitle && sessionTitle !== DEFAULT_SESSION_TITLE ? sessionTitle : undefined;
+
+  const refreshCostData = useCallback(() => {
+    utils.sessions.getCost.invalidate({ id: chatId });
+  }, [utils, chatId]);
+
+  // Title generation is billed after the reply; refresh the cost once the title lands.
+  const prevTitlePending = useRef(titlePending);
+  useEffect(() => {
+    if (prevTitlePending.current && !titlePending) refreshCostData();
+    prevTitlePending.current = titlePending;
+  }, [titlePending, refreshCostData]);
 
   const resolveSourceTitle = useCallback(async () => {
     const fresh = await utils.sessions.getTitle.fetch({ id: chatId }, { staleTime: 0 });
@@ -272,27 +322,17 @@ function DebugChat({ chatId, initialMessages, costBreakdown, activeProvider, set
   const handlePostMortem = () => {
     if (!coreRef.current) return;
     coreRef.current.scrollToBottom({ animation: "instant" });
-    coreRef.current.sendMessage({
-      text: `Generate a Post-Mortem Report for this investigation session.
-
-Structure it with these sections:
-- **Summary**: Concise overview of the incident and key findings
-- **Impact**: Quantified impact based on data discovered (error rates, affected services, latency, etc.)
-- **Timeline**: Chronological sequence of key events and findings with timestamps
-- **Root Cause**: Technical explanation of what caused the issue
-- **Resolution**: What fixed the issue or recommended next steps
-
-Base the report entirely on the investigation data and findings from this conversation. Be specific — include actual error messages, metric values, service names, and query results where relevant.`,
-    });
-  };
-
-  const handleDelete = (index: number) => {
-    setDeleteTarget(index);
+    coreRef.current.sendMessage({ text: POST_MORTEM_PROMPT });
   };
 
   const handleDeleteConfirm = async () => {
     if (deleteTarget === null || !coreRef.current) return;
-    await truncateTo(deleteTarget);
+    try {
+      await truncateTo(deleteTarget);
+    } catch {
+      toast.error("Couldn't delete the messages");
+      return;
+    }
     const kept = coreRef.current.messages.slice(0, deleteTarget);
     coreRef.current.setMessages(kept);
     setHasBoundary(hasCompactBoundary(kept));
@@ -300,44 +340,40 @@ Base the report entirely on the investigation data and findings from this conver
   };
 
   const handleStartEdit = (index: number) => {
-    const msg = coreRef.current?.messages[index];
-    const textPart = msg?.parts.find((p) => p.type === "text");
+    const textPart = coreRef.current?.messages[index]?.parts.find((p) => p.type === "text");
     if (!textPart || textPart.type !== "text") return;
     setEditingIndex(index);
     setEditText(textPart.text);
   };
 
-  const handleEditCancel = () => {
-    setEditingIndex(null);
-  };
-
   const handleEditSubmit = async (text: string) => {
     if (editingIndex === null || !text.trim() || !coreRef.current || isCompacting) return;
     const trimmed = text.trim();
-    await truncateTo(editingIndex);
+    try {
+      await truncateTo(editingIndex);
+    } catch {
+      toast.error("Couldn't edit the message");
+      return;
+    }
     coreRef.current.setMessages(coreRef.current.messages.slice(0, editingIndex));
     setEditingIndex(null);
     coreRef.current.scrollToBottom({ animation: "instant" });
     coreRef.current.sendMessage({ text: trimmed });
   };
 
-  const handleBeforeStop = ({ messages: msgs, progressStore }: { messages: UIMessage[]; progressStore: import("../lib/progress-store").ProgressStore }) => {
-    // Bake in-memory sub-agent progress into tool parts before saving,
-    // so partial results survive a page refresh.
+  // Bake in-memory sub-agent progress into tool parts before saving, so partial results survive a refresh.
+  const handleBeforeStop = ({ messages: msgs, progressStore }: { messages: UIMessage[]; progressStore: ProgressStore }) => {
     const enrichedMessages = msgs.map((msg) => {
       if (msg.role !== "assistant") return msg;
-      const enrichedParts = msg.parts.map((part) => {
+      const parts = msg.parts.map((part) => {
         const p = part as Record<string, unknown>;
         if (p.toolCallId && p.state !== "output-available") {
           const progress = progressStore.getSnapshot(p.toolCallId as string);
-          const output = progress?.parts?.length
-            ? { parts: progress.parts }
-            : { error: "Aborted" };
-          return { ...p, state: "output-available", output };
+          return { ...p, state: "output-available", output: progress?.parts?.length ? { parts: progress.parts } : { error: "Aborted" } };
         }
         return part;
       });
-      return { ...msg, parts: enrichedParts };
+      return { ...msg, parts };
     });
     saveMessages.mutate({ id: chatId, messages: enrichedMessages });
   };
@@ -345,17 +381,14 @@ Base the report entirely on the investigation data and findings from this conver
   const handleCompact = async (index: number) => {
     const upTo = compactionUpTo(coreRef.current?.messages ?? [], index);
     if (upTo === null) {
-      setCompactError("There are no messages to summarize before the analysis");
+      toast.error("There are no messages to summarize before the analysis");
       return;
     }
     setSelectingCompact(false);
-    setEditingIndex(null); // an open edit form must not truncate/send mid-compaction
-    // Incremental re-compaction (mirrors the server): an existing summary
-    // with an earlier boundary already covers its prefix — only the delta
-    // feeds the summarizer, so only it counts.
+    setEditingIndex(null); // an open edit form must not truncate or send mid-compaction
+    // An existing summary with an earlier boundary already covers its prefix; only the delta is summarized.
     const prior = summary && summaryUpTo != null && summaryUpTo < upTo ? summaryUpTo : 0;
     setCompacting({ upTo, count: index + 1 - prior });
-    setCompactError(null);
     try {
       const result = await compactMutation.mutateAsync({ id: chatId, upToIndex: index });
       if (utils.sessions.get.getData({ id: chatId })) {
@@ -367,8 +400,8 @@ Base the report entirely on the investigation data and findings from this conver
       utils.sessions.getCost.invalidate({ id: chatId });
       setShowOriginals(false);
     } catch (err) {
-      setCompactError(err instanceof Error ? err.message : "Failed to summarize the conversation");
-      // The server may still have committed (e.g. the response was lost) — re-sync.
+      toast.error("Couldn't summarize the conversation", { description: err instanceof Error ? err.message : undefined });
+      // The server may still have committed (e.g. the response was lost), so re-sync.
       utils.sessions.get.fetch({ id: chatId }, { staleTime: 0 }).catch(() => {});
     } finally {
       setCompacting(null);
@@ -386,12 +419,11 @@ Base the report entirely on the investigation data and findings from this conver
       { id: chatId },
       {
         onSuccess: () => clearSummaryCache(),
-        onError: (err) => setCompactError(err.message || "Failed to delete the summary"),
+        onError: (err) => toast.error("Couldn't delete the summary", { description: err.message }),
       },
     );
   };
 
-  // Escape exits compact-selection mode
   useEffect(() => {
     if (!selectingCompact) return;
     const onKey = (e: KeyboardEvent) => {
@@ -401,193 +433,110 @@ Base the report entirely on the investigation data and findings from this conver
     return () => document.removeEventListener("keydown", onKey);
   }, [selectingCompact]);
 
-  // Stable refs so renderMessage doesn't re-create during streaming
+  // Stable refs so renderMessage isn't re-created during streaming.
   const handleStartEditRef = useRef(handleStartEdit);
   handleStartEditRef.current = handleStartEdit;
-  const handleDeleteRef = useRef(handleDelete);
-  handleDeleteRef.current = handleDelete;
   const handleCompactRef = useRef(handleCompact);
   handleCompactRef.current = handleCompact;
   const handleEditSubmitRef = useRef(handleEditSubmit);
   handleEditSubmitRef.current = handleEditSubmit;
-  const handleEditCancelRef = useRef(handleEditCancel);
-  handleEditCancelRef.current = handleEditCancel;
 
   const renderMessage = useCallback(
-    (msg: UIMessage, index: number, { label, content }: { label: React.ReactNode; content: React.ReactNode }) => {
-      const contentRef = createRef<HTMLDivElement>();
-      // While a summary is being generated, fade out the messages it will hide.
-      const dimmed = compacting !== null && index < compacting.upTo;
-      return (
-        <div className="relative group">
-          {/* Action buttons — hidden during streaming, editing, or any stage of
-              compaction (a truncate/edit racing the flow would corrupt indices,
-              and ConfirmDialog's Escape would collide with selection-mode Escape) */}
-          {!isStreaming && editingIndex === null && !selectingCompact && compacting === null && (
-            <div className={theme.chatMessageActions}>
-              <CopyMessageButton contentRef={contentRef} parts={msg.parts} />
-              {msg.role === "user" && (
-                <button
-                  type="button"
-                  onClick={() => handleStartEditRef.current(index)}
-                  className={theme.chatActionButton}
-                  title="Edit message"
-                  aria-label="Edit message"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
-                    <path d="m15 5 4 4"/>
-                  </svg>
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => handleDeleteRef.current(index)}
-                className={theme.chatActionButton}
-                title="Delete this message and everything after it"
-                aria-label="Delete message"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
-                </svg>
-              </button>
-            </div>
-          )}
-
-          {/* Inline edit mode */}
-          {editingIndex === index ? (
-            <EditMessageForm
-              initialText={editText}
-              onSave={(text) => handleEditSubmitRef.current(text)}
-              onCancel={() => handleEditCancelRef.current()}
-            />
-          ) : (
-            <div
-              ref={contentRef}
-              className={`${theme.chatMessageCard} transition-opacity${dimmed ? " opacity-40 pointer-events-none" : ""}`}
-            >
-              {label}
-              {content}
-            </div>
-          )}
-
-          {/* Compaction in progress: indicator under the last message that
-              will be hidden (an analysis boundary itself stays visible) */}
-          {compacting?.upTo === index + 1 && (
-            <div className="flex justify-center mt-3">
-              <div className={theme.compactionPill}>
-                <CompactionSpinner />
-                Summarizing up to here…
-              </div>
-            </div>
-          )}
-
-          {/* Compact-selection mode: explicit boundary picker per assistant
-              message. An analysis boundary keeps itself, so it needs at least
-              one earlier message to summarize (mirrors hasCompactBoundary /
-              compactionUpTo). */}
-          {selectingCompact && compacting === null && canCompactAt(msg, index) && (
-            <div className="flex justify-center mt-3">
-              <button
-                type="button"
-                onClick={() => handleCompactRef.current(index)}
-                className={theme.compactionButton}
-              >
-                Summarize up to here
-              </button>
-            </div>
-          )}
-        </div>
-      );
+    (msg: UIMessage, index: number, view: RenderView) => {
+      // Actions are hidden during streaming, editing and compaction: a truncate racing those would corrupt indices.
+      const idle = !isStreaming && editingIndex === null && !selectingCompact && compacting === null;
+      let footer: React.ReactNode = null;
+      if (compacting?.upTo === index + 1) {
+        footer = (
+          <span role="status" className="inline-flex items-center gap-2 rounded-md bg-primary-tint px-2.5 py-1 text-xs text-primary">
+            <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+            Summarizing up to here
+          </span>
+        );
+      } else if (selectingCompact && compacting === null && canCompactAt(msg, index)) {
+        footer = (
+          <Button variant="outline" size="xs" onClick={() => handleCompactRef.current(index)}>
+            Summarize up to here
+          </Button>
+        );
+      }
+      return view({
+        showActions: idle,
+        actions: idle && (
+          <>
+            {msg.role === "user" && (
+              <Button variant="ghost" size="xs" className="text-muted-foreground" onClick={() => handleStartEditRef.current(index)}>
+                <Pencil />
+                Edit
+              </Button>
+            )}
+            <Button variant="ghost" size="xs" className="text-muted-foreground" onClick={() => setDeleteTarget(index)}>
+              <Trash2 />
+              Delete from here
+            </Button>
+          </>
+        ),
+        body:
+          editingIndex === index ? (
+            <EditMessageForm initialText={editText} onSave={(text) => handleEditSubmitRef.current(text)} onCancel={() => setEditingIndex(null)} />
+          ) : undefined,
+        // Messages the running summary will hide fade out.
+        dimmed: compacting !== null && index < compacting.upTo,
+        footer,
+      });
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [isStreaming, editingIndex, compacting, selectingCompact], // editText omitted: only changes in the same batch as editingIndex
+    // editText omitted: it only changes in the same batch as editingIndex.
+    [isStreaming, editingIndex, compacting, selectingCompact], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
-  const refreshCostData = useCallback(() => {
-    utils.sessions.getCost.invalidate({ id: chatId });
-  }, [utils, chatId]);
-
-  const sessionTitleHeader = (
-    <SessionTitle
+  const header = (
+    <SessionHeader
       chatId={chatId}
-      hasMessages={hasMessages}
-      // isCompacting included so Post-Mortem (which sends a message directly,
-      // bypassing the disabled composer) can't start a stream mid-compaction.
-      isLoading={isStreaming || isCompacting}
+      title={headerTitle}
+      meta={sessionMeta(sessionKind, initialMessages ?? [], sessionUpdatedAt ?? startedAt)}
+      streaming={isStreaming}
+      // Post-mortem sends directly, bypassing the disabled composer, so it is blocked mid-compaction too.
+      busy={isStreaming || isCompacting}
       onPostMortem={handlePostMortem}
       onCompact={hasBoundary ? () => setSelectingCompact(true) : undefined}
-      streaming={isStreaming}
-      onCostDataReady={refreshCostData}
+      onCopyText={() => copyText(transcriptOf(liveTitle ?? "", coreRef.current?.messages ?? []), "Copied as text")}
+      onDelete={onDelete}
       onTitleClick={() => coreRef.current?.scrollToTop({ animation: "smooth" })}
-    />
-  );
-
-  const emptyStateNotifiers = (
-    <ul className="max-w-md space-y-4 text-sm text-[#b8b5af] font-serif text-center">
-      <li>
-        <div className="text-[#9c9890]">Garbage in, garbage out.</div>
-        <div>The clearer your question, the sharper the answer — vague ones can still work.</div>
-      </li>
-      <li>
-        <div className="text-[#9c9890]">Models hallucinate.</div>
-        <div>Don't take every claim at face value — verify the parts that matter.</div>
-      </li>
-      <li>
-        <div className="text-[#9c9890]">Self-review still matters.</div>
-        <div>Don't share findings with teammates until you've checked them yourself.</div>
-      </li>
-    </ul>
+      onCostDataReady={refreshCostData}
+    >
+      {selectingCompact && (
+        <CompactBanner action={<Button variant="ghost" size="sm" onClick={() => setSelectingCompact(false)}>Cancel</Button>}>
+          <p className="flex-1">Pick a reply. It and everything above it get summarized. Analyses are kept.</p>
+        </CompactBanner>
+      )}
+      {compacting !== null && (
+        <CompactBanner>
+          <Loader2 className="size-4 shrink-0 animate-spin text-primary" aria-hidden="true" />
+          <p className="flex-1">
+            Summarizing {compacting.count} {compacting.count === 1 ? "message" : "messages"}. The chat is paused until it finishes.
+          </p>
+        </CompactBanner>
+      )}
+    </SessionHeader>
   );
 
   return (
-    <div className={`${theme.chatContainer} relative`}>
-      {compactError && (
-        <TopBanner tone="error">
-          <span>{compactError}</span>
-          <button
-            type="button"
-            onClick={() => setCompactError(null)}
-            className="text-xs underline shrink-0"
-          >
-            dismiss
-          </button>
-        </TopBanner>
-      )}
-      {selectingCompact && (
-        <TopBanner tone="compaction">
-          <span>Pick where to compact — that message and everything above it will be summarized (analyses are kept).</span>
-          <button
-            type="button"
-            onClick={() => setSelectingCompact(false)}
-            className="text-xs underline shrink-0"
-          >
-            cancel
-          </button>
-        </TopBanner>
-      )}
-      {compacting !== null && (
-        <TopBanner tone="compaction">
-          <CompactionSpinner />
-          <span>Summarizing {compacting.count} message{compacting.count === 1 ? "" : "s"}… Chat is paused until it finishes.</span>
-        </TopBanner>
-      )}
+    <>
       <ChatCore
         ref={coreRef}
         chatId={chatId}
         apiEndpoint="/api/chat"
-        placeholder="Ask a debugging question..."
+        placeholder={hasMessages ? "Ask a follow-up" : "Describe the problem, paste an error, or drop a screenshot"}
         initialMessages={initialMessages}
-        variant="full"
         sourceTitle={liveTitle}
         sourceCreatedAt={sessionUpdatedAt}
         resolveSourceTitle={resolveSourceTitle}
-        scrollHeader={sessionTitleHeader}
+        scrollHeader={header}
+        emptyState={(composer) => <NewInvestigation composer={composer} onPick={(text) => coreRef.current?.setInput(text)} />}
         beforeMessages={
           summary ? (
             <SessionSummaryBlock
-              // Remount per compaction so a re-compact discards any stale open
-              // editor draft instead of letting it clobber the merged summary.
+              // Remount per compaction so a stale open editor draft can't clobber the merged summary.
               key={summaryCreatedAt ?? 0}
               summary={summary}
               summarizedCount={summaryUpTo}
@@ -604,7 +553,6 @@ Base the report entirely on the investigation data and findings from this conver
         analysisOnlyIndex={summary && !showOriginals && summaryUpTo ? summaryUpTo : undefined}
         inputDisabled={isCompacting}
         onRetryTruncate={truncateTo}
-        emptyStateExtras={emptyStateNotifiers}
         onBeforeStop={handleBeforeStop}
         onStatusChange={(status, msgs) => {
           const loading = status === "submitted" || status === "streaming";
@@ -622,73 +570,43 @@ Base the report entirely on the investigation data and findings from this conver
               added = true;
               return [{ id: chatId, title: DEFAULT_SESSION_TITLE, status: "streaming", kind: null, updatedAt: Math.floor(Date.now() / 1000), titlePending: true }, ...prev];
             });
-            if (added) {
-              utils.sessions.activeCount.setData(undefined, (prev) =>
-                prev ? { ...prev, streaming: prev.streaming + 1 } : prev,
-              );
-            }
+            if (added) utils.sessions.activeCount.setData(undefined, (prev) => (prev ? { ...prev, streaming: prev.streaming + 1 } : prev));
           }
           if (status === "ready") {
             if (!hasMarkedViewed.current) {
               hasMarkedViewed.current = true;
               markViewed.mutate({ id: chatId });
             }
-            utils.sessions.getCost.invalidate({ id: chatId });
+            refreshCostData();
           }
         }}
         extraBody={activeProvider ? { activeProvider } : undefined}
-        beforeInput={
-          costBreakdown && (costBreakdown.totalInput > 0 || costBreakdown.totalOutput > 0)
-            ? <CostDisplay breakdown={costBreakdown} activeProvider={activeProvider} onToggle={setActiveProvider} />
-            : <div className="px-10 pt-2 flex justify-end"><ProviderToggle activeProvider={activeProvider} onToggle={setActiveProvider} /></div>
-        }
+        sources={sources}
+        cost={cost}
         renderMessage={renderMessage}
       />
 
-      <ConfirmDialog
-        open={deleteTarget !== null}
-        title="Delete messages"
-        message="This message and all messages after it will be removed. This cannot be undone."
-        confirmLabel="Delete"
-        onConfirm={handleDeleteConfirm}
-        onCancel={() => setDeleteTarget(null)}
-      />
-    </div>
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete from here?</AlertDialogTitle>
+            <AlertDialogDescription>This message and everything after it are removed. This cannot be undone.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={handleDeleteConfirm}>Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 
-/**
- * Whether message `index` can be a compaction boundary: any assistant message
- * works, except an analysis at index 0, which has nothing earlier to summarize
- * (compactionUpTo returns null there). Single source of truth for the
- * per-message picker button and the "is there any boundary" check.
- */
+/** An assistant message can be a compaction boundary, except an analysis at index 0, which has nothing earlier to summarize. */
 function canCompactAt(msg: UIMessage, index: number): boolean {
   return msg.role === "assistant" && (!isAnalysisMessage(msg) || index >= 1);
 }
 
 function hasCompactBoundary(msgs: UIMessage[]): boolean {
   return msgs.some(canCompactAt);
-}
-
-const BANNER_TONES = {
-  error: "text-[#b33a2a] bg-[#b33a2a]/5 border-[#b33a2a]/20",
-  compaction: "text-[#8a6d3b] bg-[#f5f1e6] border-[#8a6d3b]/25",
-} as const;
-
-/** Floating top-center notification banner shared by the drop/compaction flows. */
-function TopBanner({ tone, children }: { tone: keyof typeof BANNER_TONES; children: React.ReactNode }) {
-  return (
-    <div className={`absolute top-2 left-1/2 -translate-x-1/2 z-40 text-sm border rounded px-4 py-2 flex items-center gap-3 shadow-sm font-sans ${BANNER_TONES[tone]}`}>
-      {children}
-    </div>
-  );
-}
-
-function CompactionSpinner() {
-  return (
-    <svg className="animate-spin shrink-0" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-    </svg>
-  );
 }

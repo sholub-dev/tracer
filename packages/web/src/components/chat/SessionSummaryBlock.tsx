@@ -1,10 +1,24 @@
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { ChevronRight, Copy, Pencil, Trash2 } from "lucide-react";
 import { Streamdown } from "streamdown";
+import { toast } from "sonner";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Textarea } from "@/components/ui/textarea";
 import { MD_CONTROLS, MD_LINK_SAFETY } from "../../lib/markdown";
-import type { UIMessage } from "ai";
-import { theme } from "../../lib/theme";
-import { CopyMessageButton } from "./CopyMessageButton";
-import { ConfirmDialog } from "../ui/ConfirmDialog";
+import { IconButton } from "./IconButton";
+import { copyText, extractMessageText } from "./MessageActions";
+import { ANSWER_PROSE_COMPACT } from "./prose";
 
 interface SessionSummaryBlockProps {
   summary: string;
@@ -20,11 +34,7 @@ interface SessionSummaryBlockProps {
   readOnly?: boolean;
 }
 
-/**
- * Compaction summary block shown at the top of a compacted session. The
- * summarized messages are hidden from the list but never deleted — the
- * "show original messages" toggle reveals them below this block.
- */
+/** Compaction summary at the top of a compacted session; the summarized messages stay available behind "Show original messages". */
 export function SessionSummaryBlock({
   summary,
   summarizedCount,
@@ -35,168 +45,117 @@ export function SessionSummaryBlock({
   onDelete,
   readOnly = false,
 }: SessionSummaryBlockProps) {
-  const [expanded, setExpanded] = useState(true);
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const bodyRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<HTMLTextAreaElement>(null);
 
-  const copyParts = useMemo<UIMessage["parts"]>(
-    () => [{ type: "text", text: summary }],
-    [summary],
-  );
+  const meta = [
+    summarizedCount ? `${summarizedCount} ${summarizedCount === 1 ? "message" : "messages"} summarized` : null,
+    createdAt ? new Date(createdAt * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : null,
+  ].filter(Boolean);
 
-  const meta: string[] = [];
-  if (summarizedCount) {
-    meta.push(`${summarizedCount} message${summarizedCount === 1 ? "" : "s"} summarized`);
-  }
-  if (createdAt) {
-    meta.push(new Date(createdAt * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" }));
-  }
-
-  const handleStartEdit = () => {
-    setDraft(summary);
-    setSaveError(null);
-    setEditing(true);
-    setExpanded(true);
-  };
-
-  const handleSave = async () => {
-    const text = draft.trim();
+  const save = async () => {
+    const text = draft?.trim();
     if (!text || !onSave) return;
     setSaving(true);
-    setSaveError(null);
     try {
       await onSave(text);
-      setEditing(false);
+      setDraft(null);
     } catch {
-      setSaveError("Failed to save summary");
+      toast.error("Couldn't save the summary");
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <div className={`${theme.compactionContainer} relative group/summary`}>
-      <div className="flex items-center justify-between">
-        <button
-          type="button"
-          onClick={() => setExpanded((e) => !e)}
-          className="flex items-baseline gap-2 min-w-0 text-left"
-          title={expanded ? "Collapse summary" : "Expand summary"}
-        >
-          <span className={`${theme.compactionLabel} mb-0`}>Summary</span>
-          {meta.length > 0 && (
-            <span className="text-[11px] text-[#9c9890] font-sans truncate">{meta.join(" · ")}</span>
-          )}
-          <ChevronIcon open={expanded} />
-        </button>
-        {!readOnly && !editing && (
-          <div className="flex items-center gap-0.5 opacity-0 group-hover/summary:opacity-100 transition-opacity">
-            {/* Copy-as-image needs the body rendered — hidden while collapsed */}
-            {expanded && <CopyMessageButton contentRef={bodyRef} parts={copyParts} size={12} />}
+    <Collapsible open={open || draft !== null} onOpenChange={setOpen} className="group/summary rounded-lg border bg-card">
+      <div className="flex items-center gap-2 pr-2">
+        <CollapsibleTrigger className="group/trigger flex min-w-0 flex-1 items-center gap-2 rounded-lg px-4 py-3 text-left text-sm font-medium outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+          <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 ease-out group-data-[state=open]/trigger:rotate-90" aria-hidden="true" />
+          Summary
+          {meta.length > 0 && <span className="truncate font-normal text-muted-foreground">· {meta.join(" · ")}</span>}
+        </CollapsibleTrigger>
+        {!readOnly && draft === null && (
+          <div className="flex shrink-0 items-center gap-0.5 transition-opacity group-focus-within/summary:opacity-100 group-hover/summary:opacity-100 [@media(hover:hover)]:opacity-0">
+            <IconButton label="Copy summary" size="icon-xs" className="text-muted-foreground" onClick={() => copyText(extractMessageText([{ type: "text", text: summary }]), "Summary copied")}>
+              <Copy />
+            </IconButton>
             {onSave && (
-              <button
-                type="button"
-                onClick={handleStartEdit}
-                className={theme.chatActionButton}
-                title="Edit summary"
-                aria-label="Edit summary"
+              <IconButton
+                label="Edit summary"
+                size="icon-xs"
+                className="text-muted-foreground"
+                onClick={() => {
+                  setDraft(summary);
+                  requestAnimationFrame(() => editorRef.current?.focus());
+                }}
               >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                  <path d="m15 5 4 4" />
-                </svg>
-              </button>
+                <Pencil />
+              </IconButton>
             )}
             {onDelete && (
-              <button
-                type="button"
-                onClick={() => setConfirmDelete(true)}
-                className={theme.chatActionButton}
-                title="Delete summary"
-                aria-label="Delete summary"
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 6h18" />
-                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
-                  <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                </svg>
-              </button>
+              <IconButton label="Delete summary" size="icon-xs" className="text-muted-foreground" onClick={() => setConfirmDelete(true)}>
+                <Trash2 />
+              </IconButton>
             )}
           </div>
         )}
       </div>
-
-      {editing ? (
-        <div className="mt-2">
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            rows={14}
-            className={`${theme.chatEditTextarea} text-sm font-sans`}
-            disabled={saving}
-          />
-          <div className={theme.chatEditActions}>
-            <button type="button" onClick={handleSave} disabled={saving || !draft.trim()} className={theme.chatEditSave}>
-              {saving ? "Saving…" : "Save"}
-            </button>
-            <button type="button" onClick={() => setEditing(false)} disabled={saving} className={theme.chatEditCancel}>
-              Cancel
-            </button>
-            {saveError && <span className="text-xs text-[#b33a2a] font-sans">{saveError}</span>}
-          </div>
+      <CollapsibleContent>
+        <div className="border-t px-4 py-3">
+          {draft !== null ? (
+            <div className="space-y-2">
+              <Textarea
+                ref={editorRef}
+                aria-label="Summary"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setDraft(null);
+                  }
+                }}
+                disabled={saving}
+                className="max-h-[60svh] min-h-40 bg-background text-sm"
+              />
+              <div className="flex gap-2">
+                <Button size="sm" onClick={save} disabled={saving || !draft.trim()}>{saving ? "Saving" : "Save"}</Button>
+                <Button size="sm" variant="ghost" onClick={() => setDraft(null)} disabled={saving}>Cancel</Button>
+              </div>
+            </div>
+          ) : (
+            <div className={ANSWER_PROSE_COMPACT}>
+              <Streamdown isAnimating={false} controls={MD_CONTROLS} linkSafety={MD_LINK_SAFETY}>{summary}</Streamdown>
+            </div>
+          )}
         </div>
-      ) : (
-        expanded && (
-          <div ref={bodyRef} className="mt-2 text-sm text-[#2c2c2c] leading-relaxed">
-            <Streamdown isAnimating={false} controls={MD_CONTROLS} linkSafety={MD_LINK_SAFETY}>
-              {summary}
-            </Streamdown>
-          </div>
-        )
-      )}
-
+      </CollapsibleContent>
       {!readOnly && onToggleOriginals && (
-        <button
-          type="button"
-          onClick={onToggleOriginals}
-          className="mt-1.5 text-[11px] font-sans text-[#8a6d3b] hover:underline"
-        >
-          {showOriginals ? "Hide original messages" : "Show original messages"}
-        </button>
+        <div className="border-t px-2 py-1.5">
+          <Button variant="link" size="xs" className="text-muted-foreground" onClick={onToggleOriginals}>
+            {showOriginals ? "Hide original messages" : "Show original messages"}
+          </Button>
+        </div>
       )}
 
-      <ConfirmDialog
-        open={confirmDelete}
-        title="Delete summary?"
-        message="The summary will be removed and the next message will use the full conversation history again. The original messages are unaffected."
-        onConfirm={() => {
-          setConfirmDelete(false);
-          onDelete?.();
-        }}
-        onCancel={() => setConfirmDelete(false)}
-      />
-    </div>
-  );
-}
-
-function ChevronIcon({ open }: { open: boolean }) {
-  return (
-    <svg
-      width="10"
-      height="10"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={`shrink-0 self-center text-[#9c9890] transition-transform ${open ? "rotate-180" : ""}`}
-    >
-      <polyline points="6 9 12 15 18 9" />
-    </svg>
+      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete the summary?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The next message uses the full conversation again. The original messages are not affected.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={() => onDelete?.()}>Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </Collapsible>
   );
 }

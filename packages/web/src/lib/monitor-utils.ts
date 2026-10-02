@@ -36,8 +36,3 @@ export function formatFrequency(seconds: number): string {
   }
   return `every ${seconds}s`;
 }
-
-export function statusVariant(status: string): "error" | "warn" | "success" {
-  if (status === "triggered") return "error";
-  return status === "error" ? "warn" : "success";
-}

@@ -9,8 +9,7 @@ import { App } from "./App";
 import "./index.css";
 
 function Root() {
-  // No focus refetch: it re-runs every active query at once (full session
-  // bodies, provider queries) and can swap the chat view mid-stream.
+  // No focus refetch: it re-runs every active query at once and can swap the chat view mid-stream.
   const [queryClient] = useState(() => new QueryClient({
     defaultOptions: {
       queries: {

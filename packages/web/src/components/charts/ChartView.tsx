@@ -1,31 +1,66 @@
-import { useState, useMemo, type ReactNode } from "react";
-import {
-  LineChart, Line, BarChart, Bar,
-  XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ReferenceArea,
-} from "recharts";
-import { theme, colors } from "../../lib/theme";
-import { useContainerSize } from "../../lib/hooks";
+import { useMemo, useState, type ComponentProps } from "react";
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, ReferenceArea, ReferenceLine, XAxis, YAxis } from "recharts";
+import { ChartContainer, ChartLegend, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
+import { cn } from "@/lib/utils";
 import { coerceNumeric } from "../../lib/result-utils";
 
 const SKIP_KEYS = new Set(["beginTimeSeconds", "endTimeSeconds", "inspectedCount", "facet", "comparison"]);
+// Matches the legend reserve QueryChart adds for growWithLegend.
+const LEGEND_RESERVE = 36;
+const MINUTE = 60;
+const DAY = 86_400;
 
-function useSeriesVisibility<T extends { name: string }>(series: T[]) {
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const toggle = (name: string) =>
-    setSelected((prev) => { const next = new Set(prev); next.has(name) ? next.delete(name) : next.add(name); return next; });
-  const visible = useMemo(() =>
-    selected.size === 0 ? series : series.filter((s) => selected.has(s.name)),
-  [series, selected]);
-  return { selected, toggle, visible };
+type ContainerSize = { width: number; height: number };
+
+export interface Threshold {
+  value: number;
+  operator: ">" | ">=" | "<" | "<=";
 }
 
-function formatTime(unix: number): string {
-  const d = new Date(unix * 1000);
-  const M = d.getMonth() + 1;
-  const D = d.getDate();
-  const h = d.getHours().toString().padStart(2, "0");
-  const m = d.getMinutes().toString().padStart(2, "0");
-  return `${M}/${D} ${h}:${m}`;
+interface Series {
+  name: string;
+  data: { x: number; y: number | null }[];
+  dashed?: boolean;
+}
+
+const seriesColor = (i: number) => `var(--chart-${(i % 5) + 1})`;
+
+function useSeriesVisibility(series: Series[]) {
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const toggle = (name: string) =>
+    setSelected((prev) => { const next = new Set(prev); if (next.has(name)) next.delete(name); else next.add(name); return next; });
+  const isVisible = (name: string) => selected.size === 0 || selected.has(name);
+  return { toggle, isVisible };
+}
+
+const timeFmt = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+const dayFmt = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
+
+function formatTick(unix: number, span: number): string {
+  return span <= DAY ? timeFmt.format(unix * 1000) : dayFmt.format(unix * 1000);
+}
+
+function formatFull(unix: number): string {
+  return `${dayFmt.format(unix * 1000)}, ${timeFmt.format(unix * 1000)}`;
+}
+
+// About six ticks on local clock boundaries: minutes/hours within a day, whole days beyond.
+function timeTicks(min: number, max: number): number[] {
+  const span = max - min;
+  const ticks: number[] = [];
+  if (span <= 0) return [min];
+  if (span <= DAY) {
+    const step = [5, 10, 15, 30, 60, 120, 180, 240, 360].map((m) => m * MINUTE).find((s) => span / s <= 7) ?? 360 * MINUTE;
+    const offset = -new Date(min * 1000).getTimezoneOffset() * MINUTE;
+    for (let t = Math.ceil((min + offset) / step) * step - offset; t <= max; t += step) ticks.push(t);
+    return ticks;
+  }
+  const days = [1, 2, 7, 14, 30].find((d) => span / (d * DAY) <= 7) ?? 30;
+  const d = new Date(min * 1000);
+  d.setHours(0, 0, 0, 0);
+  if (d.getTime() / 1000 < min) d.setDate(d.getDate() + 1);
+  for (; d.getTime() / 1000 <= max; d.setDate(d.getDate() + days)) ticks.push(d.getTime() / 1000);
+  return ticks;
 }
 
 function formatYAxis(value: unknown): string {
@@ -51,360 +86,307 @@ function isFacetDupe(row: Record<string, unknown>, key: string): boolean {
   return row[key] === facet;
 }
 
-export interface Threshold {
-  value: number;
-  operator: ">" | ">=" | "<" | "<=";
+// Integer-only series are counts per bucket, drawn as steps; anything fractional is a continuous measure, drawn smooth.
+function isCountSeries(s: Series): boolean {
+  return s.data.every((p) => p.y == null || Number.isInteger(p.y));
 }
 
-const TOOLTIP_CONTENT_STYLE = { background: colors.paper, border: `1px solid ${colors.border}`, borderRadius: 4, fontSize: 11 };
-const TOOLTIP_LABEL_STYLE = { color: colors.inkMuted, marginBottom: 2 };
-const TOOLTIP_ITEM_STYLE = { color: colors.inkLight };
-
-// ── Recharts chart primitives ──
-
-interface LineChartProps {
-  width: number;
-  height: number;
-  series: { name: string; data: { x: number; y: number | null }[]; color: string; dashed?: boolean }[];
-  formatX: (v: number) => string;
-  threshold?: Threshold;
+function breaches(value: number, t: Threshold): boolean {
+  switch (t.operator) {
+    case ">": return value > t.value;
+    case ">=": return value >= t.value;
+    case "<": return value < t.value;
+    case "<=": return value <= t.value;
+  }
 }
 
-function RechartsLineChart({ width, height, series, formatX, threshold }: LineChartProps) {
-  const data = useMemo(() => {
-    // Pre-index each series for O(1) lookup instead of O(N) Array.find per point
-    const lookup = new Map(series.map((s) => [s.name, new Map(s.data.map((p) => [p.x, p.y]))]));
-    const xSet = new Set<number>();
-    for (const s of series) s.data.forEach((p) => xSet.add(p.x));
-    const xs = [...xSet].sort((a, b) => a - b);
-    return xs.map((x) => {
-      const row: Record<string, unknown> = { x };
-      for (const s of series) row[s.name] = lookup.get(s.name)?.get(x) ?? null;
-      return row;
-    });
-  }, [series]);
+function lastBucketEnd(rows: Record<string, unknown>[]): number | null {
+  let end = -Infinity;
+  for (const r of rows) if (typeof r.endTimeSeconds === "number") end = Math.max(end, r.endTimeSeconds);
+  return Number.isFinite(end) ? Math.min(end, Date.now() / 1000) : null;
+}
 
-  const thresholdAbove = threshold && (threshold.operator === ">" || threshold.operator === ">=");
-  const thresholdBelow = threshold && (threshold.operator === "<" || threshold.operator === "<=");
-
+function SeriesLegend({ series, isVisible, onToggle }: { series: Series[]; isVisible: (name: string) => boolean; onToggle: (name: string) => void }) {
   return (
-    <LineChart width={width} height={height} data={data} margin={{ top: 10, right: 20, bottom: 30, left: 50 }}>
-      <CartesianGrid strokeDasharray="3 3" stroke={colors.border} />
-      <XAxis
-        dataKey="x"
-        tickFormatter={formatX}
-        tick={{ fontSize: 10, fill: colors.inkMuted }}
-        tickLine={false}
-        axisLine={{ stroke: colors.inkFaint }}
-      />
-      <YAxis
-        tickFormatter={formatYAxis}
-        tick={{ fontSize: 11, fill: colors.inkMuted }}
-        tickLine={false}
-        axisLine={false}
-        width={48}
-      />
-      <Tooltip
-        contentStyle={TOOLTIP_CONTENT_STYLE}
-        labelStyle={TOOLTIP_LABEL_STYLE}
-        itemStyle={TOOLTIP_ITEM_STYLE}
-        labelFormatter={(label) => formatX(label as number)}
-        formatter={(val, name) => [formatYAxis(val as number), name]}
-      />
-      {threshold && (
-        <ReferenceLine y={threshold.value} ifOverflow="extendDomain" stroke="#b33a2a" strokeWidth={1.5} strokeDasharray="6 4" />
-      )}
-      {/* recharts fills a missing y1 to the top edge and a missing y2 to the bottom edge */}
-      {thresholdAbove && (
-        <ReferenceArea y2={threshold!.value} fill="rgba(179, 58, 42, 0.12)" />
-      )}
-      {thresholdBelow && (
-        <ReferenceArea y1={threshold!.value} fill="rgba(179, 58, 42, 0.12)" />
-      )}
-      {series.map((s) => (
-        <Line
-          key={s.name}
-          type="monotone"
-          dataKey={s.name}
-          stroke={s.color}
-          strokeWidth={2}
-          strokeDasharray={s.dashed ? "6 4" : undefined}
-          dot={false}
-          activeDot={{ r: 4, strokeWidth: 2, stroke: "#fff" }}
-          connectNulls
-          isAnimationActive={false}
-        />
-      ))}
-    </LineChart>
-  );
-}
-
-interface BarChartProps {
-  width: number;
-  height: number;
-  data: { label: string; value: number }[];
-  color: string;
-}
-
-function RechartsBarChart({ width, height, data, color }: BarChartProps) {
-  return (
-    <BarChart width={width} height={height} data={data} margin={{ top: 10, right: 20, bottom: 30, left: 50 }}>
-      <CartesianGrid strokeDasharray="3 3" stroke={colors.border} vertical={false} />
-      <XAxis
-        dataKey="label"
-        tick={{ fontSize: 10, fill: colors.inkMuted }}
-        tickLine={false}
-        axisLine={{ stroke: colors.inkFaint }}
-      />
-      <YAxis
-        tickFormatter={formatYAxis}
-        tick={{ fontSize: 11, fill: colors.inkMuted }}
-        tickLine={false}
-        axisLine={false}
-        width={48}
-      />
-      <Tooltip
-        contentStyle={TOOLTIP_CONTENT_STYLE}
-        labelStyle={{ color: colors.inkMuted }}
-        formatter={(val) => [formatYAxis(val as number), "count"]}
-      />
-      <Bar dataKey="value" fill={color} radius={[2, 2, 0, 0]} maxBarSize={60} isAnimationActive={false} />
-    </BarChart>
-  );
-}
-
-// ── Legend ──
-
-function ChartLegend({
-  items,
-  selectedNames,
-  onToggle,
-}: {
-  items: { name: string; color: string; dashed?: boolean }[];
-  selectedNames?: Set<string>;
-  onToggle?: (name: string) => void;
-}) {
-  if (items.length === 0) return null;
-  const hasSelection = selectedNames && selectedNames.size > 0;
-  return (
-    <div className="chart-legend flex flex-wrap gap-x-4 gap-y-1 mt-2">
-      {items.map((item) => {
-        const dimmed = hasSelection && !selectedNames.has(item.name);
+    <div className="chart-legend flex max-h-16 flex-wrap justify-center gap-x-4 gap-y-1 overflow-y-auto pt-3">
+      {series.map((s, i) => {
+        const on = isVisible(s.name);
         return (
-          <div
-            key={item.name}
-            className="flex items-center gap-1.5 text-xs font-sans"
-            style={{
-              color: colors.inkMuted,
-              cursor: onToggle ? "pointer" : undefined,
-              opacity: dimmed ? 0.35 : 1,
-              textDecoration: dimmed ? "line-through" : undefined,
-              userSelect: "none",
-            }}
-            onClick={onToggle ? () => onToggle(item.name) : undefined}
+          <button
+            key={s.name}
+            type="button"
+            aria-pressed={on}
+            onClick={() => onToggle(s.name)}
+            className={cn(
+              "flex items-center gap-1.5 rounded-sm text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50",
+              !on && "line-through opacity-40",
+            )}
           >
-            <svg width={16} height={2}>
-              <line x1={0} y1={1} x2={16} y2={1} stroke={item.color} strokeWidth={2} strokeDasharray={item.dashed ? "4 3" : undefined} />
-            </svg>
-            {item.name}
-          </div>
+            <span
+              className={cn("h-2 w-2 shrink-0 rounded-[2px]", s.dashed && "border border-dashed bg-transparent")}
+              style={s.dashed ? { borderColor: seriesColor(i) } : { backgroundColor: seriesColor(i) }}
+            />
+            {s.name}
+          </button>
         );
       })}
     </div>
   );
 }
 
-// ── ChartContainer — handles containerSize vs. auto-measure ──
-
-function ChartContainer({ containerSize, defaultHeight, legendHeight = 0, children }: {
-  containerSize?: { width: number; height: number };
-  defaultHeight: number;
-  legendHeight?: number;
-  children: (size: { width: number; height: number }) => ReactNode;
+function ChartFrame({ config, containerSize, plotHeight, label, children }: {
+  config: ChartConfig;
+  containerSize?: ContainerSize;
+  plotHeight: number;
+  label: string;
+  children: ComponentProps<typeof ChartContainer>["children"];
 }) {
-  const { ref, size: { width: measuredWidth } } = useContainerSize();
-  if (containerSize) {
-    const w = Math.max(containerSize.width - 8, 100);
-    const h = Math.max(containerSize.height - legendHeight - 8, 80);
-    return <>{children({ width: w, height: h })}</>;
-  }
+  // The legend reserve is kept without a legend too, so the box matches its loading placeholder.
+  const height = containerSize ? Math.max(containerSize.height - 8, 80) : plotHeight + LEGEND_RESERVE;
   return (
-    <div ref={ref} className={theme.chartContainer}>
-      {measuredWidth > 0 && children({ width: measuredWidth - 32, height: defaultHeight })}
-    </div>
+    <ChartContainer
+      config={config}
+      role="img"
+      aria-label={label}
+      className={cn("aspect-auto w-full font-sans [&_.recharts-cartesian-axis-tick_text]:tabular-nums", !containerSize && "my-2")}
+      style={{ height }}
+    >
+      {children}
+    </ChartContainer>
   );
 }
 
-// ── TIMESERIES (simple, faceted, and compare-with) ──
+function TimeseriesPlot({ series, containerSize, plotHeight, threshold, endAt }: {
+  series: Series[];
+  containerSize?: ContainerSize;
+  plotHeight: number;
+  threshold?: Threshold;
+  endAt: number | null;
+}) {
+  const { toggle, isVisible } = useSeriesVisibility(series);
+  const keys = useMemo(() => series.map((_, i) => `s${i}`), [series]);
+  const counts = useMemo(() => series.map(isCountSeries), [series]);
 
-export function TimeseriesChart({ rows, containerSize, threshold }: { rows: Record<string, unknown>[]; containerSize?: { width: number; height: number }; threshold?: Threshold }) {
+  const { data, xs } = useMemo(() => {
+    const lookup = series.map((s) => new Map(s.data.map((p) => [p.x, p.y])));
+    const xSet = new Set<number>();
+    for (const s of series) s.data.forEach((p) => xSet.add(p.x));
+    const xs = [...xSet].sort((a, b) => a - b);
+    const rows: Record<string, number | boolean | null>[] = xs.map((x) => {
+      const row: Record<string, number | null> = { x };
+      lookup.forEach((m, i) => { row[`s${i}`] = m.get(x) ?? null; });
+      return row;
+    });
+    // Each value covers its whole bucket, so every line runs to the last bucket's end.
+    const last = rows[rows.length - 1];
+    if (last && endAt != null && endAt > xs[xs.length - 1]) {
+      const tail: Record<string, number | boolean | null> = { x: endAt, tail: true };
+      keys.forEach((k) => { tail[k] = last[k]; });
+      rows.push(tail);
+      xs.push(endAt);
+    }
+    return { data: rows, xs };
+  }, [series, keys, endAt]);
+
+  const config: ChartConfig = Object.fromEntries(series.map((s, i) => [keys[i], { label: s.name, color: seriesColor(i) }]));
+  const min = xs[0] ?? 0;
+  const max = xs[xs.length - 1] ?? 0;
+  const span = max - min;
+  const ticks = useMemo(() => timeTicks(min, max), [min, max]);
+
+  const values = series.filter((s) => isVisible(s.name)).flatMap((s) => s.data.map((p) => p.y)).filter((v): v is number => v != null);
+  const yMin = Math.min(0, ...values);
+  const yMax = Math.max(0, ...values);
+  const above = threshold && (threshold.operator === ">" || threshold.operator === ">=");
+  // Shading is noise when the safe side is empty, e.g. `count > 0` on a zero-based axis.
+  const shade = threshold && (above ? threshold.value > yMin : threshold.value < yMax);
+
+  const breachDot = (props: { cx?: number; cy?: number; index?: number; value?: unknown; payload?: { tail?: boolean } }) => {
+    const v = Array.isArray(props.value) ? props.value[1] : props.value;
+    const hit = threshold && typeof v === "number" && !props.payload?.tail && breaches(v, threshold);
+    if (!hit || props.cx == null || props.cy == null) return <g key={props.index} />;
+    return <circle key={props.index} cx={props.cx} cy={props.cy} r={3.5} fill="var(--destructive)" stroke="var(--card)" strokeWidth={1.5} />;
+  };
+
+  return (
+    <ChartFrame config={config} containerSize={containerSize} plotHeight={plotHeight} label={`Chart of ${series.map((s) => s.name).join(", ")}`}>
+      <AreaChart data={data} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+        <CartesianGrid vertical={false} strokeOpacity={0.6} />
+        <XAxis
+          dataKey="x"
+          type="number"
+          scale="time"
+          domain={["dataMin", "dataMax"]}
+          ticks={ticks}
+          tickFormatter={(t: number) => formatTick(t, span)}
+          interval="preserveStartEnd"
+          minTickGap={24}
+          tickLine={false}
+          axisLine={false}
+          tickMargin={8}
+        />
+        <YAxis width={44} tickFormatter={formatYAxis} allowDecimals={!counts.every(Boolean)} tickCount={4} tickLine={false} axisLine={false} />
+        {threshold && shade && (
+          // recharts fills a missing y1 to the top edge and a missing y2 to the bottom edge
+          above
+            ? <ReferenceArea y2={threshold.value} fill="var(--destructive)" fillOpacity={0.05} ifOverflow="hidden" />
+            : <ReferenceArea y1={threshold.value} fill="var(--destructive)" fillOpacity={0.05} ifOverflow="hidden" />
+        )}
+        {threshold && (
+          <ReferenceLine y={threshold.value} ifOverflow="extendDomain" stroke="var(--destructive)" strokeDasharray="4 4" strokeOpacity={0.8} />
+        )}
+        <ChartTooltip
+          cursor={{ strokeDasharray: "3 3" }}
+          content={
+            <ChartTooltipContent
+              indicator="line"
+              className="[&_.font-mono]:font-sans"
+              labelFormatter={(_, payload) => formatFull(Number(payload?.[0]?.payload?.x))}
+              formatter={(value, name) => (
+                <div className="flex w-full items-center justify-between gap-4">
+                  <span className="text-muted-foreground">{config[String(name)]?.label}</span>
+                  <span className="font-medium text-foreground tabular-nums">{formatYAxis(value)}</span>
+                </div>
+              )}
+            />
+          }
+        />
+        {series.length > 1 && <ChartLegend content={<SeriesLegend series={series} isVisible={isVisible} onToggle={toggle} />} />}
+        {series.map((s, i) => (
+          <Area
+            key={keys[i]}
+            dataKey={keys[i]}
+            name={keys[i]}
+            hide={!isVisible(s.name)}
+            type={counts[i] ? "stepAfter" : "monotone"}
+            stroke={`var(--color-${keys[i]})`}
+            strokeWidth={1.5}
+            strokeDasharray={s.dashed ? "6 4" : undefined}
+            fill={`var(--color-${keys[i]})`}
+            fillOpacity={series.length === 1 ? 0.06 : 0}
+            connectNulls={!counts[i]}
+            dot={threshold ? breachDot : false}
+            activeDot={{ r: 3.5, strokeWidth: 1.5, stroke: "var(--card)" }}
+            isAnimationActive={false}
+          />
+        ))}
+      </AreaChart>
+    </ChartFrame>
+  );
+}
+
+export function TimeseriesChart({ rows, containerSize, threshold }: { rows: Record<string, unknown>[]; containerSize?: ContainerSize; threshold?: Threshold }) {
   const hasFacet = "facet" in rows[0];
   const hasComparison = "comparison" in rows[0];
-
-  if (hasFacet) return <FacetTimeseriesChart rows={rows} containerSize={containerSize} threshold={threshold} />;
-  if (hasComparison) return <CompareTimeseriesChart rows={rows} containerSize={containerSize} />;
-  return <SimpleTimeseriesChart rows={rows} containerSize={containerSize} threshold={threshold} />;
-}
-
-function SimpleTimeseriesChart({ rows, containerSize, threshold }: { rows: Record<string, unknown>[]; containerSize?: { width: number; height: number }; threshold?: Threshold }) {
-  const metricKeys = useMemo(() => getMetricKeys(rows[0]), [rows]);
-
-  const series = useMemo(() =>
-    metricKeys.map((k, i) => ({
-      name: k,
-      color: theme.chartColors[i % theme.chartColors.length],
-      data: rows.map((r) => ({ x: r.beginTimeSeconds as number, y: coerceNumeric(r[k]) })),
-    })),
-  [rows, metricKeys]);
-
-  const { selected, toggle, visible } = useSeriesVisibility(series);
-  const legendH = series.length > 0 ? 28 : 0;
-
+  const series = useMemo(
+    () => (hasFacet ? facetSeries(rows) : hasComparison ? compareSeries(rows) : simpleSeries(rows)),
+    [rows, hasFacet, hasComparison],
+  );
+  const endAt = useMemo(() => (hasComparison ? null : lastBucketEnd(rows)), [rows, hasComparison]);
   return (
-    <ChartContainer containerSize={containerSize} defaultHeight={280} legendHeight={legendH}>
-      {({ width, height }) => (
-        <div>
-          <RechartsLineChart width={width} height={height} series={visible} formatX={formatTime} threshold={threshold} />
-          <ChartLegend items={series} selectedNames={selected} onToggle={toggle} />
-        </div>
-      )}
-    </ChartContainer>
+    <TimeseriesPlot
+      series={series}
+      containerSize={containerSize}
+      plotHeight={hasFacet ? 300 : 280}
+      threshold={hasComparison ? undefined : threshold}
+      endAt={endAt}
+    />
   );
 }
 
-function FacetTimeseriesChart({ rows, containerSize, threshold }: { rows: Record<string, unknown>[]; containerSize?: { width: number; height: number }; threshold?: Threshold }) {
-  const series = useMemo(() => {
-    const metricKeys = getMetricKeys(rows[0]);
-    const metricKey = metricKeys[0];
-    if (!metricKey) return [];
-
-    const labels: string[] = [];
-    for (const r of rows) {
-      const label = Array.isArray(r.facet) ? (r.facet as string[]).join(", ") : String(r.facet);
-      if (!labels.includes(label)) labels.push(label);
-    }
-
-    const timeSet = new Set<number>();
-    for (const r of rows) timeSet.add(r.beginTimeSeconds as number);
-    const times = [...timeSet].sort((a, b) => a - b);
-
-    const lookup = new Map<number, Map<string, number | null>>();
-    for (const r of rows) {
-      const t = r.beginTimeSeconds as number;
-      const label = Array.isArray(r.facet) ? (r.facet as string[]).join(", ") : String(r.facet);
-      if (!lookup.has(t)) lookup.set(t, new Map());
-      lookup.get(t)!.set(label, coerceNumeric(r[metricKey]));
-    }
-
-    return labels.map((label, i) => ({
-      name: label,
-      color: theme.chartColors[i % theme.chartColors.length],
-      data: times.map((t) => ({ x: t, y: lookup.get(t)?.get(label) ?? null })),
-    }));
-  }, [rows]);
-
-  const { selected, toggle, visible } = useSeriesVisibility(series);
-  const legendH = series.length > 0 ? 28 : 0;
-
-  return (
-    <ChartContainer containerSize={containerSize} defaultHeight={300} legendHeight={legendH}>
-      {({ width, height }) => (
-        <div>
-          <RechartsLineChart width={width} height={height} series={visible} formatX={formatTime} threshold={threshold} />
-          <ChartLegend items={series} selectedNames={selected} onToggle={toggle} />
-        </div>
-      )}
-    </ChartContainer>
-  );
+function simpleSeries(rows: Record<string, unknown>[]): Series[] {
+  return getMetricKeys(rows[0]).map((k) => ({
+    name: k,
+    data: rows.map((r) => ({ x: r.beginTimeSeconds as number, y: coerceNumeric(r[k]) })),
+  }));
 }
 
-function CompareTimeseriesChart({ rows, containerSize }: { rows: Record<string, unknown>[]; containerSize?: { width: number; height: number } }) {
-  const series = useMemo(() => {
-    const mKeys = getMetricKeys(rows[0]);
-    const mKey = mKeys[0];
-    if (!mKey) return [];
+function facetSeries(rows: Record<string, unknown>[]): Series[] {
+  const metricKey = getMetricKeys(rows[0])[0];
+  if (!metricKey) return [];
+  const facetLabel = (r: Record<string, unknown>) => (Array.isArray(r.facet) ? (r.facet as string[]).join(", ") : String(r.facet));
 
-    // Group rows by comparison period
-    const periodRows = new Map<string, Record<string, unknown>[]>();
-    const periods: string[] = [];
-    for (const r of rows) {
-      const p = String(r.comparison);
-      if (!periods.includes(p)) periods.push(p);
-      if (!periodRows.has(p)) periodRows.set(p, []);
-      periodRows.get(p)!.push(r);
-    }
-
-    // Calculate time offset to align non-current periods onto the current x-axis
-    let timeOffset = 0;
-    const currentRows = periodRows.get("current");
-    if (currentRows && periods.length > 1) {
-      let minCurrent = Infinity;
-      for (const r of currentRows) minCurrent = Math.min(minCurrent, r.beginTimeSeconds as number);
-      // Use the first non-current period to compute the offset
-      const otherPeriod = periods.find((p) => p !== "current");
-      if (otherPeriod) {
-        let minOther = Infinity;
-        for (const r of periodRows.get(otherPeriod)!) minOther = Math.min(minOther, r.beginTimeSeconds as number);
-        timeOffset = minCurrent - minOther;
-      }
-    }
-
-    return periods.map((p, i) => ({
-      name: `${mKey} (${p})`,
-      color: theme.chartColors[i % theme.chartColors.length],
-      dashed: p !== "current",
-      data: (periodRows.get(p) ?? [])
-        .map((r) => ({
-          x: (r.beginTimeSeconds as number) + (p !== "current" ? timeOffset : 0),
-          y: coerceNumeric(r[mKey]),
-        }))
-        .sort((a, b) => a.x - b.x),
-    }));
-  }, [rows]);
-
-  const { selected, toggle, visible } = useSeriesVisibility(series);
-  const legendH = series.length > 0 ? 28 : 0;
-
-  return (
-    <ChartContainer containerSize={containerSize} defaultHeight={280} legendHeight={legendH}>
-      {({ width, height }) => (
-        <div>
-          <RechartsLineChart width={width} height={height} series={visible} formatX={formatTime} />
-          <ChartLegend items={series} selectedNames={selected} onToggle={toggle} />
-        </div>
-      )}
-    </ChartContainer>
-  );
+  const labels: string[] = [];
+  const times = new Set<number>();
+  const lookup = new Map<number, Map<string, number | null>>();
+  for (const r of rows) {
+    const label = facetLabel(r);
+    const t = r.beginTimeSeconds as number;
+    if (!labels.includes(label)) labels.push(label);
+    times.add(t);
+    if (!lookup.has(t)) lookup.set(t, new Map());
+    lookup.get(t)!.set(label, coerceNumeric(r[metricKey]));
+  }
+  const sorted = [...times].sort((a, b) => a - b);
+  return labels.map((label) => ({
+    name: label,
+    data: sorted.map((t) => ({ x: t, y: lookup.get(t)?.get(label) ?? null })),
+  }));
 }
 
-// ── HISTOGRAM ──
+function compareSeries(rows: Record<string, unknown>[]): Series[] {
+  const mKey = getMetricKeys(rows[0])[0];
+  if (!mKey) return [];
 
-export function HistogramChart({ row, containerSize }: { row: Record<string, unknown>; containerSize?: { width: number; height: number } }) {
+  const periodRows = new Map<string, Record<string, unknown>[]>();
+  for (const r of rows) {
+    const p = String(r.comparison);
+    if (!periodRows.has(p)) periodRows.set(p, []);
+    periodRows.get(p)!.push(r);
+  }
+  const periods = [...periodRows.keys()];
+  const minTime = (rs: Record<string, unknown>[]) => Math.min(...rs.map((r) => r.beginTimeSeconds as number));
+
+  // Shift the earlier period onto the current x-axis.
+  let timeOffset = 0;
+  const currentRows = periodRows.get("current");
+  const otherPeriod = periods.find((p) => p !== "current");
+  if (currentRows && otherPeriod) timeOffset = minTime(currentRows) - minTime(periodRows.get(otherPeriod)!);
+
+  return periods.map((p) => ({
+    name: `${mKey} (${p})`,
+    dashed: p !== "current",
+    data: periodRows.get(p)!
+      .map((r) => ({ x: (r.beginTimeSeconds as number) + (p !== "current" ? timeOffset : 0), y: coerceNumeric(r[mKey]) }))
+      .sort((a, b) => a.x - b.x),
+  }));
+}
+
+const histogramConfig = { value: { label: "Count", color: "var(--chart-1)" } } satisfies ChartConfig;
+
+export function HistogramChart({ row, containerSize }: { row: Record<string, unknown>; containerSize?: ContainerSize }) {
   const histKey = Object.keys(row).find((k) => k.startsWith("histogram."));
 
-  const { data, metricName } = useMemo(() => {
-    if (!histKey) return { data: [], metricName: "" };
+  const data = useMemo(() => {
+    if (!histKey) return [];
     const buckets = row[histKey] as Record<string, number>;
     const boundaries = Object.keys(buckets).map(Number).sort((a, b) => a - b);
-    return {
-      metricName: histKey.replace("histogram.", ""),
-      data: boundaries.map((b, i) => {
-        const next = boundaries[i + 1];
-        return { label: next !== undefined ? `${b}–${next}` : `${b}+`, value: buckets[String(b)] };
-      }),
-    };
+    return boundaries.map((b, i) => {
+      const next = boundaries[i + 1];
+      return { label: next !== undefined ? `${b}–${next}` : `${b}+`, value: buckets[String(b)] };
+    });
   }, [row, histKey]);
 
   if (!histKey) return null;
+  const metricName = histKey.replace("histogram.", "");
 
   return (
-    <ChartContainer containerSize={containerSize} defaultHeight={260} legendHeight={24}>
-      {({ width, height }) => (
-        <div>
-          <div className="text-xs font-sans mb-1" style={{ color: colors.inkMuted }}>{metricName} distribution</div>
-          <RechartsBarChart width={width} height={height} data={data} color="#6b9fd4" />
-        </div>
-      )}
-    </ChartContainer>
+    <figure className="my-2">
+      <figcaption className="text-xs text-muted-foreground">{metricName} distribution</figcaption>
+      <ChartFrame
+        config={histogramConfig}
+        containerSize={containerSize && { ...containerSize, height: containerSize.height - 16 }}
+        plotHeight={240}
+        label={`${metricName} distribution`}
+      >
+        <BarChart data={data} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+          <CartesianGrid vertical={false} strokeOpacity={0.6} />
+          <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={12} />
+          <YAxis width={44} tickFormatter={formatYAxis} allowDecimals={false} tickCount={4} tickLine={false} axisLine={false} />
+          <ChartTooltip cursor={false} content={<ChartTooltipContent indicator="line" className="[&_.font-mono]:font-sans" />} />
+          <Bar dataKey="value" fill="var(--color-value)" radius={[2, 2, 0, 0]} maxBarSize={60} isAnimationActive={false} />
+        </BarChart>
+      </ChartFrame>
+    </figure>
   );
 }

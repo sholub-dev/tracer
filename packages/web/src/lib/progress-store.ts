@@ -2,7 +2,7 @@ import { useCallback, useSyncExternalStore } from "react";
 
 import type { ProgressPart } from "@tracer-sh/shared";
 
-export interface NrqlProgress {
+interface NrqlProgress {
   parts: ProgressPart[];
 }
 

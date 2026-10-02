@@ -1,26 +1,37 @@
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { cn } from "@/lib/utils";
 import { TIME_RANGE_PRESETS } from "../../lib/nrql-utils";
-import { theme } from "../../lib/theme";
 
 type Preset = { readonly label: string; readonly since: string };
 
-export function TimeRangePicker({ value, onChange, presets }: { value: string; onChange: (v: string) => void; presets?: readonly Preset[] }) {
+interface TimeRangePickerProps {
+  value: string;
+  onChange: (v: string) => void;
+  presets?: readonly Preset[];
+  className?: string;
+}
+
+export function TimeRangePicker({ value, onChange, presets, className }: TimeRangePickerProps) {
   const items = presets ?? TIME_RANGE_PRESETS;
   return (
-    <div className="flex gap-1">
+    <ToggleGroup
+      type="single"
+      size="sm"
+      spacing={0.5}
+      aria-label="Time range"
+      value={value}
+      onValueChange={(v) => v && onChange(v)}
+      className={cn("rounded-lg bg-muted p-0.5", className)}
+    >
       {items.map((p) => (
-        <button
+        <ToggleGroupItem
           key={p.since}
-          type="button"
-          onClick={() => onChange(p.since)}
-          className={`px-2 py-0.5 text-xs font-sans rounded-sm transition-colors ${
-            value === p.since
-              ? theme.timePickerActive
-              : theme.timePickerInactive
-          }`}
+          value={p.since}
+          className="h-7 min-w-0 rounded-md px-2.5 text-xs font-medium tabular-nums text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs"
         >
           {p.label}
-        </button>
+        </ToggleGroupItem>
       ))}
-    </div>
+    </ToggleGroup>
   );
 }

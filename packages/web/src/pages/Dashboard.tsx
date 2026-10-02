@@ -1,7 +1,9 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { ReactGridLayout, WidthProvider, type Layout } from "react-grid-layout/legacy";
 import "react-grid-layout/css/styles.css";
-import { theme } from "../lib/theme";
+import { Loader2, MessageSquare, Pencil } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { trpc } from "../lib/trpc";
 import { WEB_CONFIG } from "../lib/config";
 import { usePersistedState } from "../lib/hooks";
@@ -9,6 +11,7 @@ import { WidgetCard } from "../components/dashboard/WidgetCard";
 import { DashboardChatPanel } from "../components/dashboard/DashboardChatPanel";
 import { DEFAULT_SINCE, TIME_RANGE_PRESETS } from "../lib/nrql-utils";
 import { TimeRangePicker } from "../components/ui/TimeRangePicker";
+import { IconButton } from "../components/chat/IconButton";
 
 const GridLayout = WidthProvider(ReactGridLayout);
 
@@ -38,8 +41,9 @@ function EditableTitle({ dashboardId, title }: { dashboardId: string; title: str
 
   if (editing) {
     return (
-      <input
+      <Input
         ref={inputRef}
+        aria-label="Dashboard name"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={save}
@@ -47,18 +51,18 @@ function EditableTitle({ dashboardId, title }: { dashboardId: string; title: str
           if (e.key === "Enter") save();
           if (e.key === "Escape") setEditing(false);
         }}
-        className="text-lg font-semibold text-[#2c2c2c] font-sans bg-transparent border-b border-[#2b5ea7] outline-none px-0 py-0 w-48"
+        className="h-8 w-64 text-base font-semibold"
       />
     );
   }
 
   return (
-    <span className="flex items-center gap-2 group">
-      <span className={theme.headerTitle}>{title}</span>
-      <button type="button" onClick={startEditing} className="text-[#666666] hover:text-[#2b5ea7] text-xs" title="Rename dashboard">
-        ✎
-      </button>
-    </span>
+    <div className="flex min-w-0 items-center gap-1">
+      <h1 className="truncate text-xl font-semibold tracking-tight">{title}</h1>
+      <IconButton label="Rename dashboard" className="text-muted-foreground" onClick={startEditing}>
+        <Pencil />
+      </IconButton>
+    </div>
   );
 }
 
@@ -70,7 +74,7 @@ interface DashboardProps {
 export function Dashboard({ dashboardId, onSelectDashboard }: DashboardProps) {
   const dashboardsQuery = trpc.dashboards.list.useQuery();
 
-  // Auto-redirect: if no dashboardId in URL, navigate to first dashboard
+  // A bare /dashboard opens the first dashboard.
   useEffect(() => {
     if (dashboardId) return;
     const list = dashboardsQuery.data;
@@ -81,8 +85,8 @@ export function Dashboard({ dashboardId, onSelectDashboard }: DashboardProps) {
 
   if (!dashboardId || !dashboardsQuery.data) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <p className="text-[#666666] text-sm font-sans">Loading dashboards...</p>
+      <div role="status" aria-label="Loading dashboards" className="flex h-full items-center justify-center">
+        <Loader2 className="size-5 animate-spin text-muted-foreground" />
       </div>
     );
   }
@@ -93,7 +97,7 @@ export function Dashboard({ dashboardId, onSelectDashboard }: DashboardProps) {
     <DashboardContent
       key={dashboardId}
       dashboardId={dashboardId}
-      title={currentDashboard?.title ?? "New Dashboard"}
+      title={currentDashboard?.title ?? "New dashboard"}
       initialChatOpen={!currentDashboard}
     />
   );
@@ -109,9 +113,9 @@ function DashboardContent({ dashboardId, title, initialChatOpen = true }: {
   const moveMutation = trpc.widgets.move.useMutation();
   const widgets = widgetsQuery.data ?? [];
 
-  // ── Derive rowHeight from container height so the grid is viewport-relative ──
+  // Row height follows the container so the grid always fills the viewport.
   const gridRef = useRef<HTMLDivElement>(null);
-  const [rowHeight, setRowHeight] = useState(50); // sensible initial
+  const [rowHeight, setRowHeight] = useState(50);
 
   useEffect(() => {
     const el = gridRef.current;
@@ -119,7 +123,6 @@ function DashboardContent({ dashboardId, title, initialChatOpen = true }: {
     const compute = () => {
       const h = el.clientHeight;
       if (h > 0) {
-        // Divide visible height into WEB_CONFIG.gridRows equal rows (minus margins)
         const totalMargin = (WEB_CONFIG.gridRows + 1) * WEB_CONFIG.gridMargin[1];
         const rh = Math.max(Math.floor((h - totalMargin) / WEB_CONFIG.gridRows), WEB_CONFIG.gridMinRowHeight);
         setRowHeight(rh);
@@ -131,7 +134,7 @@ function DashboardContent({ dashboardId, title, initialChatOpen = true }: {
     return () => ro.disconnect();
   }, []);
 
-  // Track if user is actively dragging/resizing to avoid flickering
+  // Only persist layout changes the user made; RGL also reports its own compaction passes.
   const isDragging = useRef(false);
 
   const layout: Layout = widgets.map((w) => ({
@@ -173,32 +176,23 @@ function DashboardContent({ dashboardId, title, initialChatOpen = true }: {
 
   return (
     <div className="flex flex-col h-full">
-      <div className={`flex items-center justify-between px-6 py-4 ${theme.header}`}>
-        <EditableTitle dashboardId={dashboardId} title={title} />
-        <div className="flex items-center gap-3">
-          <TimeRangePicker value={since} onChange={setSince} />
-          <button
-            type="button"
-            onClick={() => setChatOpen(!chatOpen)}
-            className={theme.secondaryBtn}
-          >
-            {chatOpen ? "Hide Chat" : "Show Chat"}
-          </button>
+      <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b px-4 py-3 sm:px-6">
+        <div className="min-w-0 flex-1">
+          <EditableTitle dashboardId={dashboardId} title={title} />
         </div>
-      </div>
+        <TimeRangePicker value={since} onChange={setSince} className="no-scrollbar max-sm:order-last max-sm:w-full max-sm:overflow-x-auto" />
+        <Button variant="outline" onClick={() => setChatOpen(!chatOpen)} aria-pressed={chatOpen}>
+          <MessageSquare />
+          {chatOpen ? "Hide builder" : "Show builder"}
+        </Button>
+      </header>
 
       <div className="flex flex-1 min-h-0">
-        <div ref={gridRef} className={theme.dashboardGrid}>
+        <div ref={gridRef} className="min-w-0 flex-1 overflow-auto bg-background p-4">
           {widgets.length === 0 ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center">
-                <p className="text-[#666666] text-sm font-sans mb-2">
-                  No widgets yet
-                </p>
-                <p className="text-[#666666] text-xs font-sans">
-                  Use the chat to create dashboard widgets
-                </p>
-              </div>
+            <div className="flex h-full flex-col items-center justify-center gap-1 text-center">
+              <p className="text-sm font-medium">No widgets yet</p>
+              <p className="text-[13px]/[18px] text-muted-foreground">Ask the builder to add one.</p>
             </div>
           ) : (
             <GridLayout
@@ -207,6 +201,7 @@ function DashboardContent({ dashboardId, title, initialChatOpen = true }: {
               rowHeight={rowHeight}
               margin={WEB_CONFIG.gridMargin}
               draggableHandle=".drag-handle"
+              draggableCancel="button"
               onDragStart={() => { isDragging.current = true; }}
               onResizeStart={() => { isDragging.current = true; }}
               onLayoutChange={handleLayoutChange}

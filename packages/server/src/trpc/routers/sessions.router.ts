@@ -81,9 +81,9 @@ export const sessionsRouter = router({
   timer: publicProcedure
     .input(z.object({ id: z.string() }))
     .query(({ ctx, input }) => {
-      const row = ctx.db.select({ fireAt: sessionTimers.fireAt, note: sessionTimers.note })
+      const row = ctx.db.select({ fireAt: sessionTimers.fireAt, setAt: sessionTimers.setAt, note: sessionTimers.note })
         .from(sessionTimers).where(eq(sessionTimers.sessionId, input.id)).get();
-      return row?.fireAt ? { fireAt: row.fireAt, note: row.note } : null;
+      return row?.fireAt ? { fireAt: row.fireAt, setAt: row.setAt, note: row.note } : null;
     }),
 
   getCost: publicProcedure

@@ -588,7 +588,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(
           <ScrollToBottomButton isAtBottom={isAtBottom} scrollToBottom={scrollToBottom} />
         </div>
 
-        <FollowUpTimerBar sessionId={chatId} />
+        <FollowUpTimerBar sessionId={chatId} className={pad} />
         {beforeInput}
         {!readOnly && (
         <form onSubmit={handleSubmit} className={v.inputArea}>

@@ -10,6 +10,10 @@
   40% { transform: translateY(-4px); opacity: 1; }
 }
 
+@keyframes shrink-width {
+  to { width: 0; }
+}
+
 @keyframes fill-up-down {
   0%, 10% { clip-path: inset(0 100% 0 0); }
   45%, 55% { clip-path: inset(0 0 0 0); }

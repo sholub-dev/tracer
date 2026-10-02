@@ -158,7 +158,7 @@ export function monitorAlert(a: MonitorAlert): Required<SlackPayload> {
   const text = `${mentions}*[${[severity.toUpperCase(), SEVERITY_DOTS[severity]].filter(Boolean).join(" ")}] ${escape(summary || `Monitor "${name}" fired; no root cause found`)}*`;
   const lines = [text];
   if (rootCause) lines.push(`*Root cause:* ${escape(rootCause)}`);
-  if (facts.length > 0) lines.push(facts.map(([l, v]) => `*${l}:* ${escape(v)}`).join("  ·  "));
+  lines.push(...facts.map(([l, v]) => `*${l}:* ${escape(v)}`));
   lines.push(...issues.slice(0, MAX_ISSUES).map(issueLine));
   if (issues.length > MAX_ISSUES) lines.push(`+${issues.length - MAX_ISSUES} more`);
   if (seenBefore) lines.push(`*Seen before:* ${escape(seenBefore)}`);

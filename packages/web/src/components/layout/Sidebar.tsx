@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DEFAULT_SESSION_TITLE, FEATURES, ImportedAnalysisSchema, SESSION_KIND } from "@tracer-sh/shared";
-import { useFileDrop, useSessionLiveUpdates } from "../../lib/hooks";
+import { useFileDrop, usePersistedState, useSessionLiveUpdates } from "../../lib/hooks";
 import { theme } from "../../lib/theme";
 import { trpc } from "../../lib/trpc";
 import { WEB_CONFIG } from "../../lib/config";
@@ -12,6 +12,7 @@ import { UpdateModal } from "./UpdateModal";
 declare const __APP_VERSION__: string;
 
 export type Page = "dashboard" | "debug" | "monitors" | "settings";
+type Group = "monitors" | "api" | "imported";
 
 interface SidebarProps {
   currentPage: Page;
@@ -25,6 +26,12 @@ interface SidebarProps {
   currentBuilderSessionId: string | null;
   onSelectBuilderChat: (sessionId: string) => void;
 }
+
+const Chevron = ({ open }: { open: boolean }) => (
+  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" className={`shrink-0 transition-transform ${open ? "rotate-90" : ""}`}>
+    <path d="M3.5 2L6.5 5L3.5 8" />
+  </svg>
+);
 
 const NavIcon = ({ page }: { page: Page }) => {
   const props = { width: 16, height: 16, fill: "none", stroke: "currentColor", strokeWidth: 1.5 };
@@ -225,11 +232,30 @@ export function Sidebar({
     setConfirmTarget(null);
   };
 
-  const sectionHeaderClass = "shrink-0 text-[10px] uppercase tracking-wider text-[#9c9890]/60 px-3 pt-3 pb-1";
+  // One of Monitors, API and Imported is expanded at a time.
+  const [openGroup, setOpenGroup] = usePersistedState<Group | null>("tracer:sidebarGroup", "monitors");
+  const toggleGroup = (g: Group) => setOpenGroup(openGroup === g ? null : g);
+  // The open group takes up to 40% of the sidebar and scrolls past that; Debug gets the rest.
+  const groupClass = (g: Group) => `shrink-0 flex flex-col ${openGroup === g ? "max-h-[40%]" : ""}`;
+  const groupToggle = (g: Group, count?: number) => (
+    <button onClick={() => toggleGroup(g)} className="shrink-0 flex items-center gap-1.5 p-2 text-[11px] text-[#9c9890] hover:text-[#2b5ea7]" aria-label={`Toggle ${g}`}>
+      {count !== undefined && count > 0 && count}
+      <Chevron open={openGroup === g} />
+    </button>
+  );
+  const renderGroupHeader = (g: Group, label: string, icon: React.ReactNode, count: number) => (
+    <div className={`shrink-0 flex items-center rounded-sm ${theme.navInactive}`}>
+      <button onClick={() => toggleGroup(g)} className="flex-1 flex items-center gap-3 px-3 py-2 text-sm text-left">
+        <span className="w-5 flex items-center justify-center shrink-0">{icon}</span>
+        {label}
+      </button>
+      {groupToggle(g, count)}
+    </div>
+  );
 
   const renderNavButton = (page: Page, label: string) => (
     <button
-      onClick={() => onNavigate(page)}
+      onClick={() => { onNavigate(page); if (page === "monitors") setOpenGroup("monitors"); }}
       className={`shrink-0 w-full flex items-center gap-3 px-3 py-2 rounded-sm text-sm transition-colors ${
         currentPage === page ? theme.navActive : theme.navInactive
       }`}
@@ -304,7 +330,7 @@ export function Sidebar({
           </div>
         )}
 
-        <section className="flex-[8] min-h-0 flex flex-col">
+        <section className="flex-1 min-h-0 flex flex-col">
           {renderNavButton("debug", "Debug")}
           <button onClick={onNewSession} className={`${theme.sessionNewBtn} mt-1 shrink-0`}>
             <span className="text-[10px]">+</span>
@@ -316,9 +342,12 @@ export function Sidebar({
         </section>
 
         {FEATURES.monitors && (
-          <section className="flex-[5] min-h-0 flex flex-col pt-2">
-            {renderNavButton("monitors", "Monitors")}
-            <div className="flex-1 min-h-0 overflow-y-auto scrollbar-none space-y-0.5 mt-1">
+          <section className={`${groupClass("monitors")} pt-2`}>
+            <div className="shrink-0 flex items-center">
+              <div className="flex-1">{renderNavButton("monitors", "Monitors")}</div>
+              {groupToggle("monitors", builderChats.length)}
+            </div>
+            {openGroup === "monitors" && <div className="flex-1 min-h-0 overflow-y-auto scrollbar-none space-y-0.5 mt-1">
               {builderChats.length === 0 ? (
                 <div className="px-3 py-1 text-[11px] text-[#9c9890]/70">No monitor chats yet</div>
               ) : builderChats.map((s) => {
@@ -335,20 +364,20 @@ export function Sidebar({
                   />
                 );
               })}
-            </div>
+            </div>}
           </section>
         )}
 
-        <section className="flex-[4] min-h-0 flex flex-col">
-          <div className={sectionHeaderClass}>API</div>
-          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-none space-y-0.5">
+        <section className={groupClass("api")}>
+          {renderGroupHeader("api", "API", <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M5.5 3.5L1.5 8L5.5 12.5M10.5 3.5L14.5 8L10.5 12.5" /></svg>, apiSessions.length)}
+          {openGroup === "api" && <div className="flex-1 min-h-0 overflow-y-auto scrollbar-none space-y-0.5">
             {apiSessions.map(renderSessionRow)}
-          </div>
+          </div>}
         </section>
 
-        <section className="flex-[3] min-h-0 flex flex-col">
-          <div className={sectionHeaderClass}>Imported</div>
-          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-none space-y-0.5">
+        <section className={groupClass("imported")}>
+          {renderGroupHeader("imported", "Imported", <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M8 2v8M4.5 6.5L8 10l3.5-3.5M2.5 13.5h11" /></svg>, importedSessions.length)}
+          {openGroup === "imported" && <div className="flex-1 min-h-0 overflow-y-auto scrollbar-none space-y-0.5">
             <label
               className={`mx-2 mb-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[11px] rounded border border-dashed cursor-pointer transition-colors ${
                 importDragActive
@@ -372,7 +401,7 @@ export function Sidebar({
             </label>
             {importError && <div className="mx-2 mb-1 text-[10px] text-[#b33a2a]">{importError}</div>}
             {importedSessions.map(renderSessionRow)}
-          </div>
+          </div>}
         </section>
       </nav>
 

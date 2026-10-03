@@ -1,7 +1,34 @@
-import { sqlite } from "./client.js";
+import type { SetupDriver } from "./driver.js";
 
-export function runSetup(): void {
-  sqlite.exec(`
+/** Settings that belong to one device: they never leave it and a copy or merge never touches them. */
+export const LOCAL_SETTING_KEYS = ["device_id", "sync_peer_id", "sync_peer_name", "sync_last_at"];
+
+// Synced table -> key column that identifies a row on every device, and the column that dates existing rows.
+export const SYNC_KEYS: Record<string, { key: string; time?: string }> = {
+  provider_configs: { key: "type", time: "created_at" },
+  app_settings: { key: "key", time: "updated_at" },
+  tool_memories: { key: "uid", time: "created_at" },
+  chat_sessions: { key: "id", time: "updated_at" },
+  dashboards: { key: "id", time: "updated_at" },
+  dashboard_widgets: { key: "id", time: "updated_at" },
+  monitors: { key: "id", time: "updated_at" },
+  monitor_triggers: { key: "id" },
+  alert_issues: { key: "issue_id", time: "updated_at" },
+  memory_operations: { key: "uid", time: "created_at" },
+  agent_runs: { key: "id", time: "created_at" },
+};
+
+// Device state, not content: scheduler ticks and pausing write the monitor columns, and opening an
+// unread session writes its status. A write to only these must not count as a change to sync.
+const UNSYNCED_COLUMNS: Record<string, string[]> = {
+  monitors: ["enabled", "last_checked_at", "last_status", "last_error", "updated_at"],
+  chat_sessions: ["status"],
+};
+
+const NOW_MS = "CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)";
+
+export async function runSetup(sqlite: SetupDriver): Promise<void> {
+  await sqlite.exec(`
     CREATE TABLE IF NOT EXISTS provider_configs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       type TEXT NOT NULL UNIQUE,
@@ -150,31 +177,46 @@ export function runSetup(): void {
     CREATE INDEX IF NOT EXISTS idx_agent_runs_session ON agent_runs(session_id);
   `);
 
-  // Back-compat: columns added after initial release.
-  for (const ddl of [
-    `ALTER TABLE tool_memories ADD COLUMN review_note TEXT`,
-    `ALTER TABLE chat_sessions ADD COLUMN kind TEXT`,
-    `ALTER TABLE chat_sessions ADD COLUMN summary TEXT`,
-    `ALTER TABLE chat_sessions ADD COLUMN summary_up_to INTEGER`,
-    `ALTER TABLE chat_sessions ADD COLUMN summary_created_at INTEGER`,
-    `ALTER TABLE monitors ADD COLUMN last_error TEXT`,
-    `ALTER TABLE monitors ADD COLUMN sort_order INTEGER`,
-    `ALTER TABLE monitors ADD COLUMN card_width INTEGER`,
-    `ALTER TABLE monitors ADD COLUMN alert_enabled INTEGER NOT NULL DEFAULT 1`,
-    `ALTER TABLE monitors ADD COLUMN chart_query TEXT`,
-    `ALTER TABLE alert_issues ADD COLUMN reason TEXT`,
-    // Drops the short-lived id-based boundary column (never shipped in a release).
-    `ALTER TABLE chat_sessions DROP COLUMN summary_up_to_id`,
+  // Back-compat: columns added after initial release. Checked first, because the iOS
+  // SQLite plugin logs every failed statement as an error.
+  const known = new Map<string, Set<string>>();
+  const columns = async (table: string) => {
+    let names = known.get(table);
+    if (!names) {
+      names = new Set((await sqlite.all(`PRAGMA table_info(${table})`) as { name: string }[]).map((c) => c.name));
+      known.set(table, names);
+    }
+    return names;
+  };
+  for (const [table, column, type] of [
+    ["tool_memories", "review_note", "TEXT"],
+    ["chat_sessions", "kind", "TEXT"],
+    ["chat_sessions", "summary", "TEXT"],
+    ["chat_sessions", "summary_up_to", "INTEGER"],
+    ["chat_sessions", "summary_created_at", "INTEGER"],
+    ["monitors", "last_error", "TEXT"],
+    ["monitors", "sort_order", "INTEGER"],
+    ["monitors", "card_width", "INTEGER"],
+    ["monitors", "alert_enabled", "INTEGER NOT NULL DEFAULT 1"],
+    ["monitors", "chart_query", "TEXT"],
+    ["alert_issues", "reason", "TEXT"],
   ]) {
-    try { sqlite.exec(ddl); } catch { /* column already exists */ }
+    const names = await columns(table);
+    if (names.has(column)) continue;
+    await sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    names.add(column);
+  }
+  // Drops the short-lived id-based boundary column (never shipped in a release).
+  if ((await columns("chat_sessions")).has("summary_up_to_id")) {
+    await sqlite.exec(`ALTER TABLE chat_sessions DROP COLUMN summary_up_to_id`);
   }
   // Firings from before this column were all reported already.
-  try {
-    sqlite.exec(`ALTER TABLE monitor_triggers ADD COLUMN reported TEXT`);
-    sqlite.exec(`UPDATE monitor_triggers SET reported = 'done'`);
-  } catch { /* column already exists */ }
+  if (!(await columns("monitor_triggers")).has("reported")) {
+    await sqlite.exec(`ALTER TABLE monitor_triggers ADD COLUMN reported TEXT`);
+    await sqlite.exec(`UPDATE monitor_triggers SET reported = 'done'`);
+  }
 
-  sqlite.exec(`
+  await sqlite.exec(`
     CREATE INDEX IF NOT EXISTS idx_sessions_status_kind ON chat_sessions(status, kind, id);
     CREATE INDEX IF NOT EXISTS idx_sessions_list ON chat_sessions(updated_at, kind, status, id, title);
     DROP INDEX IF EXISTS idx_sessions_updated;
@@ -183,33 +225,95 @@ export function runSetup(): void {
 
   // 0.3.7: one model setting for everything — clear old per-provider overrides and
   // reset any saved chat model once, so every install starts on the new default.
-  const marked = sqlite.prepare(`INSERT OR IGNORE INTO app_settings (key, value) VALUES ('model_reset_0_3_7', 'true')`).run();
-  if (marked.changes) {
-    sqlite.exec(`DELETE FROM app_settings WHERE key = 'chat_model' OR key LIKE 'sub_agent_model:%'`);
+  const marked = await sqlite.all(`INSERT OR IGNORE INTO app_settings (key, value) VALUES ('model_reset_0_3_7', 'true') RETURNING key`);
+  if (marked.length > 0) {
+    await sqlite.exec(`DELETE FROM app_settings WHERE key = 'chat_model' OR key LIKE 'sub_agent_model:%'`);
   }
 
   // Migration: add FK constraints to existing tables that lack them.
   // SQLite doesn't support ALTER TABLE ADD FOREIGN KEY, so we recreate tables.
-  migrateForeignKeys();
+  await migrateForeignKeys(sqlite);
+
+  await setupSync(sqlite);
 }
 
-function migrateForeignKeys(): void {
-  const fks = sqlite.pragma("foreign_key_list(dashboard_widgets)") as unknown[];
+async function setupSync(sqlite: SetupDriver): Promise<void> {
+  // Uids come after the foreign-key migration, which copies memory_operations column by column.
+  for (const table of ["tool_memories", "memory_operations"]) {
+    const names = (await sqlite.all(`PRAGMA table_info(${table})`) as { name: string }[]).map((c) => c.name);
+    if (!names.includes("uid")) await sqlite.exec(`ALTER TABLE ${table} ADD COLUMN uid TEXT`);
+  }
+  await sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS sync_rows (
+      tbl TEXT NOT NULL,
+      row_key TEXT NOT NULL,
+      changed_at INTEGER NOT NULL,
+      deleted INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (tbl, row_key)
+    );
+    UPDATE tool_memories SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL;
+    UPDATE memory_operations SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_uid ON tool_memories(uid);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_memops_uid ON memory_operations(uid);
+    CREATE TRIGGER IF NOT EXISTS tool_memories_uid AFTER INSERT ON tool_memories WHEN NEW.uid IS NULL
+      BEGIN UPDATE tool_memories SET uid = lower(hex(randomblob(16))) WHERE id = NEW.id; END;
+    CREATE TRIGGER IF NOT EXISTS memory_operations_uid AFTER INSERT ON memory_operations WHEN NEW.uid IS NULL
+      BEGIN UPDATE memory_operations SET uid = lower(hex(randomblob(16))) WHERE id = NEW.id; END;
+    INSERT OR IGNORE INTO app_settings (key, value) VALUES ('device_id', '${crypto.randomUUID()}');
+  `);
+
+  const local = LOCAL_SETTING_KEYS.map((k) => `'${k}'`).join(", ");
+  const columns = new Map<string, string[]>();
+  for (const table of Object.keys(SYNC_KEYS)) {
+    columns.set(table, (await sqlite.all(`PRAGMA table_info(${table})`) as { name: string }[]).map((c) => c.name));
+  }
+  // Dropped and rebuilt each start, so a changed definition replaces the old one.
+  const statements: string[] = [];
+  for (const [table, { key, time }] of Object.entries(SYNC_KEYS)) {
+    const isSettings = table === "app_settings";
+    const upsert = (row: "NEW" | "OLD", deleted: 0 | 1) =>
+      `INSERT INTO sync_rows (tbl, row_key, changed_at, deleted) VALUES ('${table}', ${row}.${key}, ${NOW_MS}, ${deleted})
+        ON CONFLICT (tbl, row_key) DO UPDATE SET changed_at = excluded.changed_at, deleted = excluded.deleted;`;
+    const when = (row: "NEW" | "OLD") => {
+      const conditions = [`${row}.${key} IS NOT NULL`];
+      if (isSettings) conditions.push(`${row}.key NOT IN (${local})`);
+      return `WHEN ${conditions.join(" AND ")}`;
+    };
+    const unsynced = UNSYNCED_COLUMNS[table];
+    const updateOf = unsynced
+      ? ` OF ${columns.get(table)!.filter((c) => !unsynced.includes(c)).join(", ")}`
+      : "";
+    statements.push(
+      `DROP TRIGGER IF EXISTS sync_${table}_ins;`,
+      `DROP TRIGGER IF EXISTS sync_${table}_upd;`,
+      `DROP TRIGGER IF EXISTS sync_${table}_del;`,
+      `CREATE TRIGGER sync_${table}_ins AFTER INSERT ON ${table} ${when("NEW")} BEGIN ${upsert("NEW", 0)} END;`,
+      `CREATE TRIGGER sync_${table}_upd AFTER UPDATE${updateOf} ON ${table} ${when("NEW")} BEGIN ${upsert("NEW", 0)} END;`,
+      `CREATE TRIGGER sync_${table}_del AFTER DELETE ON ${table} ${when("OLD")} BEGIN ${upsert("OLD", 1)} END;`,
+      `INSERT OR IGNORE INTO sync_rows (tbl, row_key, changed_at, deleted)
+        SELECT '${table}', ${key}, ${time ? `${time} * 1000` : "0"}, 0 FROM ${table}${isSettings ? ` WHERE key NOT IN (${local})` : ""};`,
+    );
+  }
+  await sqlite.exec(statements.join("\n"));
+}
+
+async function migrateForeignKeys(sqlite: SetupDriver): Promise<void> {
+  const fks = await sqlite.all("PRAGMA foreign_key_list(dashboard_widgets)");
   if (fks.length > 0) return; // Already migrated
 
   // Check if the table even exists (fresh install already has FKs from CREATE TABLE above)
-  const tableInfo = sqlite.pragma("table_info(dashboard_widgets)") as unknown[];
+  const tableInfo = await sqlite.all("PRAGMA table_info(dashboard_widgets)");
   if (tableInfo.length === 0) return; // Table doesn't exist yet
 
   console.log("[db] Migrating tables to add foreign key constraints...");
 
   // Must disable FKs for the migration (can't alter schema with FKs active)
-  sqlite.pragma("foreign_keys = OFF");
+  await sqlite.exec("PRAGMA foreign_keys = OFF");
 
-  sqlite.exec("BEGIN TRANSACTION");
+  await sqlite.exec("BEGIN TRANSACTION");
   try {
     // Clean orphaned rows before migration
-    sqlite.exec(`
+    await sqlite.exec(`
       DELETE FROM dashboard_widgets
         WHERE dashboard_id != '' AND dashboard_id NOT IN (SELECT id FROM dashboards);
       DELETE FROM memory_operations
@@ -217,7 +321,7 @@ function migrateForeignKeys(): void {
     `);
 
     // Recreate dashboard_widgets with FK
-    sqlite.exec(`
+    await sqlite.exec(`
       ALTER TABLE dashboard_widgets RENAME TO _dashboard_widgets_old;
       CREATE TABLE dashboard_widgets (
         id TEXT PRIMARY KEY,
@@ -239,7 +343,7 @@ function migrateForeignKeys(): void {
     `);
 
     // Recreate memory_operations with FK
-    sqlite.exec(`
+    await sqlite.exec(`
       ALTER TABLE memory_operations RENAME TO _memory_operations_old;
       CREATE TABLE memory_operations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -254,22 +358,22 @@ function migrateForeignKeys(): void {
     `);
 
     // Recreate indexes on the new tables
-    sqlite.exec(`
+    await sqlite.exec(`
       CREATE INDEX IF NOT EXISTS idx_widgets_dashboard ON dashboard_widgets(dashboard_id);
       CREATE INDEX IF NOT EXISTS idx_memops_session ON memory_operations(session_id);
     `);
 
-    sqlite.exec("COMMIT");
+    await sqlite.exec("COMMIT");
   } catch (err) {
-    sqlite.exec("ROLLBACK");
+    await sqlite.exec("ROLLBACK");
     throw err;
   }
 
   // Re-enable FKs after migration
-  sqlite.pragma("foreign_keys = ON");
+  await sqlite.exec("PRAGMA foreign_keys = ON");
 
   // Verify migration
-  const check = sqlite.pragma("foreign_key_check") as unknown[];
+  const check = await sqlite.all("PRAGMA foreign_key_check");
   if (check.length > 0) {
     console.warn("[db] Foreign key check found violations after migration:", check);
   } else {

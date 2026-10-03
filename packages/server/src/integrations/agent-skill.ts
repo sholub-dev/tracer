@@ -2,9 +2,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { SKILL_TARGETS, type SkillTarget } from "./skill-targets.js";
 
-export const SKILL_TARGETS = ["claude", "cursor"] as const;
-export type SkillTarget = (typeof SKILL_TARGETS)[number];
 export type SkillState = "installed" | "outdated" | "missing";
 
 const TARGET_DIRS: Record<SkillTarget, string> = {

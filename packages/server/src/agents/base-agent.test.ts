@@ -10,7 +10,7 @@ import { readUIMessageStream, streamText, tool } from "ai";
 import { z } from "zod";
 import type { StreamBroadcaster } from "../lib/stream-broadcaster.js";
 import * as schema from "../db/schema.js";
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/driver.js";
 import { writeAppSetting } from "../db/config-reader.js";
 import { SETTINGS_KEYS } from "../config.js";
 import type { Context } from "../trpc/context.js";
@@ -64,6 +64,9 @@ const MID_STREAM_ERROR_SSE = sse([
   ["error", { type: "error", error: { type: "overloaded_error", message: "Overloaded" } }],
 ]);
 
+/** A script entry that sends part of an answer, then drops the connection. */
+const DROPPED = "dropped";
+
 /** `fail` first requests get a non-retryable API error; `hold` never answers; `script` sets each request's SSE body (null fails it). */
 function fakeAnthropic({ fail = 0, hold = false, script = [] as (string | null)[] } = {}): Promise<{ server: Server; url: string; bodies: Record<string, unknown>[] }> {
   const bodies: Record<string, unknown>[] = [];
@@ -79,6 +82,11 @@ function fakeAnthropic({ fail = 0, hold = false, script = [] as (string | null)[
         return;
       }
       res.writeHead(200, { "content-type": "text/event-stream" });
+      if (script[bodies.length - 1] === DROPPED) {
+        res.write(MID_STREAM_ERROR_SSE.slice(0, MID_STREAM_ERROR_SSE.lastIndexOf("event: error")));
+        setTimeout(() => res.destroy(), 50);
+        return;
+      }
       res.end(script[bodies.length - 1] ?? SSE);
     });
   });
@@ -87,9 +95,9 @@ function fakeAnthropic({ fail = 0, hold = false, script = [] as (string | null)[
   }));
 }
 
-test("system date block has no clock time; the time text does", () => {
-  assert.match(getCurrentDateBlock(), DATE_LINE_WITHOUT_TIME);
-  assert.match(getCurrentTimeText(), MINUTE);
+test("system date block has no clock time; the time text does", async () => {
+  assert.match(await getCurrentDateBlock(), DATE_LINE_WITHOUT_TIME);
+  assert.match(await getCurrentTimeText(), MINUTE);
 });
 
 test("send time is stamped once on the newest user message and replayed unchanged on later turns", () => {
@@ -128,8 +136,8 @@ test("Anthropic chat request: date-only system prompt with cache breakpoint, tim
   process.env.ANTHROPIC_BASE_URL = url;
   try {
     const db = memoryDb();
-    db.insert(schema.providerConfigs).values({ type: "anthropic", config: JSON.stringify({ apiKey: "test" }) }).run();
-    writeAppSetting(db, SETTINGS_KEYS.chatModel, { provider: "anthropic", modelId: "claude-test" });
+    await db.insert(schema.providerConfigs).values({ type: "anthropic", config: JSON.stringify({ apiKey: "test" }) }).run();
+    await writeAppSetting(db, SETTINGS_KEYS.chatModel, { provider: "anthropic", modelId: "claude-test" });
     const context: Context = { db, providers: {} as ProviderRegistry, activeStreams: new Map() };
     const messages: UIMessage[] = [
       { id: "u1", role: "user", parts: [{ type: "text", text: "earlier question" }] },
@@ -138,7 +146,7 @@ test("Anthropic chat request: date-only system prompt with cache breakpoint, tim
     ];
     const res = await runChatAgent({
       sessionId: "s1", messages, context,
-      collectTools: () => ({ tools: undefined }),
+      collectTools: async () => ({ tools: undefined }),
       sessionTitle: () => "t",
     });
     assert.ok("stream" in res && res.stream);
@@ -165,7 +173,7 @@ test("Anthropic chat request: date-only system prompt with cache breakpoint, tim
     assert.match(last.content[1].text, /^\[Current date and time: .*\d{1,2}:\d{2}/);
     assert.equal(JSON.stringify(body.messages[0]).includes("Current date and time"), false);
 
-    const saved = db.select().from(schema.chatSessions).get();
+    const saved = await db.select().from(schema.chatSessions).get();
     const savedLastUser = (JSON.parse(saved!.messages) as UIMessage[]).filter((m) => m.role === "user").at(-1)!;
     assert.deepEqual(savedLastUser.parts, [{ type: "text", text: "why is checkout slow?" }], "time is not a visible part");
     assert.equal((savedLastUser.metadata as { sentTime: string }).sentTime, last.content[1].text, "time is kept for later turns");
@@ -181,14 +189,14 @@ async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string 
   process.env.ANTHROPIC_BASE_URL = url;
   try {
     const db = memoryDb();
-    db.insert(schema.providerConfigs).values({ type: "anthropic", config: JSON.stringify({ apiKey: "test" }) }).run();
-    writeAppSetting(db, SETTINGS_KEYS.chatModel, { provider: "anthropic", modelId: "claude-test" });
+    await db.insert(schema.providerConfigs).values({ type: "anthropic", config: JSON.stringify({ apiKey: "test" }) }).run();
+    await writeAppSetting(db, SETTINGS_KEYS.chatModel, { provider: "anthropic", modelId: "claude-test" });
     const context: Context = { db, providers: {} as ProviderRegistry, activeStreams: new Map() };
     let completed = 0;
     const failed: string[] = [];
     const res = await runChatAgent({
       sessionId: "s1", messages: [{ id: "u1", role: "user", parts: [{ type: "text", text: "why?" }] }], context,
-      collectTools: () => ({ tools, afterComplete: () => { completed++; } }),
+      collectTools: async () => ({ tools, afterComplete: () => { completed++; } }),
       sessionTitle: () => "t", retryDelaysMs, onFailed: (e) => failed.push(e),
     });
     assert.ok("stream" in res && res.stream);
@@ -199,8 +207,9 @@ async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string 
     })();
     await whileRunning?.(context);
     await draining;
-    const saved = JSON.parse(db.select().from(schema.chatSessions).get()!.messages) as UIMessage[];
-    return { bodies, completed, failed, parts, saved, status: db.select().from(schema.chatSessions).get()?.status };
+    const row = await db.select().from(schema.chatSessions).get();
+    const saved = JSON.parse(row!.messages) as UIMessage[];
+    return { bodies, completed, failed, parts, saved, status: row?.status };
   } finally {
     delete process.env.ANTHROPIC_BASE_URL;
     server.close();
@@ -290,4 +299,14 @@ test("when every attempt ends in a mid-stream model error the run fails once and
   assert.equal(r.completed, 0);
   assert.equal(r.parts.filter((p) => p.type === "error").length, 1);
   assert.deepEqual(r.saved.map((m) => m.role), ["user"]);
+});
+
+test("a connection dropped mid-stream on the last attempt fails the run and shows one error", async () => {
+  const r = await retryRun({ script: [DROPPED, DROPPED] }, [0]);
+  assert.equal(r.bodies.length, 2);
+  assert.equal(r.failed.length, 1);
+  assert.equal(r.completed, 0);
+  assert.equal(r.parts.filter((p) => p.type === "error").length, 1);
+  assert.deepEqual(r.saved.map((m) => m.role), ["user"]);
+  assert.equal(r.status, "done");
 });

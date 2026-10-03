@@ -34,7 +34,7 @@ export function NewInvestigation({ composer }: { composer: ReactNode }) {
       <h1 className="text-center text-2xl font-semibold tracking-tight text-balance">What are you investigating?</h1>
       <SourcesLine />
       <div className="mt-8">{composer}</div>
-      <p className="mt-6 text-center text-xs text-muted-foreground">Answers can be wrong. Check the queries before you share a finding.</p>
+      <p className="mt-6 text-center text-xs text-muted-foreground">Answers can be wrong.<br />Check the queries before you share a finding.</p>
     </div>
   );
 }

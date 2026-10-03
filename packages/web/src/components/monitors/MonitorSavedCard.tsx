@@ -2,6 +2,7 @@ import { memo, useEffect } from "react";
 import { AlertCircle, CircleCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { formatValue } from "../../lib/result-utils";
 import { trpc } from "../../lib/trpc";
 
 export interface MonitorSavedOutput {
@@ -40,7 +41,7 @@ export const MonitorSavedCard = memo(function MonitorSavedCard({ output, fresh }
   const facts = [
     output.run !== undefined && `Run ${output.run ? "on" : "off"}`,
     output.alert !== undefined && `Alert ${output.alert ? "on" : "off"}`,
-    output.sampleValue !== undefined && `Sample ${output.sampleValue}`,
+    output.sampleValue !== undefined && `Sample ${formatValue(output.sampleValue)}`,
   ].filter(Boolean);
 
   return (

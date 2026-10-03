@@ -2,7 +2,7 @@ import { and, eq, isNotNull } from "drizzle-orm";
 import { z } from "zod";
 import { tool, type Tool } from "ai";
 import { unixNow } from "@tracer-sh/shared";
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/driver.js";
 import { chatSessions, sessionTimers } from "../db/schema.js";
 import { CONFIG } from "../config.js";
 import { formatLocalTime, getTimezone } from "../lib/current-context.js";
@@ -13,8 +13,8 @@ const NOTE_MAX_CHARS = 300;
 type TimerInput = { minutes: number; note: string };
 type TimerResult = { error: string } | { cancelled: true } | { dueAt: string };
 
-export function hasPendingTimer(db: Db, sessionId: string): boolean {
-  return !!db.select({ id: sessionTimers.sessionId }).from(sessionTimers)
+export async function hasPendingTimer(db: Db, sessionId: string): Promise<boolean> {
+  return !!await db.select({ id: sessionTimers.sessionId }).from(sessionTimers)
     .where(and(eq(sessionTimers.sessionId, sessionId), isNotNull(sessionTimers.fireAt))).get();
 }
 
@@ -27,26 +27,26 @@ export function setTimerTool(db: Db, sessionId: string): Tool<TimerInput, TimerR
     }),
     execute: async ({ minutes, note }) => {
       if (minutes === 0) {
-        db.delete(sessionTimers).where(eq(sessionTimers.sessionId, sessionId)).run();
+        await db.delete(sessionTimers).where(eq(sessionTimers.sessionId, sessionId)).run();
         sessionChanged(sessionId);
         return { cancelled: true };
       }
       if (minutes < CONFIG.timerMinMinutes || minutes > CONFIG.timerMaxMinutes) {
         return { error: `minutes must be 0 or ${CONFIG.timerMinMinutes} to ${CONFIG.timerMaxMinutes}` };
       }
-      const session = db.select({ createdAt: chatSessions.createdAt }).from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
+      const session = await db.select({ createdAt: chatSessions.createdAt }).from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
       if (!session) return { error: "This session no longer exists" };
       const now = unixNow();
       const fireAt = now + Math.round(minutes * 60);
       const limit = session.createdAt + CONFIG.timerMaxAfterSessionSeconds;
       if (fireAt > limit) {
-        return { error: `Too late: follow-ups must fire within ${CONFIG.timerMaxAfterSessionSeconds / 3600}h of the session start (by ${formatLocalTime(limit, getTimezone(db))})` };
+        return { error: `Too late: follow-ups must fire within ${CONFIG.timerMaxAfterSessionSeconds / 3600}h of the session start (by ${formatLocalTime(limit, await getTimezone(db))})` };
       }
       const row = { fireAt, note: note.trim().slice(0, NOTE_MAX_CHARS), setAt: now };
-      db.insert(sessionTimers).values({ sessionId, ...row })
+      await db.insert(sessionTimers).values({ sessionId, ...row })
         .onConflictDoUpdate({ target: sessionTimers.sessionId, set: row }).run();
       sessionChanged(sessionId);
-      return { dueAt: formatLocalTime(fireAt, getTimezone(db)) };
+      return { dueAt: formatLocalTime(fireAt, await getTimezone(db)) };
     },
   });
 }

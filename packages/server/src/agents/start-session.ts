@@ -35,7 +35,7 @@ export async function startAgentSession(
 ): Promise<{ ok: true } | { error: string }> {
   // runChatAgent's upserts never touch `kind`, so it survives the run; resumed sessions keep theirs.
   const now = unixNow();
-  context.db
+  await context.db
     .insert(chatSessions)
     .values({
       id: sessionId,
@@ -55,7 +55,7 @@ export async function startAgentSession(
     role: "user",
     parts: [{ type: "text", text: message }],
   };
-  const { messages, summary, summaryUpTo } = loadSessionMessages(context.db, sessionId, userMessage);
+  const { messages, summary, summaryUpTo } = await loadSessionMessages(context.db, sessionId, userMessage);
 
   if (!title && messages.length === 1) {
     generateSessionTitle(context.db, sessionId, message);
@@ -71,8 +71,8 @@ export async function startAgentSession(
     summary,
     summaryUpTo,
     context,
-    collectTools: (writer) => {
-      const collected = collectChatTools(context.providers, context.db, writer, scopedProvider, mode);
+    collectTools: async (writer) => {
+      const collected = await collectChatTools(context.providers, context.db, writer, scopedProvider, mode);
       const orig = collected.afterComplete;
       return {
         ...collected,

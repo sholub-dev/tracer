@@ -10,3 +10,4 @@ dist/
 *.tsbuildinfo
 docs/plans/
 docs/hero-animation/node_modules/
+dist-ios/

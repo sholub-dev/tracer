@@ -5,8 +5,10 @@ import { KNOWN_MODEL_IDS } from "@tracer-sh/shared";
 import { publicProcedure, router } from "../trpc.js";
 import { providerConfigs } from "../../db/schema.js";
 import { readProviderConfig } from "../../db/config-reader.js";
-import { getGcpAuth } from "../../providers/gcp/gcp-auth.js";
 import { toChartRows } from "../../providers/posthog/posthog-formatter.js";
+
+// Loaded on demand: it reads gcloud credentials from disk, which only the desktop server can do.
+const getGcpAuth = async () => (await import("../../providers/gcp/gcp-auth.js")).getGcpAuth();
 
 export const providerRouter = router({
   list: publicProcedure.query(({ ctx }) => {
@@ -32,8 +34,8 @@ export const providerRouter = router({
     return ctx.providers.getRegisteredTypes();
   }),
 
-  getConfigs: publicProcedure.query(({ ctx }) => {
-    const rows = ctx.db.select().from(providerConfigs).all();
+  getConfigs: publicProcedure.query(async ({ ctx }) => {
+    const rows = await ctx.db.select().from(providerConfigs).all();
     const configs: Array<{ type: string; config: Record<string, string> }> = [];
     for (const row of rows) {
       let config: Record<string, string>;
@@ -74,7 +76,7 @@ export const providerRouter = router({
 
       const configJson = JSON.stringify(input.config);
 
-      ctx.db
+      await ctx.db
         .insert(providerConfigs)
         .values({ type: input.type, config: configJson })
         .onConflictDoUpdate({
@@ -105,7 +107,7 @@ export const providerRouter = router({
   removeConfig: publicProcedure
     .input(z.string())
     .mutation(async ({ ctx, input }) => {
-      ctx.db
+      await ctx.db
         .delete(providerConfigs)
         .where(eq(providerConfigs.type, input))
         .run();
@@ -192,7 +194,7 @@ export const providerRouter = router({
       .filter((id) => id.startsWith("gemini"))
       .map((id) => ({ modelId: id, label: id }));
 
-    const config = readProviderConfig(ctx.db, "google-vertex");
+    const config = await readProviderConfig(ctx.db, "google-vertex");
     const projectId = config?.projectId;
     if (!projectId) return [];
     const location = config.location || "global";

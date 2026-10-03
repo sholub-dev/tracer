@@ -7,10 +7,16 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:ios": "vite build --mode ios"
   },
   "dependencies": {
     "@ai-sdk/react": "^4.0.123",
+    "@capacitor-community/keep-awake": "8.0.1",
+    "@capacitor-community/sqlite": "8.1.1",
+    "@capacitor/app": "8.1.2",
+    "@capacitor/core": "8.5.2",
+    "@capacitor/keyboard": "8.0.6",
     "@tanstack/react-query": "^5.104.0",
     "@tracer-sh/shared": "workspace:*",
     "@trpc/client": "^11.19.0",

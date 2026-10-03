@@ -92,7 +92,9 @@ export class JiraClient {
 
   constructor({ domain, email, apiToken }: JiraClientConfig) {
     this.baseUrl = `https://${normalizeJiraDomain(domain)}.atlassian.net`;
-    this.authHeader = "Basic " + Buffer.from(`${email}:${apiToken}`).toString("base64");
+    // btoa takes Latin-1 only, so encode to UTF-8 bytes first.
+    const bytes = new TextEncoder().encode(`${email}:${apiToken}`);
+    this.authHeader = "Basic " + btoa(String.fromCharCode(...bytes));
   }
 
   private async request(path: string, init?: RequestInit): Promise<Response> {

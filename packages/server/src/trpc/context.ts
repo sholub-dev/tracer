@@ -1,4 +1,4 @@
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/driver.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 import type { StreamBroadcaster } from "../lib/stream-broadcaster.js";
 

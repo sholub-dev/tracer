@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import type { UIMessage } from "ai";
 import type { ProgressStore } from "./progress-store";
+import { serverFetch } from "./server-fetch";
 import { analysisSectionParts, type ProgressPart } from "@tracer-sh/shared";
 
 /** Shared onData handler for progress store updates (ChatCore and LiveStreamView). */
@@ -58,7 +59,7 @@ export function hasErrorOutput(output: unknown): output is { error: unknown } {
 
 /** Ask the server to abort a session's in-flight stream. */
 export function stopChat(sessionId: string): Promise<void> {
-  return fetch("/api/chat/stop", {
+  return serverFetch("/api/chat/stop", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sessionId }),

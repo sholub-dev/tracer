@@ -15,7 +15,7 @@ import { firingRerun } from "../../monitors/scheduler.js";
 export function registerChatRoutes(app: Hono, context: Context): void {
   app.post("/api/chat", async (c) => {
     const { id, message, activeProvider } = await c.req.json<{ id: string; message: UIMessage; activeProvider?: string }>();
-    const { messages, summary, summaryUpTo } = loadSessionMessages(context.db, id, message);
+    const { messages, summary, summaryUpTo } = await loadSessionMessages(context.db, id, message);
 
     // Generate AI title on the first message (fire-and-forget)
     if (messages.length === 1) {
@@ -32,7 +32,7 @@ export function registerChatRoutes(app: Hono, context: Context): void {
     const mode: ChatMode = isUnified ? "unified" : "direct";
     const scopedProvider = isUnified ? undefined : activeProvider;
     // A monitor session whose run never reported (e.g. Retry after an error) still owes its triage and Slack post.
-    const rerun = firingRerun(context, id);
+    const rerun = await firingRerun(context, id);
 
     const result = await runChatAgent({
       sessionId: id,
@@ -40,13 +40,13 @@ export function registerChatRoutes(app: Hono, context: Context): void {
       summary,
       summaryUpTo,
       context,
-      collectTools: (writer) => {
-        const collected = collectChatTools(context.providers, context.db, writer, scopedProvider, mode);
+      collectTools: async (writer) => {
+        const collected = await collectChatTools(context.providers, context.db, writer, scopedProvider, mode);
         const afterComplete: typeof collected.afterComplete = rerun
           ? (params) => { collected.afterComplete?.(params); rerun.onComplete({}); }
           : collected.afterComplete;
         if (!collected.tools) return { ...collected, afterComplete };
-        const readPast = pastSessionToolFor(context.db, id);
+        const readPast = await pastSessionToolFor(context.db, id);
         return {
           ...collected,
           tools: { ...collected.tools, set_timer: setTimerTool(context.db, id), ...(readPast ? { read_past_session: readPast } : {}), ...rerun?.tools },
@@ -64,7 +64,7 @@ export function registerChatRoutes(app: Hono, context: Context): void {
   app.post("/api/dashboard-chat", async (c) => {
     const { id, message, dashboardId } = await c.req.json<{ id: string; message: UIMessage; dashboardId: string }>();
     const sessionId = dashboardSessionId(dashboardId);
-    const { messages, summary, summaryUpTo } = loadSessionMessages(context.db, sessionId, message);
+    const { messages, summary, summaryUpTo } = await loadSessionMessages(context.db, sessionId, message);
 
     const result = await runChatAgent({
       sessionId,
@@ -85,7 +85,7 @@ export function registerChatRoutes(app: Hono, context: Context): void {
     if (typeof sessionId !== "string" || !sessionId.startsWith(SESSION_PREFIX.MONITORS)) {
       return c.json({ error: `Monitor chat id must start with ${SESSION_PREFIX.MONITORS}` }, 400);
     }
-    const { messages, summary, summaryUpTo } = loadSessionMessages(context.db, sessionId, message);
+    const { messages, summary, summaryUpTo } = await loadSessionMessages(context.db, sessionId, message);
 
     const result = await runChatAgent({
       sessionId,

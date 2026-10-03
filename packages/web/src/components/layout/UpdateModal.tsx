@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { trpc } from "../../lib/trpc";
 import { WEB_CONFIG } from "../../lib/config";
+import { serverFetch } from "../../lib/server-fetch";
 
 interface UpdateModalProps {
   open: boolean;
@@ -18,7 +19,7 @@ async function waitForServerThenReload() {
   const deadline = Date.now() + WEB_CONFIG.updateRestartMaxWaitMs;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch("/api/trpc/update.check", { cache: "no-store" });
+      const res = await serverFetch("/api/trpc/update.check", { cache: "no-store" });
       if (res.ok) break;
     } catch { /* server still down */ }
     await delay(WEB_CONFIG.updateRestartPollMs);

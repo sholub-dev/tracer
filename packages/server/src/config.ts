@@ -14,17 +14,20 @@ export interface ModelConfig {
   modelId: KnownModelId;
 }
 
+/** Environment variables; empty where no `process` exists (the iOS app). */
+export const ENV: Record<string, string | undefined> = typeof process === "undefined" ? {} : process.env;
+
 // ── Developer-only constants (not user-controllable) ──
 
 export const CONFIG = {
   /** HTTP server port. Override with TRACER_PORT env var. */
-  port: Number(process.env.TRACER_PORT) || 3579,
+  port: Number(ENV.TRACER_PORT) || 3579,
 
   /** HTTP server bind address. Loopback by default; set TRACER_HOST=0.0.0.0 to expose externally. */
-  host: process.env.TRACER_HOST || "127.0.0.1",
+  host: ENV.TRACER_HOST || "127.0.0.1",
 
   /** CORS origin. null = derive from port at runtime as http://localhost:{port}. */
-  corsOrigin: process.env.TRACER_CORS_ORIGIN ?? null as string | null,
+  corsOrigin: ENV.TRACER_CORS_ORIGIN ?? null as string | null,
 
   // ── LLM defaults ──
 

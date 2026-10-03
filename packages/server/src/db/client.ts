@@ -2,8 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { chmodSync, existsSync, mkdirSync, statSync } from "node:fs";
 import Database, { type Database as DatabaseType } from "better-sqlite3-multiple-ciphers";
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import * as schema from "./schema.js";
+import { createNodeDb } from "./node-db.js";
 import { resolveDbKey } from "./db-key.js";
 import { applyKey, isPlaintext, migratePlaintextToEncrypted } from "./db-encryption.js";
 
@@ -35,6 +34,4 @@ sqlite.pragma("synchronous = NORMAL");
 sqlite.pragma("busy_timeout = 5000");
 sqlite.pragma("foreign_keys = ON");
 
-export const db = drizzle(sqlite, { schema });
-
-export type Db = typeof db;
+export const { db, setupDriver } = createNodeDb(sqlite);

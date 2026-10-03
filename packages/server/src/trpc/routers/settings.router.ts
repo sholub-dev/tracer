@@ -8,8 +8,8 @@ import { CONFIG, DEFAULTS, SETTINGS_KEYS, type ModelConfig } from "../../config.
 export const settingsRouter = router({
   getApiKey: publicProcedure
     .input(z.string())
-    .query(({ ctx, input }) => {
-      const config = readProviderConfig(ctx.db, input);
+    .query(async ({ ctx, input }) => {
+      const config = await readProviderConfig(ctx.db, input);
       if (!config?.apiKey) return null;
       const masked =
         config.apiKey.length <= 4
@@ -25,9 +25,9 @@ export const settingsRouter = router({
         apiKey: z.string().min(1),
       }),
     )
-    .mutation(({ ctx, input }) => {
+    .mutation(async ({ ctx, input }) => {
       const configJson = JSON.stringify({ apiKey: input.apiKey });
-      ctx.db
+      await ctx.db
         .insert(providerConfigs)
         .values({ type: input.type, config: configJson })
         .onConflictDoUpdate({
@@ -40,8 +40,8 @@ export const settingsRouter = router({
 
   removeApiKey: publicProcedure
     .input(z.string())
-    .mutation(({ ctx, input }) => {
-      ctx.db
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db
         .delete(providerConfigs)
         .where(eq(providerConfigs.type, input))
         .run();
@@ -52,8 +52,8 @@ export const settingsRouter = router({
   // not an API key). The config row's existence is the on/off state; projectId may be empty
   // when enabled but a project hasn't been picked yet. projectId/location aren't secrets, so
   // they're returned unmasked. Returns null when disabled.
-  getVertexConfig: publicProcedure.query(({ ctx }) => {
-    const config = readProviderConfig(ctx.db, "google-vertex");
+  getVertexConfig: publicProcedure.query(async ({ ctx }) => {
+    const config = await readProviderConfig(ctx.db, "google-vertex");
     if (!config) return null;
     return { projectId: config.projectId ?? "", location: config.location || "global" };
   }),
@@ -68,13 +68,13 @@ export const settingsRouter = router({
         location: z.string().optional(),
       }),
     )
-    .mutation(({ ctx, input }) => {
-      const existing = readProviderConfig(ctx.db, "google-vertex") ?? {};
+    .mutation(async ({ ctx, input }) => {
+      const existing = await readProviderConfig(ctx.db, "google-vertex") ?? {};
       const configJson = JSON.stringify({
         projectId: input.projectId ?? existing.projectId ?? "",
         location: input.location ?? existing.location ?? "global",
       });
-      ctx.db
+      await ctx.db
         .insert(providerConfigs)
         .values({ type: "google-vertex", config: configJson })
         .onConflictDoUpdate({
@@ -85,13 +85,13 @@ export const settingsRouter = router({
       return { success: true };
     }),
 
-  removeVertexConfig: publicProcedure.mutation(({ ctx }) => {
-    ctx.db.delete(providerConfigs).where(eq(providerConfigs.type, "google-vertex")).run();
+  removeVertexConfig: publicProcedure.mutation(async ({ ctx }) => {
+    await ctx.db.delete(providerConfigs).where(eq(providerConfigs.type, "google-vertex")).run();
     return { success: true };
   }),
 
-  getChatModel: publicProcedure.query(({ ctx }) => {
-    return readAppSetting<ModelConfig>(ctx.db, SETTINGS_KEYS.chatModel) ?? CONFIG.defaultChatModel;
+  getChatModel: publicProcedure.query(async ({ ctx }) => {
+    return await readAppSetting<ModelConfig>(ctx.db, SETTINGS_KEYS.chatModel) ?? CONFIG.defaultChatModel;
   }),
 
   saveChatModel: publicProcedure
@@ -101,21 +101,21 @@ export const settingsRouter = router({
         modelId: z.string().min(1),
       }),
     )
-    .mutation(({ ctx, input }) => {
-      writeAppSetting(ctx.db, SETTINGS_KEYS.chatModel, { provider: input.provider, modelId: input.modelId });
+    .mutation(async ({ ctx, input }) => {
+      await writeAppSetting(ctx.db, SETTINGS_KEYS.chatModel, { provider: input.provider, modelId: input.modelId });
       return { success: true };
     }),
 
-  getAlertTriage: publicProcedure.query(({ ctx }) => readAppSetting<boolean>(ctx.db, SETTINGS_KEYS.alertTriage) === true),
+  getAlertTriage: publicProcedure.query(async ({ ctx }) => await readAppSetting<boolean>(ctx.db, SETTINGS_KEYS.alertTriage) === true),
 
   setAlertTriage: publicProcedure
     .input(z.object({ enabled: z.boolean() }))
-    .mutation(({ ctx, input }) => {
-      writeAppSetting(ctx.db, SETTINGS_KEYS.alertTriage, input.enabled);
+    .mutation(async ({ ctx, input }) => {
+      await writeAppSetting(ctx.db, SETTINGS_KEYS.alertTriage, input.enabled);
       return { success: true };
     }),
 
-  getAgentConfig: publicProcedure.query(({ ctx }) => {
+  getAgentConfig: publicProcedure.query(async ({ ctx }) => {
     const keys = [
       SETTINGS_KEYS.timezone,
       SETTINGS_KEYS.directModeMaxSteps,
@@ -123,7 +123,7 @@ export const settingsRouter = router({
       SETTINGS_KEYS.thinkingBudgetGoogle,
       SETTINGS_KEYS.thinkingBudgetAnthropic,
     ];
-    const vals = readAppSettings(ctx.db, keys);
+    const vals = await readAppSettings(ctx.db, keys);
     return {
       timezone: (vals[SETTINGS_KEYS.timezone] as string) ?? DEFAULTS.timezone,
       directModeMaxSteps: (vals[SETTINGS_KEYS.directModeMaxSteps] as number) ?? DEFAULTS.directModeMaxSteps,
@@ -141,7 +141,7 @@ export const settingsRouter = router({
       thinkingBudgetGoogle: z.number().min(0).max(100_000).optional(),
       thinkingBudgetAnthropic: z.number().min(0).max(100_000).optional(),
     }))
-    .mutation(({ ctx, input }) => {
+    .mutation(async ({ ctx, input }) => {
       const entries: [string, unknown][] = [
         [SETTINGS_KEYS.timezone, input.timezone],
         [SETTINGS_KEYS.directModeMaxSteps, input.directModeMaxSteps],
@@ -150,7 +150,7 @@ export const settingsRouter = router({
         [SETTINGS_KEYS.thinkingBudgetAnthropic, input.thinkingBudgetAnthropic],
       ];
       for (const [key, val] of entries) {
-        if (val !== undefined) writeAppSetting(ctx.db, key, val);
+        if (val !== undefined) await writeAppSetting(ctx.db, key, val);
       }
       return { success: true };
     }),

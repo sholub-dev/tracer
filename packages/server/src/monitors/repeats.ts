@@ -2,7 +2,7 @@ import { and, desc, eq, gte, isNotNull, lt } from "drizzle-orm";
 import { z } from "zod";
 import { tool, type Tool, type UIMessage } from "ai";
 import { SESSION_KIND } from "@tracer-sh/shared";
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/driver.js";
 import { chatSessions, monitorTriggers } from "../db/schema.js";
 import { extractAnalysis } from "../agents/analysis.js";
 import { CONFIG } from "../config.js";
@@ -37,8 +37,8 @@ export function parseTriggerGroups(json: string): TriggerGroup[] {
 }
 
 /** A group repeats when an investigated trigger inside the repeat window covered the same key. */
-export function classifyGroups(db: Db, monitorId: string, groups: Group[], now: number): TriggerGroup[] {
-  const recent = db
+export async function classifyGroups(db: Db, monitorId: string, groups: Group[], now: number): Promise<TriggerGroup[]> {
+  const recent = (await db
     .select({ groups: monitorTriggers.groups })
     .from(monitorTriggers)
     .where(and(
@@ -47,7 +47,7 @@ export function classifyGroups(db: Db, monitorId: string, groups: Group[], now: 
       gte(monitorTriggers.triggeredAt, now - CONFIG.monitorRepeatWindowSeconds),
     ))
     .orderBy(desc(monitorTriggers.triggeredAt))
-    .all()
+    .all())
     .map((r) => parseTriggerGroups(r.groups));
   return groups.map((g) => {
     // An unfaceted group has no identity, so each trigger gets investigated.
@@ -67,8 +67,8 @@ export function byRelevance<T extends { keys: string[] }>(newestFirst: T[], curr
 }
 
 /** A session's analysis and the summary it reported. */
-export function readOutcome(db: Db, sessionId: string): { analysis: string; report: AlertSummary | null } {
-  const row = db.select({ messages: chatSessions.messages }).from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
+export async function readOutcome(db: Db, sessionId: string): Promise<{ analysis: string; report: AlertSummary | null }> {
+  const row = await db.select({ messages: chatSessions.messages }).from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
   try {
     const messages = JSON.parse(row?.messages ?? "[]") as UIMessage[];
     return { analysis: extractAnalysis(messages).analysis, report: summaryFromMessages(messages) };
@@ -81,21 +81,21 @@ export const outcomeSummary = (o: { analysis: string; report: AlertSummary | nul
 /** The one-line summary of a past run, for the prompt. */
 export const pastSummary = (p: PastSession) => redact(outcomeSummary(p));
 
-export function pastSessions(db: Db, monitorId: string, currentKeys: string[], before = Number.MAX_SAFE_INTEGER): PastSession[] {
-  const triggers = db
+export async function pastSessions(db: Db, monitorId: string, currentKeys: string[], before = Number.MAX_SAFE_INTEGER): Promise<PastSession[]> {
+  const triggers = (await db
     .select({ sessionId: monitorTriggers.sessionId, triggeredAt: monitorTriggers.triggeredAt, groups: monitorTriggers.groups })
     .from(monitorTriggers)
     .where(and(eq(monitorTriggers.monitorId, monitorId), isNotNull(monitorTriggers.sessionId), lt(monitorTriggers.triggeredAt, before)))
     .orderBy(desc(monitorTriggers.triggeredAt))
     .limit(PAST_SESSIONS_SCAN)
-    .all()
+    .all())
     .map((t) => ({ sessionId: t.sessionId!, triggeredAt: t.triggeredAt, keys: parseTriggerGroups(t.groups).map((g) => g.key).filter(Boolean) }));
 
   // Parse session messages lazily: they can be large and only a few are kept.
   const picked: PastSession[] = [];
   for (const t of byRelevance(triggers, currentKeys)) {
     if (picked.length === PAST_SESSIONS_LIMIT) break;
-    const { analysis, report } = readOutcome(db, t.sessionId);
+    const { analysis, report } = await readOutcome(db, t.sessionId);
     if (analysis || report) picked.push({ ...t, report, analysis: analysis.length > ANALYSIS_MAX_CHARS ? `${analysis.slice(0, ANALYSIS_MAX_CHARS)} …[truncated]` : analysis });
   }
   return picked.sort((a, b) => b.triggeredAt - a.triggeredAt);
@@ -103,13 +103,13 @@ export function pastSessions(db: Db, monitorId: string, currentKeys: string[], b
 
 type PastSessionResult = { error: string } | { sessionId: string; triggeredAt: string; groups: string[]; summary: AlertSummary | null; analysis: string };
 
-export function readPastSessionTool(load: () => PastSession[]): Tool<{ sessionId: string }, PastSessionResult> {
+export function readPastSessionTool(load: () => PastSession[] | Promise<PastSession[]>): Tool<{ sessionId: string }, PastSessionResult> {
   let sessions: PastSession[] | undefined;
   return tool({
     description: "Read the full analysis of a past debug session of this monitor. Only the session ids listed in the prompt are allowed.",
     inputSchema: z.object({ sessionId: z.string().describe("Session id from the recent past sessions list") }),
     execute: async ({ sessionId }) => {
-      sessions ??= load();
+      sessions ??= await load();
       const s = sessions.find((p) => p.sessionId === sessionId);
       if (!s) return { error: `Session ${sessionId} is not one of the listed past sessions` };
       return { sessionId, triggeredAt: new Date(s.triggeredAt * 1000).toISOString(), groups: s.keys, summary: s.report, analysis: s.analysis };
@@ -118,10 +118,10 @@ export function readPastSessionTool(load: () => PastSession[]): Tool<{ sessionId
 }
 
 /** For follow-up chats in a monitor session: the past sessions as of its firing. */
-export function pastSessionToolFor(db: Db, sessionId: string): ReturnType<typeof readPastSessionTool> | null {
-  const session = db.select({ kind: chatSessions.kind }).from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
+export async function pastSessionToolFor(db: Db, sessionId: string): Promise<ReturnType<typeof readPastSessionTool> | null> {
+  const session = await db.select({ kind: chatSessions.kind }).from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
   if (session?.kind !== SESSION_KIND.MONITOR) return null;
-  const trigger = db
+  const trigger = await db
     .select({ monitorId: monitorTriggers.monitorId, triggeredAt: monitorTriggers.triggeredAt, groups: monitorTriggers.groups })
     .from(monitorTriggers)
     .where(eq(monitorTriggers.sessionId, sessionId))

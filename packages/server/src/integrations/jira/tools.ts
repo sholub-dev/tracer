@@ -5,7 +5,7 @@
 
 import { z } from "zod";
 import { tool } from "ai";
-import type { Db } from "../../db/client.js";
+import type { Db } from "../../db/driver.js";
 import { JiraClient } from "./jira.client.js";
 import { readJiraConfig } from "./config.js";
 
@@ -15,10 +15,10 @@ You can read Jira issues and post comments via the jira tools.
 - Use add_jira_comment ONLY when the user explicitly asks to comment on, post to, or update a ticket. Never post proactively or as a side effect of analysis.
 - Before posting, show the exact comment text and target issue key. Comment bodies are plain text. Report the resulting comment URL on success.`;
 
-export function getJiraChatTools(
+export async function getJiraChatTools(
   db: Db,
-): { tools: Record<string, unknown>; promptFragment: string } | null {
-  const config = readJiraConfig(db);
+): Promise<{ tools: Record<string, unknown>; promptFragment: string } | null> {
+  const config = await readJiraConfig(db);
   if (!config) return null;
 
   const client = new JiraClient(config);

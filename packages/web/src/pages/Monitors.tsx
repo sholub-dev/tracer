@@ -4,6 +4,7 @@ import { usePersistedState, usePolling } from "../lib/hooks";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { trpc } from "../lib/trpc";
+import { PageSidebarButton } from "../components/layout/Shell";
 import { BuilderSheet } from "../components/monitors/BuilderSheet";
 import { MonitorCard } from "../components/monitors/MonitorCard";
 import { TimeRangePicker } from "../components/common/TimeRangePicker";
@@ -139,8 +140,9 @@ export function Monitors({ builderSessionId, onNavigate: navigate, onOpenBuilder
 
   return (
     <div className="min-h-full bg-background text-foreground">
-      <header className="sticky top-0 z-10 border-b bg-background/90 backdrop-blur-md">
+      <header data-page-header className="sticky top-0 z-10 border-b bg-background/90 backdrop-blur-md">
         <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 sm:px-6">
+          <PageSidebarButton />
           <div className="flex min-w-0 flex-1 flex-col sm:flex-row sm:items-baseline sm:gap-3">
             <h1 className="text-xl font-semibold tracking-tight">Monitors</h1>
             {listQuery.isSuccess && (

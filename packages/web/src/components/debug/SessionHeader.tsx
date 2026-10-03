@@ -8,9 +8,10 @@ import { cn } from "@/lib/utils";
 import { usePolling } from "../../lib/hooks";
 import { trpc } from "../../lib/trpc";
 import { COLUMN } from "../chat/Transcript";
-import { downloadImage, stampedPngName } from "../chat/MessageActions";
+import { SAVE_IMAGE_LABEL, downloadImage, stampedPngName } from "../chat/MessageActions";
 import { ConfirmDialog } from "../common/ConfirmDialog";
 import { MoreActionsMenu } from "../common/MoreActionsMenu";
+import { PageSidebarButton } from "../layout/Shell";
 
 const MEMORY_OPS = {
   create: { icon: Plus, verb: "Saved" },
@@ -141,8 +142,9 @@ export function SessionHeader({
   const postMortemBlocked = busy || streaming;
 
   return (
-    <header ref={headerRef} className="sticky top-0 z-20 border-b bg-background/90 backdrop-blur-md">
+    <header ref={headerRef} data-page-header className="sticky top-0 z-20 border-b bg-background/90 backdrop-blur-md">
       <div className={cn(COLUMN, "flex items-center gap-3 py-3")}>
+        <PageSidebarButton />
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-lg font-semibold tracking-tight">
             {title ? (
@@ -202,7 +204,7 @@ export function SessionHeader({
               if (transcript) void downloadImage(transcript, stampedPngName("investigation"));
             }}
           >
-            Download image
+            {SAVE_IMAGE_LABEL}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem variant="destructive" disabled={streaming} onSelect={() => setConfirmDelete(true)}>

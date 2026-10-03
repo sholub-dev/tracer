@@ -10,6 +10,10 @@
     },
     "./router": {
       "types": "./src/trpc/router.ts"
+    },
+    "./mobile": {
+      "types": "./src/mobile.ts",
+      "import": "./src/mobile.ts"
     }
   },
   "scripts": {
@@ -30,14 +34,17 @@
     "@tracer-sh/shared": "workspace:*",
     "@trpc/server": "^11.19.0",
     "ai": "^7.0.120",
+    "better-sqlite3": "npm:better-sqlite3-multiple-ciphers@^13.0.3",
     "better-sqlite3-multiple-ciphers": "^13.0.3",
     "drizzle-orm": "^0.45.3",
     "hono": "^4.13.10",
+    "qrcode": "^1.5.4",
     "superjson": "^2.2.6",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
+    "@types/qrcode": "^1.5.6",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3"
   }

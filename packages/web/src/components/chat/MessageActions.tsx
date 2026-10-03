@@ -1,10 +1,11 @@
 import type { ReactNode, RefObject } from "react";
 import type { UIMessage } from "ai";
-import { Copy, Download, ImageIcon } from "lucide-react";
+import { Copy, Download, ImageIcon, Share } from "lucide-react";
 import { toast } from "sonner";
 import { ANALYSIS_MARKER, findAnalysisMarker } from "@tracer-sh/shared";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { IS_IOS } from "../../lib/platform";
 import { encodePngWithPayload } from "../../lib/png-steg";
 
 /** Strip markdown syntax to produce clean plain text for pasting into Slack etc. */
@@ -87,20 +88,45 @@ export function stampedPngName(prefix: string) {
   return `${prefix}-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}-${pad(now.getMinutes())}.png`;
 }
 
-function saveFile(blob: Blob, name: string) {
+/** Saves a PNG: the iOS share sheet (WKWebView ignores `<a download>`) or a file download. Returns false when the user cancels. */
+async function saveFile(blob: Blob, name: string): Promise<boolean> {
+  if (IS_IOS) {
+    const file = new File([blob], name, { type: blob.type || "image/png" });
+    if (!navigator.canShare?.({ files: [file] })) throw new Error("Sharing files is not available");
+    try {
+      await navigator.share({ files: [file] });
+      return true;
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return false;
+      throw err;
+    }
+  }
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
+  return true;
+}
+
+/** Label of the save-image action; iOS shares instead of downloading. */
+export const SAVE_IMAGE_LABEL = IS_IOS ? "Share image" : "Download image";
+
+/** Action button under a message: icon only on phones, with the label kept for screen readers. */
+export function MessageActionButton({ icon, label, onClick }: { icon: ReactNode; label: string; onClick: () => void }) {
+  return (
+    <Button variant="ghost" size="xs" className="text-muted-foreground max-sm:size-8" onClick={onClick}>
+      {icon}
+      <span className="max-sm:sr-only">{label}</span>
+    </Button>
+  );
 }
 
 /** PNG of an element, downloaded as a file. */
 export async function downloadImage(el: HTMLElement, name: string) {
   try {
-    saveFile(await capture(el), name);
-    toast.success("Image saved", { description: name });
+    if (await saveFile(await capture(el), name)) toast.success("Image saved", { description: name });
   } catch {
     toast.error("Couldn't create the image");
   }
@@ -130,8 +156,7 @@ async function downloadReplyImage(el: HTMLElement, analysis: UIMessage["parts"],
     }
     const out = await encodePngWithPayload(bytes, new TextEncoder().encode(payload));
     const name = stampedPngName("analysis");
-    saveFile(new Blob([out.buffer as ArrayBuffer], { type: "image/png" }), name);
-    toast.success("Image saved", { description: name });
+    if (await saveFile(new Blob([out.buffer as ArrayBuffer], { type: "image/png" }), name)) toast.success("Image saved", { description: name });
   } catch {
     toast.error("Couldn't create the image");
   }
@@ -174,32 +199,21 @@ export function MessageActions({
         className,
       )}
     >
-      <Button
-        variant="ghost"
-        size="xs"
-        className="text-muted-foreground"
+      <MessageActionButton
+        icon={<Copy />}
+        label="Copy text"
         onClick={() => {
           const text = extractMessageText(analysis ?? parts);
           if (text) copyText(text, "Copied as text");
         }}
-      >
-        <Copy />
-        Copy text
-      </Button>
-      <Button variant="ghost" size="xs" className="text-muted-foreground" onClick={() => contentRef.current && copyImage(contentRef.current)}>
-        <ImageIcon />
-        Copy image
-      </Button>
+      />
+      <MessageActionButton icon={<ImageIcon />} label="Copy image" onClick={() => contentRef.current && copyImage(contentRef.current)} />
       {analysis && (
-        <Button
-          variant="ghost"
-          size="xs"
-          className="text-muted-foreground"
+        <MessageActionButton
+          icon={IS_IOS ? <Share /> : <Download />}
+          label={SAVE_IMAGE_LABEL}
           onClick={() => contentRef.current && downloadReplyImage(contentRef.current, analysis, meta)}
-        >
-          <Download />
-          Download image
-        </Button>
+        />
       )}
       {children}
     </div>

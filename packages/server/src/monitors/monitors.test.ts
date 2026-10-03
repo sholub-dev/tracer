@@ -2,9 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import Database from "better-sqlite3-multiple-ciphers";
 import { drizzle } from "drizzle-orm/better-sqlite3";
+import { sql } from "drizzle-orm";
 import { substituteWindow } from "@tracer-sh/shared";
 import * as schema from "../db/schema.js";
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/driver.js";
 import { evaluateCondition, extractGroups, parseCondition, sumGroups } from "./condition.js";
 import { byRelevance, classifyGroups, readPastSessionTool } from "./repeats.js";
 import { isFailedWindow, nextWindow } from "./scheduler.js";
@@ -25,8 +26,8 @@ function memoryDb(): Db {
   return drizzle(sqlite, { schema }) as unknown as Db;
 }
 
-function addTrigger(db: Db, triggeredAt: number, status: "investigating" | "repeat", groups: unknown[], sessionId: string | null) {
-  db.insert(schema.monitorTriggers).values({
+async function addTrigger(db: Db, triggeredAt: number, status: "investigating" | "repeat", groups: unknown[], sessionId: string | null) {
+  await db.insert(schema.monitorTriggers).values({
     id: crypto.randomUUID(), monitorId: "m1", triggeredAt, value: 1, windowStart: 0, windowEnd: 0,
     status, groups: JSON.stringify(groups), sessionId,
   }).run();
@@ -92,43 +93,43 @@ test("substituteWindow uses epoch seconds for PostHog and epoch ms for New Relic
   );
 });
 
-test("classifyGroups marks all groups repeat when each was investigated in the window", () => {
+test("classifyGroups marks all groups repeat when each was investigated in the window", async () => {
   const db = memoryDb();
   const now = 1_000_000;
-  addTrigger(db, now - 3600, "investigating", [{ key: "a", count: 1, sessionId: "s1", repeat: false }, { key: "b", count: 1, sessionId: "s1", repeat: false }], "s1");
-  const out = classifyGroups(db, "m1", [{ key: "a", count: 2 }, { key: "b", count: 5 }], now);
+  await addTrigger(db, now - 3600, "investigating", [{ key: "a", count: 1, sessionId: "s1", repeat: false }, { key: "b", count: 1, sessionId: "s1", repeat: false }], "s1");
+  const out = await classifyGroups(db, "m1", [{ key: "a", count: 2 }, { key: "b", count: 5 }], now);
   assert.deepEqual(out, [
     { key: "a", count: 2, sessionId: "s1", repeat: true },
     { key: "b", count: 5, sessionId: "s1", repeat: true },
   ]);
 });
 
-test("classifyGroups splits mixed groups and links repeats to the latest investigating session", () => {
+test("classifyGroups splits mixed groups and links repeats to the latest investigating session", async () => {
   const db = memoryDb();
   const now = 1_000_000;
-  addTrigger(db, now - 7200, "investigating", [{ key: "a", count: 1, sessionId: "s1", repeat: false }], "s1");
-  addTrigger(db, now - 3600, "investigating", [{ key: "a", count: 1, sessionId: "s2", repeat: false }], "s2");
-  addTrigger(db, now - 60, "repeat", [{ key: "c", count: 1, sessionId: "s9", repeat: true }], null);
-  const out = classifyGroups(db, "m1", [{ key: "a", count: 1 }, { key: "c", count: 1 }], now);
+  await addTrigger(db, now - 7200, "investigating", [{ key: "a", count: 1, sessionId: "s1", repeat: false }], "s1");
+  await addTrigger(db, now - 3600, "investigating", [{ key: "a", count: 1, sessionId: "s2", repeat: false }], "s2");
+  await addTrigger(db, now - 60, "repeat", [{ key: "c", count: 1, sessionId: "s9", repeat: true }], null);
+  const out = await classifyGroups(db, "m1", [{ key: "a", count: 1 }, { key: "c", count: 1 }], now);
   assert.deepEqual(out, [
     { key: "a", count: 1, sessionId: "s2", repeat: true },
     { key: "c", count: 1, sessionId: null, repeat: false },
   ]);
 });
 
-test("classifyGroups treats triggers outside the repeat window as new", () => {
+test("classifyGroups treats triggers outside the repeat window as new", async () => {
   const db = memoryDb();
   const now = 1_000_000;
-  addTrigger(db, now - 86_401, "investigating", [{ key: "a", count: 1, sessionId: "s1", repeat: false }], "s1");
-  const out = classifyGroups(db, "m1", [{ key: "a", count: 1 }], now);
+  await addTrigger(db, now - 86_401, "investigating", [{ key: "a", count: 1, sessionId: "s1", repeat: false }], "s1");
+  const out = await classifyGroups(db, "m1", [{ key: "a", count: 1 }], now);
   assert.deepEqual(out, [{ key: "a", count: 1, sessionId: null, repeat: false }]);
 });
 
-test("classifyGroups never treats an unfaceted group as a repeat", () => {
+test("classifyGroups never treats an unfaceted group as a repeat", async () => {
   const db = memoryDb();
   const now = 1_000_000;
-  addTrigger(db, now - 60, "investigating", [{ key: "", count: 1, sessionId: "s1", repeat: false }], "s1");
-  const out = classifyGroups(db, "m1", [{ key: "", count: 1 }], now);
+  await addTrigger(db, now - 60, "investigating", [{ key: "", count: 1, sessionId: "s1", repeat: false }], "s1");
+  const out = await classifyGroups(db, "m1", [{ key: "", count: 1 }], now);
   assert.deepEqual(out, [{ key: "", count: 1, sessionId: null, repeat: false }]);
 });
 
@@ -180,21 +181,21 @@ test("validateMonitor checks provider-specific rules", async () => {
   assert.match((await err({ ...base, provider: "newrelic", query: "SELECT count(*) FROM Log SINCE {{SINCE}} UNTIL {{UNTIL}} TIMESERIES" }))!, /TIMESERIES/);
 });
 
-test("setMonitorToggles changes only the given toggles and resets the window when Run turns on", () => {
+test("setMonitorToggles changes only the given toggles and resets the window when Run turns on", async () => {
   const db = memoryDb();
-  db.$client.exec(`CREATE TABLE monitors (
+  await db.run(sql.raw(`CREATE TABLE monitors (
     id TEXT PRIMARY KEY, name TEXT NOT NULL, provider TEXT NOT NULL, query TEXT NOT NULL, chart_query TEXT, condition TEXT NOT NULL,
     frequency_seconds INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, alert_enabled INTEGER NOT NULL DEFAULT 1,
     last_status TEXT, last_error TEXT, last_checked_at INTEGER, sort_order INTEGER, card_width INTEGER,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
-  )`);
-  saveMonitor(db, "m1", { name: "A", provider: "newrelic", query: "q", chartQuery: null, condition: "> 0", frequencySeconds: 300 });
-  assert.deepEqual(setMonitorToggles(db, "m1", { alert: false }), { name: "A", run: true, alert: false });
-  db.update(schema.monitors).set({ lastCheckedAt: 123 }).run();
-  assert.deepEqual(setMonitorToggles(db, "m1", { run: false }), { name: "A", run: false, alert: false });
-  assert.deepEqual(setMonitorToggles(db, "m1", { run: true }), { name: "A", run: true, alert: false });
-  assert.equal(db.select().from(schema.monitors).get()?.lastCheckedAt, null);
-  assert.deepEqual(setMonitorToggles(db, "nope", { run: true }), { error: "Monitor not found", code: "NOT_FOUND" });
+  )`));
+  await saveMonitor(db, "m1", { name: "A", provider: "newrelic", query: "q", chartQuery: null, condition: "> 0", frequencySeconds: 300 });
+  assert.deepEqual(await setMonitorToggles(db, "m1", { alert: false }), { name: "A", run: true, alert: false });
+  await db.update(schema.monitors).set({ lastCheckedAt: 123 }).run();
+  assert.deepEqual(await setMonitorToggles(db, "m1", { run: false }), { name: "A", run: false, alert: false });
+  assert.deepEqual(await setMonitorToggles(db, "m1", { run: true }), { name: "A", run: true, alert: false });
+  assert.equal((await db.select().from(schema.monitors).get())?.lastCheckedAt, null);
+  assert.deepEqual(await setMonitorToggles(db, "nope", { run: true }), { error: "Monitor not found", code: "NOT_FOUND" });
 });
 
 test("readPastSessionTool loads the past-session list lazily, once, and only allows listed ids", async () => {

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { tool, generateText, isStepCount } from "ai";
-import type { Db } from "../../db/client.js";
+import type { Db } from "../../db/driver.js";
 import { resolveModel } from "../../llm/resolve.js";
 import { extractUsage, recordAgentRun } from "../../llm/usage.js";
 import { makeMemoryExecute } from "../../tools/memory-executor.js";
@@ -75,7 +75,7 @@ export async function runMemoryAgent(opts: MemoryAgentOptions): Promise<void> {
     collectedQueries, sessionId,
   } = opts;
 
-  const resolved = resolveModel(db);
+  const resolved = await resolveModel(db);
   if ("error" in resolved) {
     return;
   }
@@ -162,7 +162,7 @@ ${tailInstruction}`;
 
     if (sessionId && result.usage) {
       const u = extractUsage(result.usage, resolved.modelId);
-      recordAgentRun(db, {
+      await recordAgentRun(db, {
         sessionId,
         agentType: "memory",
         model: resolved.modelId,
@@ -175,7 +175,7 @@ ${tailInstruction}`;
     // Always mark completion so the frontend knows the agent finished
     if (sessionId) {
       try {
-        db.insert(memoryOperations).values({
+        await db.insert(memoryOperations).values({
           sessionId,
           operation: "completed",
         }).run();

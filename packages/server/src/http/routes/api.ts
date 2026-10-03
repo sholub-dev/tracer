@@ -44,7 +44,7 @@ export function registerApiRoutes(app: Hono, context: Context): void {
     const active = context.activeStreams.get(sessionId);
     if (active) await new Promise<void>((resolve) => active.broadcaster.onDone(resolve));
 
-    const row = context.db
+    const row = await context.db
       .select()
       .from(chatSessions)
       .where(eq(chatSessions.id, sessionId))

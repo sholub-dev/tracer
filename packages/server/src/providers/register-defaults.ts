@@ -1,15 +1,17 @@
 /**
- * Registers the built-in provider factories (New Relic, GCP, PostHog).
+ * Registers the built-in provider factories (New Relic, PostHog).
  * Extracted from index.ts for separation of concerns.
  */
 
 import type { ProviderRegistry } from "./registry.js";
 import { NewRelicProvider } from "./newrelic/newrelic.provider.js";
-import { GcpProvider } from "./gcp/gcp.provider.js";
 import { PosthogProvider } from "./posthog/posthog.provider.js";
-import { mcpDefinitions } from "../mcp/definitions.js";
 
-export function registerDefaultProviders(providers: ProviderRegistry): void {
+/** `registerPlatformProviders` runs between New Relic and PostHog to keep the Settings list order. */
+export function registerDefaultProviders(
+  providers: ProviderRegistry,
+  registerPlatformProviders?: (providers: ProviderRegistry) => void,
+): void {
   providers.registerFactory(
     "newrelic",
     (cfg) => new NewRelicProvider({
@@ -26,18 +28,7 @@ export function registerDefaultProviders(providers: ProviderRegistry): void {
     },
   );
 
-  providers.registerFactory(
-    "gcp",
-    (cfg) => {
-      const def = mcpDefinitions.get("gcp");
-      if (!def) throw new Error('MCP definition for "gcp" not found');
-      return new GcpProvider(def, cfg);
-    },
-    {
-      label: "Google Cloud",
-      configFields: [],
-    },
-  );
+  registerPlatformProviders?.(providers);
 
   providers.registerFactory(
     "posthog",

@@ -15,7 +15,7 @@ import { LiveStreamView } from "../components/chat/LiveStreamView";
 import { ChatCore, type ChatCoreRef, type RenderView } from "../components/chat/ChatCore";
 import { COLUMN } from "../components/chat/Transcript";
 import { POST_MORTEM_PROMPT, monitorNameOf, textOf, transcriptOf } from "../components/chat/MessageView";
-import { copyText } from "../components/chat/MessageActions";
+import { MessageActionButton, copyText } from "../components/chat/MessageActions";
 import { SessionSummaryBlock } from "../components/chat/SessionSummaryBlock";
 import { SourcesToggle } from "../components/chat/SourcesToggle";
 import { SessionHeader } from "../components/debug/SessionHeader";
@@ -418,16 +418,8 @@ function DebugChat({ chatId, initialMessages, sources, cost, activeProvider, ses
         showActions: idle,
         actions: idle && (
           <>
-            {msg.role === "user" && (
-              <Button variant="ghost" size="xs" className="text-muted-foreground" onClick={() => handleStartEditRef.current(index)}>
-                <Pencil />
-                Edit
-              </Button>
-            )}
-            <Button variant="ghost" size="xs" className="text-muted-foreground" onClick={() => setDeleteTarget(index)}>
-              <Trash2 />
-              Delete from here
-            </Button>
+            {msg.role === "user" && <MessageActionButton icon={<Pencil />} label="Edit" onClick={() => handleStartEditRef.current(index)} />}
+            <MessageActionButton icon={<Trash2 />} label="Delete from here" onClick={() => setDeleteTarget(index)} />
           </>
         ),
         body:

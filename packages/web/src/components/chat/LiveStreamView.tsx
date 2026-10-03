@@ -4,6 +4,7 @@ import { ProgressStore } from "../../lib/progress-store";
 import { handleProgressData, stopChat, useCompactedMessages } from "../../lib/chat-utils";
 import { useChatScroll, useEscapeToStop } from "../../lib/hooks";
 import { WEB_CONFIG } from "../../lib/config";
+import { openEventStream } from "../../lib/sse";
 import { AlertSummaryPanel, alertSummaryOf } from "./AlertSummaryPanel";
 import { WorkingIndicator } from "./ChatIndicators";
 import { Composer } from "./Composer";
@@ -40,7 +41,6 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
 
   useEffect(() => {
     let cancelled = false;
-    const eventSource = new EventSource(`/api/chat/subscribe/${sessionId}`);
 
     // Bridge SSE events into a ReadableStream for readUIMessageStream.
     let ctrl: ReadableStreamDefaultController<UIMessageChunk>;
@@ -51,37 +51,38 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
     let errorCount = 0;
     let errorTimer: ReturnType<typeof setTimeout> | null = null;
 
-    eventSource.addEventListener("part", (e) => {
-      if (cancelled) return;
-      errorCount = 0;
-      try {
-        const part = JSON.parse(e.data);
-        if (part.type === "data-provider-part") handleProgressData(progressStore, part.data);
-        ctrl.enqueue(part as UIMessageChunk);
-      } catch { /* ignore parse errors */ }
+    const closeEvents = openEventStream(`/api/chat/subscribe/${sessionId}`, {
+      onEvent: (event, data) => {
+        if (event === "part") {
+          if (cancelled) return;
+          errorCount = 0;
+          try {
+            const part = JSON.parse(data);
+            if (part.type === "data-provider-part") handleProgressData(progressStore, part.data);
+            ctrl.enqueue(part as UIMessageChunk);
+          } catch { /* ignore parse errors */ }
+        } else if (event === "done") {
+          // Only close here; onComplete fires after the last flush so the final content renders first.
+          try { ctrl.close(); } catch { /* already closed */ }
+          closeEvents();
+        }
+      },
+      onError: (closed) => {
+        if (closed) {
+          try { ctrl.close(); } catch { /* already closed */ }
+          return;
+        }
+        // Transient error: allow auto-reconnect, but give up after a few within 10s.
+        errorCount++;
+        if (errorCount >= WEB_CONFIG.maxSseErrors) {
+          try { ctrl.close(); } catch { /* already closed */ }
+          closeEvents();
+          return;
+        }
+        if (errorTimer) clearTimeout(errorTimer);
+        errorTimer = setTimeout(() => { errorCount = 0; }, 10_000);
+      },
     });
-
-    // Only close here; onComplete fires after the last flush so the final content renders first.
-    eventSource.addEventListener("done", () => {
-      try { ctrl.close(); } catch { /* already closed */ }
-      eventSource.close();
-    });
-
-    eventSource.onerror = () => {
-      if (eventSource.readyState === EventSource.CLOSED) {
-        try { ctrl.close(); } catch { /* already closed */ }
-        return;
-      }
-      // Transient error: allow auto-reconnect, but give up after a few within 10s.
-      errorCount++;
-      if (errorCount >= WEB_CONFIG.maxSseErrors) {
-        try { ctrl.close(); } catch { /* already closed */ }
-        eventSource.close();
-        return;
-      }
-      if (errorTimer) clearTimeout(errorTimer);
-      errorTimer = setTimeout(() => { errorCount = 0; }, 10_000);
-    };
 
     (async () => {
       // One render per chatThrottleMs: the server replays the whole buffered stream on subscribe.
@@ -107,7 +108,7 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
 
     return () => {
       cancelled = true;
-      eventSource.close();
+      closeEvents();
       if (errorTimer) clearTimeout(errorTimer);
       try { ctrl.close(); } catch { /* ignore */ }
       progressStore.clear();

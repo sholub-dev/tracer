@@ -4,7 +4,7 @@
  */
 
 import type { AfterCompleteParams, ChatToolMemoryContext } from "@tracer-sh/shared";
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/driver.js";
 import { memoryOperations } from "../db/schema.js";
 import { runMemoryAgent } from "../agents/utility/memory.js";
 import type { SubAgentQuery } from "../agents/chat/sub-agent.js";
@@ -43,24 +43,26 @@ export function buildAfterComplete(opts: {
     if (collectedQueries.length === 0) return;
     const sessionId = params.sessionId;
 
-    if (sessionId) {
-      try {
-        db.insert(memoryOperations).values({
-          sessionId,
-          operation: "started",
-        }).run();
-      } catch { /* best-effort */ }
-    }
+    void (async () => {
+      if (sessionId) {
+        try {
+          await db.insert(memoryOperations).values({
+            sessionId,
+            operation: "started",
+          }).run();
+        } catch { /* best-effort */ }
+      }
 
-    runMemoryAgent({
-      providerType,
-      db,
-      existingMemories: memoryContext.existingMemories,
-      task: `[Direct conversation] ${params.lastUserMessage}`,
-      analysisText: params.lastAssistantText,
-      collectedQueries,
-      sessionId,
-    }).catch((err) => {
+      await runMemoryAgent({
+        providerType,
+        db,
+        existingMemories: memoryContext.existingMemories,
+        task: `[Direct conversation] ${params.lastUserMessage}`,
+        analysisText: params.lastAssistantText,
+        collectedQueries,
+        sessionId,
+      });
+    })().catch((err) => {
       console.warn(`[memory-agent] ${providerType} direct-mode failed:`, err);
     });
   };

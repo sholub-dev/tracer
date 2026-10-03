@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/driver.js";
 import { appSettings } from "../db/schema.js";
 import { formatLocalTime } from "../lib/current-context.js";
 import { firstSentence, type AlertSummary } from "../monitors/alert-summary.js";
@@ -13,16 +13,16 @@ export interface SlackConfig {
   mentions?: string;
 }
 
-export function readSlackConfig(db: Db): SlackConfig | null {
+export function readSlackConfig(db: Db): Promise<SlackConfig | null> {
   return readAppSetting<SlackConfig>(db, SLACK_CONFIG_KEY);
 }
 
-export function writeSlackConfig(db: Db, config: SlackConfig): void {
-  writeAppSetting(db, SLACK_CONFIG_KEY, config);
+export async function writeSlackConfig(db: Db, config: SlackConfig): Promise<void> {
+  await writeAppSetting(db, SLACK_CONFIG_KEY, config);
 }
 
-export function deleteSlackConfig(db: Db): void {
-  db.delete(appSettings).where(eq(appSettings.key, SLACK_CONFIG_KEY)).run();
+export async function deleteSlackConfig(db: Db): Promise<void> {
+  await db.delete(appSettings).where(eq(appSettings.key, SLACK_CONFIG_KEY)).run();
 }
 
 // Only Slack's webhook host, so a saved URL can't make the server post elsewhere.

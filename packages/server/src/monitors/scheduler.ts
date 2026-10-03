@@ -93,15 +93,15 @@ function buildMessage(
 async function notifySlack(context: Context, monitor: Monitor, triggeredAt: number, sessionId: string, triage?: Triage): Promise<void> {
   let error: string;
   try {
-    const slack = readSlackConfig(context.db);
+    const slack = await readSlackConfig(context.db);
     if (!slack) return;
-    const { analysis, report } = readOutcome(context.db, sessionId);
+    const { analysis, report } = await readOutcome(context.db, sessionId);
     const result = await postSlack(slack.webhookUrl, monitorAlert({
       name: monitor.name,
       triggeredAt,
       summary: report,
       analysis,
-      timeZone: getTimezone(context.db),
+      timeZone: await getTimezone(context.db),
       mentions: slack.mentions,
       ...triage,
     }));
@@ -114,11 +114,12 @@ async function notifySlack(context: Context, monitor: Monitor, triggeredAt: numb
 }
 
 // A failure is reported once; a later finished run (e.g. Retry) is still reported.
-function claimFiring(context: Context, sessionId: string, failed: boolean): boolean {
+async function claimFiring(context: Context, sessionId: string, failed: boolean): Promise<boolean> {
   const unreported = failed ? isNull(monitorTriggers.reported) : or(isNull(monitorTriggers.reported), eq(monitorTriggers.reported, "failed"));
-  return context.db.update(monitorTriggers).set({ reported: failed ? "failed" : "done" })
+  const claimed = await context.db.update(monitorTriggers).set({ reported: failed ? "failed" : "done" })
     .where(and(eq(monitorTriggers.sessionId, sessionId), unreported))
-    .run().changes > 0;
+    .returning({ id: monitorTriggers.id }).all();
+  return claimed.length > 0;
 }
 
 /** Triage and the Slack post after a firing's run; never throws. Without `found` (a re-run) triage uses the recorded issues. */
@@ -126,10 +127,10 @@ async function completeFiring(
   context: Context, monitor: Monitor, triggeredAt: number, sessionId: string, found: FoundIssues | null | undefined, { error }: RunOutcome,
 ): Promise<void> {
   try {
-    if (!claimFiring(context, sessionId, error !== undefined)) return;
+    if (!await claimFiring(context, sessionId, error !== undefined)) return;
     if (error !== undefined) {
       // Issues stay pending so a Retry can still triage them; the stale sweep leaves them open after an hour.
-      forgetReports(context.db, sessionId);
+      await forgetReports(context.db, sessionId);
       // The provider's error text stays in the local log; Slack gets a fixed line.
       console.warn(`[monitor] "${monitor.name}" investigation failed:`, error);
       await notifySlack(context, monitor, triggeredAt, sessionId, {
@@ -145,14 +146,14 @@ async function completeFiring(
 }
 
 /** The tools and completion of a firing's session for a re-run such as Retry; null once its run was reported. */
-export function firingRerun(context: Context, sessionId: string): { tools: Record<string, unknown>; onComplete: (outcome: RunOutcome) => void } | null {
+export async function firingRerun(context: Context, sessionId: string): Promise<{ tools: Record<string, unknown>; onComplete: (outcome: RunOutcome) => void } | null> {
   const { db } = context;
-  const trigger = db.select({ monitorId: monitorTriggers.monitorId, triggeredAt: monitorTriggers.triggeredAt, reported: monitorTriggers.reported })
+  const trigger = await db.select({ monitorId: monitorTriggers.monitorId, triggeredAt: monitorTriggers.triggeredAt, reported: monitorTriggers.reported })
     .from(monitorTriggers).where(eq(monitorTriggers.sessionId, sessionId)).get();
   if (!trigger || trigger.reported === "done") return null;
-  const monitor = db.select().from(monitors).where(eq(monitors.id, trigger.monitorId)).get();
+  const monitor = await db.select().from(monitors).where(eq(monitors.id, trigger.monitorId)).get();
   if (!monitor) return null;
-  const pending = pendingIssueIds(db, sessionId);
+  const pending = await pendingIssueIds(db, sessionId);
   return {
     tools: {
       report_alert_summary: reportAlertSummaryTool(),
@@ -162,22 +163,22 @@ export function firingRerun(context: Context, sessionId: string): { tools: Recor
   };
 }
 
-function setStatus(context: Context, monitorId: string, fields: Partial<Pick<Monitor, "lastStatus" | "lastError" | "lastCheckedAt">>): void {
-  context.db.update(monitors).set(fields).where(eq(monitors.id, monitorId)).run();
+async function setStatus(context: Context, monitorId: string, fields: Partial<Pick<Monitor, "lastStatus" | "lastError" | "lastCheckedAt">>): Promise<void> {
+  await context.db.update(monitors).set(fields).where(eq(monitors.id, monitorId)).run();
 }
 
-function fail(context: Context, monitorId: string, windowEnd: number, message: string): void {
+async function fail(context: Context, monitorId: string, windowEnd: number, message: string): Promise<void> {
   failedWindowEnds.set(monitorId, windowEnd);
-  setStatus(context, monitorId, { lastStatus: "error", lastError: message });
+  await setStatus(context, monitorId, { lastStatus: "error", lastError: message });
 }
 
-function succeed(context: Context, monitorId: string, lastStatus: "ok" | "triggered", windowEnd: number): void {
+async function succeed(context: Context, monitorId: string, lastStatus: "ok" | "triggered", windowEnd: number): Promise<void> {
   failedWindowEnds.delete(monitorId);
-  setStatus(context, monitorId, { lastStatus, lastError: null, lastCheckedAt: windowEnd });
+  await setStatus(context, monitorId, { lastStatus, lastError: null, lastCheckedAt: windowEnd });
 }
 
-function latestSessionRunning(context: Context, monitorId: string): boolean {
-  const latest = context.db
+async function latestSessionRunning(context: Context, monitorId: string): Promise<boolean> {
+  const latest = await context.db
     .select({ sessionId: monitorTriggers.sessionId })
     .from(monitorTriggers)
     .where(and(eq(monitorTriggers.monitorId, monitorId), isNotNull(monitorTriggers.sessionId)))
@@ -191,14 +192,14 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
   const provider = context.providers.getProvider(monitor.provider);
   if (!provider?.connected) {
     // No backoff: cheap, and providers connect a few seconds after startup.
-    setStatus(context, monitor.id, { lastStatus: "error", lastError: `Provider ${monitor.provider} is not connected` });
+    await setStatus(context, monitor.id, { lastStatus: "error", lastError: `Provider ${monitor.provider} is not connected` });
     return;
   }
-  if (latestSessionRunning(context, monitor.id)) return;
+  if (await latestSessionRunning(context, monitor.id)) return;
 
   const condition = parseCondition(monitor.condition);
   if (!condition) {
-    fail(context, monitor.id, window.end, `Invalid condition "${monitor.condition}"`);
+    await fail(context, monitor.id, window.end, `Invalid condition "${monitor.condition}"`);
     return;
   }
 
@@ -212,14 +213,14 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn(`[monitor] "${monitor.name}" query error:`, message);
-    fail(context, monitor.id, window.end, message);
+    await fail(context, monitor.id, window.end, message);
     return;
   }
 
   const extracted = extractGroups(result, monitor.provider);
   const value = sumGroups(extracted);
   if (!evaluateCondition(condition, value)) {
-    succeed(context, monitor.id, "ok", window.end);
+    await succeed(context, monitor.id, "ok", window.end);
     return;
   }
 
@@ -227,23 +228,23 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
   // A true condition with no rows (e.g. "< 1") still needs one group to track.
   const groups = extracted.length > 0 ? extracted : [{ key: "", count: value }];
   // Re-read toggles: the user may have changed them while the query ran.
-  const current = context.db.select({ enabled: monitors.enabled, alertEnabled: monitors.alertEnabled })
+  const current = await context.db.select({ enabled: monitors.enabled, alertEnabled: monitors.alertEnabled })
     .from(monitors).where(eq(monitors.id, monitor.id)).get();
   if (!current?.enabled) return;
   // With alerts off, record the firing but never start a session.
   const alerting = current.alertEnabled !== 0;
   const classified = alerting
-    ? classifyGroups(context.db, monitor.id, groups, now)
+    ? await classifyGroups(context.db, monitor.id, groups, now)
     : groups.map((g) => ({ ...g, sessionId: null, repeat: false }));
   const sessionId = alerting ? crypto.randomUUID() : null;
   const triggerId = crypto.randomUUID();
-  const past = alerting ? pastSessions(context.db, monitor.id, classified.map((g) => g.key)) : [];
-  const found: FoundIssues | null = alerting && triageEnabled(context.db) && incidentQuery(monitor.query) ? await findIssues(context, monitor, window) : null;
+  const past = alerting ? await pastSessions(context.db, monitor.id, classified.map((g) => g.key)) : [];
+  const found: FoundIssues | null = alerting && await triageEnabled(context.db) && incidentQuery(monitor.query) ? await findIssues(context, monitor, window) : null;
   const openIssues = found && !("error" in found) ? found.open : [];
   const message = alerting ? buildMessage(monitor, value, window, classified, past, issuesPrompt(openIssues)) : "";
   try {
     // Insert first: the monitor_id FK fails if the monitor was deleted mid-check.
-    context.db.insert(monitorTriggers).values({
+    await context.db.insert(monitorTriggers).values({
       id: triggerId,
       monitorId: monitor.id,
       triggeredAt: now,
@@ -259,7 +260,7 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
     return;
   }
 
-  if (sessionId && found && !("error" in found)) recordIssues(context.db, { monitorId: monitor.id, triggerId, sessionId }, found);
+  if (sessionId && found && !("error" in found)) await recordIssues(context.db, { monitorId: monitor.id, triggerId, sessionId }, found);
   if (sessionId) {
     const started = await startAgentSession(context, {
       sessionId,
@@ -274,20 +275,20 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
       onComplete: (outcome) => void completeFiring(context, monitor, now, sessionId, found, outcome),
     });
     if ("error" in started) {
-      context.db.delete(monitorTriggers).where(eq(monitorTriggers.id, triggerId)).run();
-      context.db.delete(chatSessions).where(eq(chatSessions.id, sessionId)).run();
+      await context.db.delete(monitorTriggers).where(eq(monitorTriggers.id, triggerId)).run();
+      await context.db.delete(chatSessions).where(eq(chatSessions.id, sessionId)).run();
       sessionChanged(sessionId);
-      fail(context, monitor.id, window.end, `Could not start session: ${started.error}`);
+      await fail(context, monitor.id, window.end, `Could not start session: ${started.error}`);
       return;
     }
   }
 
   console.log(`[monitor] "${monitor.name}" triggered (value ${value}${sessionId ? `, session ${sessionId}` : ", alerts off"})`);
-  succeed(context, monitor.id, "triggered", window.end);
+  await succeed(context, monitor.id, "triggered", window.end);
 }
 
 export async function runDueMonitors(context: Context): Promise<void> {
-  const enabled = context.db.select().from(monitors).where(eq(monitors.enabled, 1)).all();
+  const enabled = await context.db.select().from(monitors).where(eq(monitors.enabled, 1)).all();
   const now = unixNow();
   await Promise.all(enabled.map(async (monitor) => {
     const window = nextWindow(monitor.lastCheckedAt, monitor.frequencySeconds, now, ingestLagSeconds(monitor.query));
@@ -296,7 +297,7 @@ export async function runDueMonitors(context: Context): Promise<void> {
       await checkMonitor(context, monitor, window);
     } catch (err) {
       console.error(`[monitor] "${monitor.name}" check failed:`, err);
-      fail(context, monitor.id, window.end, err instanceof Error ? err.message : String(err));
+      await fail(context, monitor.id, window.end, err instanceof Error ? err.message : String(err));
     }
   }));
 }
@@ -304,20 +305,27 @@ export async function runDueMonitors(context: Context): Promise<void> {
 export class MonitorScheduler {
   private interval: ReturnType<typeof setInterval> | null = null;
   private tickPromise: Promise<void> | null = null;
+  private started = false;
 
   constructor(private context: Context) {}
 
   start(): void {
     if (this.interval) return;
     console.log(`MonitorScheduler started (tick every ${CONFIG.monitorTickIntervalMs / 1000}s)`);
-    this.interval = setInterval(() => {
-      if (this.tickPromise) return;
-      this.tickPromise = runDueMonitors(this.context)
-        .then(() => checkWatches(this.context))
-        .then(() => fireDueTimers(this.context))
-        .catch((err) => console.error("MonitorScheduler tick error:", err))
-        .finally(() => { this.tickPromise = null; });
-    }, CONFIG.monitorTickIntervalMs);
+    this.interval = setInterval(() => this.tick(), CONFIG.monitorTickIntervalMs);
+    // The iOS app restarts the scheduler on each return to the foreground; due monitors run then, not a tick later.
+    // The first start waits one interval, so providers can connect before monitors and timers run.
+    if (this.started) this.tick();
+    this.started = true;
+  }
+
+  private tick(): void {
+    if (this.tickPromise) return;
+    this.tickPromise = runDueMonitors(this.context)
+      .then(() => checkWatches(this.context))
+      .then(() => fireDueTimers(this.context))
+      .catch((err) => console.error("MonitorScheduler tick error:", err))
+      .finally(() => { this.tickPromise = null; });
   }
 
   async stop(): Promise<void> {

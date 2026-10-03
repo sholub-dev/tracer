@@ -5,8 +5,6 @@ import { appRouter } from "../trpc/router.js";
 import type { Context } from "../trpc/context.js";
 import { applyMiddleware } from "./middleware.js";
 import { registerChatRoutes } from "./routes/chat.js";
-import { registerApiRoutes } from "./routes/api.js";
-import { mountStaticFiles } from "./static.js";
 
 export function createApp(context: Context) {
   const app = new Hono();
@@ -20,7 +18,6 @@ export function createApp(context: Context) {
   app.get("/health", (c) => c.json({ status: "ok" }));
 
   registerChatRoutes(app, context);
-  registerApiRoutes(app, context);
 
   app.use(
     "/api/trpc/*",
@@ -30,8 +27,6 @@ export function createApp(context: Context) {
       createContext: () => context as unknown as Record<string, unknown>,
     }),
   );
-
-  mountStaticFiles(app);
 
   return app;
 }

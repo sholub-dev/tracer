@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { trpc } from "../../lib/trpc";
+import { IS_IOS } from "../../lib/platform";
 import { useAvailableModels, useConfiguredProviders, useGcpAuthStatus } from "../../lib/hooks";
 import { AVAILABLE_MODELS, effectivePrices, groupModelsByProvider, modelKey, llmProviderLabel } from "../../lib/models";
 import { FoldTrigger } from "../common/FoldTrigger";
@@ -25,7 +26,7 @@ export function ModelsSettings() {
       <Group title="API keys">
         <ApiKeyRow type="anthropic" label="Anthropic" />
         <ApiKeyRow type="google" label="Google AI" note={GOOGLE_AI_NOTE} />
-        <VertexRow />
+        {!IS_IOS && <VertexRow />}
       </Group>
       <Pricing />
     </Section>

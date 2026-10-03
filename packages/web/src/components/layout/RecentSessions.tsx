@@ -10,6 +10,7 @@ import { ConfirmDialog } from "../common/ConfirmDialog";
 import { MoreActionsMenu } from "../common/MoreActionsMenu";
 import { SegmentedControl } from "../common/SegmentedControl";
 import { ImportDropZone } from "./ImportDropZone";
+import { IS_IOS } from "../../lib/platform";
 
 type Filter = "all" | SessionKindKey;
 type Day = "today" | "yesterday" | "earlier";
@@ -22,12 +23,12 @@ interface SessionItem {
   updatedAt: number;
 }
 
+// The iOS app has no API and no import.
 const filters: { value: Filter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "chat", label: "Chats" },
   { value: "alert", label: "Alerts" },
-  { value: "api", label: "API" },
-  { value: "imported", label: "Imported" },
+  ...(IS_IOS ? [] : [{ value: "api", label: "API" }, { value: "imported", label: "Imported" }] as const),
 ];
 
 const days: { day: Day; label: string }[] = [

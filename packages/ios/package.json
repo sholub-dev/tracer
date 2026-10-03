@@ -1,0 +1,22 @@
+{
+  "name": "@tracer-sh/ios",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "pnpm --filter @tracer-sh/shared build && pnpm --filter @tracer-sh/web build:ios && cap sync ios",
+    "open": "cap open ios"
+  },
+  "dependencies": {
+    "@capacitor-community/keep-awake": "8.0.1",
+    "@capacitor-community/sqlite": "8.1.1",
+    "@capacitor/app": "8.1.2",
+    "@capacitor/core": "8.5.2",
+    "@capacitor/ios": "8.5.2",
+    "@capacitor/keyboard": "8.0.6"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.2",
+    "typescript": "^5.9.3"
+  }
+}

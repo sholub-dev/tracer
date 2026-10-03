@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { tool } from "ai";
 import { eq, desc } from "drizzle-orm";
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/driver.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 import type { ChatToolWriter as StreamWriter } from "@tracer-sh/shared";
 import { monitors } from "../db/schema.js";
@@ -18,8 +18,8 @@ function describeMonitor(m: Monitor): string {
   return `${m.provider} query: ${m.query}${m.chartQuery ? ` | chartQuery: ${m.chartQuery}` : ""} | condition: ${m.condition} | every ${m.frequencySeconds}s`;
 }
 
-function getMonitorContext(db: Db): string {
-  const rows = db.select().from(monitors).orderBy(desc(monitors.updatedAt)).all();
+async function getMonitorContext(db: Db): Promise<string> {
+  const rows = await db.select().from(monitors).orderBy(desc(monitors.updatedAt)).all();
   if (rows.length === 0) {
     return "## Current Monitors\n(empty) — no monitors created yet.";
   }
@@ -29,13 +29,13 @@ function getMonitorContext(db: Db): string {
   return `## Current Monitors\n${lines.join("\n")}`;
 }
 
-export function collectMonitorTools(
+export async function collectMonitorTools(
   registry: ProviderRegistry,
   db: Db,
   activeStreams: ReadonlyMap<string, unknown>,
   writer?: StreamWriter,
 ) {
-  const { tools, promptFragments, connectedProviders } = collectBaseTools(registry, db, writer, "unified");
+  const { tools, promptFragments, connectedProviders } = await collectBaseTools(registry, db, writer, "unified");
   // A builder reply is a short confirmation, not an investigation write-up.
   delete tools[ANALYSIS_TOOL_NAME];
 
@@ -55,7 +55,7 @@ export function collectMonitorTools(
     }),
     execute: async ({ monitorId, run, alert, ...changes }) => {
       const id = monitorId ?? crypto.randomUUID();
-      const existing = monitorId ? db.select().from(monitors).where(eq(monitors.id, monitorId)).get() : undefined;
+      const existing = monitorId ? await db.select().from(monitors).where(eq(monitors.id, monitorId)).get() : undefined;
       if (monitorId && !existing) return { error: `Monitor ${monitorId} not found` };
       const given = Object.fromEntries(Object.entries(changes).filter(([, v]) => v !== undefined)) as Partial<typeof changes>;
       let name = existing?.name;
@@ -68,11 +68,11 @@ export function collectMonitorTools(
         const draft = normalizeDraft({ ...merged, name: merged.name, query: merged.query, condition: merged.condition, frequencySeconds: merged.frequencySeconds });
         const result = await validateMonitor(registry, draft, { runQuery: true });
         if ("error" in result) return { error: result.error };
-        saveMonitor(db, id, draft);
+        await saveMonitor(db, id, draft);
         name = draft.name;
         sample = { sampleValue: result.sampleValue, wouldTrigger: result.wouldTrigger };
       }
-      const toggled = run !== undefined || alert !== undefined ? setMonitorToggles(db, id, { run, alert }) : null;
+      const toggled = run !== undefined || alert !== undefined ? await setMonitorToggles(db, id, { run, alert }) : null;
       if (toggled && "error" in toggled) return { error: toggled.error };
       return { monitorId: id, name, created: !existing, ...sample, ...(toggled ? { run: toggled.run, alert: toggled.alert } : {}) };
     },
@@ -82,7 +82,7 @@ export function collectMonitorTools(
     description: "Permanently delete a monitor with its trigger history and debug sessions. Only when the user explicitly asks to delete or remove it; never to disable, pause, mute or change it.",
     inputSchema: z.object({ monitorId: z.string().describe("Id of the monitor to delete") }),
     execute: async ({ monitorId }) => {
-      const result = deleteMonitor(db, activeStreams, monitorId);
+      const result = await deleteMonitor(db, activeStreams, monitorId);
       return "error" in result ? { error: result.error } : { monitorId, name: result.name, deleted: true };
     },
   });
@@ -131,7 +131,7 @@ Seconds, at least ${CONFIG.monitorMinFrequencySeconds}. Default to 300 (5 min). 
     EVIDENCE_GROUNDING,
     PLAIN_LANGUAGE,
     providerContext,
-    getMonitorContext(db),
+    await getMonitorContext(db),
     ...promptFragments,
   ].join("\n\n");
 

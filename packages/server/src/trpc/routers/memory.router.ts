@@ -7,8 +7,8 @@ import { runMemoryOptimizer } from "../../agents/utility/memory-optimizer.js";
 export const memoryRouter = router({
   bySession: publicProcedure
     .input(z.object({ sessionId: z.string() }))
-    .query(({ ctx, input }) => {
-      return ctx.db
+    .query(async ({ ctx, input }) => {
+      return await ctx.db
         .select()
         .from(memoryOperations)
         .where(eq(memoryOperations.sessionId, input.sessionId))
@@ -16,8 +16,8 @@ export const memoryRouter = router({
         .all();
     }),
 
-  list: publicProcedure.query(({ ctx }) => {
-    return ctx.db
+  list: publicProcedure.query(async ({ ctx }) => {
+    return await ctx.db
       .select()
       .from(toolMemories)
       .orderBy(desc(toolMemories.createdAt))
@@ -29,8 +29,8 @@ export const memoryRouter = router({
       toolName: z.string().min(1),
       note: z.string().min(1),
     }))
-    .mutation(({ ctx, input }) => {
-      ctx.db
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db
         .insert(toolMemories)
         .values({ toolName: input.toolName, note: input.note })
         .run();
@@ -44,8 +44,8 @@ export const memoryRouter = router({
         note: z.string().min(1),
       }),
     )
-    .mutation(({ ctx, input }) => {
-      ctx.db
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db
         .update(toolMemories)
         .set({ note: input.note })
         .where(eq(toolMemories.id, input.id))
@@ -55,8 +55,8 @@ export const memoryRouter = router({
 
   remove: publicProcedure
     .input(z.object({ id: z.number() }))
-    .mutation(({ ctx, input }) => {
-      ctx.db
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db
         .delete(toolMemories)
         .where(eq(toolMemories.id, input.id))
         .run();

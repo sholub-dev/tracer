@@ -1,10 +1,10 @@
-import { DEFAULTS, SETTINGS_KEYS } from "../config.js";
+import { DEFAULTS, ENV, SETTINGS_KEYS } from "../config.js";
 import { readAppSetting } from "../db/config-reader.js";
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/driver.js";
 
-export function getTimezone(db?: Db): string {
-  return (db ? readAppSetting<string>(db, SETTINGS_KEYS.timezone) : null)
-    ?? process.env.TRACER_TIMEZONE
+export async function getTimezone(db?: Db): Promise<string> {
+  return (db ? await readAppSetting<string>(db, SETTINGS_KEYS.timezone) : null)
+    ?? ENV.TRACER_TIMEZONE
     ?? DEFAULTS.timezone;
 }
 
@@ -20,8 +20,8 @@ function formatNow(timezone: string, withTime: boolean): string {
 }
 
 /** System-prompt block with today's date and the user's timezone rules; no clock time, so the prompt prefix stays cacheable all day. */
-export function getCurrentDateBlock(db?: Db): string {
-  const timezone = getTimezone(db);
+export async function getCurrentDateBlock(db?: Db): Promise<string> {
+  const timezone = await getTimezone(db);
   return `## Current Date
 ${formatNow(timezone, false)}. The exact current time is given with the user's latest message.
 
@@ -30,8 +30,8 @@ The user's timezone is ${timezone}. Always report times in it, with the zone lab
 - PostHog: filter and show times in the user's timezone with toTimeZone(timestamp, '${timezone}').`;
 }
 
-export function getCurrentTimeText(db?: Db): string {
-  return `[Current date and time: ${formatNow(getTimezone(db), true)}]`;
+export async function getCurrentTimeText(db?: Db): Promise<string> {
+  return `[Current date and time: ${formatNow(await getTimezone(db), true)}]`;
 }
 
 export function formatLocalTime(seconds: number, timeZone: string): string {

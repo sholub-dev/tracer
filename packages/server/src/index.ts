@@ -1,47 +1,25 @@
 import "./node-version.js";
 import { serve } from "@hono/node-server";
-import { eq } from "drizzle-orm";
-import { FEATURES, unixNow } from "@tracer-sh/shared";
 import { CONFIG } from "./config.js";
 import { checkForUpdateBackground, setRestartHandler } from "./updater.js";
-import { db } from "./db/client.js";
-import { runSetup } from "./db/setup.js";
-import { chatSessions } from "./db/schema.js";
-import { ProviderRegistry } from "./providers/registry.js";
-import { registerDefaultProviders } from "./providers/register-defaults.js";
-import { createContext } from "./trpc/context.js";
-import { createApp } from "./http/app.js";
-import { MonitorScheduler } from "./monitors/scheduler.js";
+import { db, setupDriver } from "./db/client.js";
+import { registerGcpProvider } from "./providers/gcp/register.js";
+import { registerApiRoutes } from "./http/routes/api.js";
+import { mountStaticFiles } from "./http/static.js";
+import { guardLocalRequests } from "./http/local-guard.js";
+import { startRuntime } from "./runtime.js";
 
 export type { AppRouter } from "./trpc/router.js";
 
 async function main() {
   checkForUpdateBackground();
-  runSetup();
+  const { providers, context, app, scheduler } = await startRuntime(db, setupDriver, registerGcpProvider);
+  registerApiRoutes(app, context);
+  // Last: it answers every remaining GET with the web app.
+  mountStaticFiles(app);
 
-  // Mark stale "streaming" sessions from a previous crash as done
-  db.update(chatSessions)
-    .set({ status: "done", updatedAt: unixNow() })
-    .where(eq(chatSessions.status, "streaming"))
-    .run();
-
-  const providers = new ProviderRegistry();
-  registerDefaultProviders(providers);
-
-  // Non-blocking — don't delay server startup for provider connections
-  providers.initializeFromDb(db).then(() => {
-    console.log("Providers initialized:", providers.getAllProviders().map((p) => p.name));
-  }).catch((err) => {
-    console.warn("Provider initialization error:", err);
-  });
-
-  const context = createContext({ db, providers });
-  const app = createApp(context);
-
-  const scheduler = FEATURES.monitors ? new MonitorScheduler(context) : null;
-  scheduler?.start();
-
-  const server = serve({ fetch: app.fetch, port: CONFIG.port, hostname: CONFIG.host }, (info) => {
+  const fetch = guardLocalRequests(app.fetch, CONFIG.host);
+  const server = serve({ fetch, port: CONFIG.port, hostname: CONFIG.host }, (info) => {
     console.log(`Tracer server running on http://localhost:${info.port}`);
   });
   server.on("error", (err: NodeJS.ErrnoException) => {

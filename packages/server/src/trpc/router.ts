@@ -9,6 +9,7 @@ import { monitorsRouter } from "./routers/monitors.router.js";
 import { updateRouter } from "./routers/update.router.js";
 import { integrationsRouter } from "./routers/integrations.router.js";
 import { skillRouter } from "./routers/skill.router.js";
+import { transferRouter } from "./routers/transfer.router.js";
 
 export const appRouter = router({
   provider: providerRouter,
@@ -21,6 +22,7 @@ export const appRouter = router({
   monitors: monitorsRouter,
   update: updateRouter,
   skill: skillRouter,
+  transfer: transferRouter,
 });
 
 export type AppRouter = typeof appRouter;

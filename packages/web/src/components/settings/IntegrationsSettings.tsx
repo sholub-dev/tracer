@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { trpc } from "../../lib/trpc";
+import { IS_IOS } from "../../lib/platform";
 import { ConnectionRow, Group, Row, Section, Status, type ConfigField } from "./parts";
 import { JIRA_NOTE, SLACK_NOTE } from "./notes";
 
@@ -88,7 +89,7 @@ export function IntegrationsSettings() {
           </>
         )}
       </Group>
-      <AgentSkillGroup />
+      {!IS_IOS && <AgentSkillGroup />}
     </Section>
   );
 }

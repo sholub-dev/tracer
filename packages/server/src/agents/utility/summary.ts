@@ -1,7 +1,7 @@
 import { generateText, type UIMessage } from "ai";
 import { resolveModel } from "../../llm/resolve.js";
 import { extractUsage, recordAgentRun } from "../../llm/usage.js";
-import type { Db } from "../../db/client.js";
+import type { Db } from "../../db/driver.js";
 
 const SUMMARY_SYSTEM_PROMPT = `You are compacting an AI debugging-assistant conversation into a detailed summary. Your summary will permanently REPLACE the original messages as the assistant's only memory of them, so anything you omit is lost forever. The assistant must be able to continue the investigation from your summary alone without redoing any completed work.
 
@@ -124,7 +124,7 @@ export async function generateSessionSummary(
   db: Db,
   opts: { sessionId: string; priorSummary?: string; messages: UIMessage[]; keptAnalysis?: boolean },
 ): Promise<{ summary: string } | { error: string; config?: boolean }> {
-  const resolved = resolveModel(db);
+  const resolved = await resolveModel(db);
   if ("error" in resolved) {
     console.warn("[summary] Cannot generate summary:", resolved.error);
     return { error: resolved.error, config: true };
@@ -151,7 +151,7 @@ export async function generateSessionSummary(
     });
     const summary = text.trim();
     if (!summary) return { error: "Summary generation returned no content" };
-    recordAgentRun(db, {
+    await recordAgentRun(db, {
       sessionId: opts.sessionId,
       agentType: "summary",
       model: resolved.modelId,

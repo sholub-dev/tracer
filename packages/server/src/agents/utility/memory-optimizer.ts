@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { tool, generateText, isStepCount } from "ai";
 import { eq } from "drizzle-orm";
-import type { Db } from "../../db/client.js";
+import type { Db } from "../../db/driver.js";
 import { toolMemories } from "../../db/schema.js";
 import { resolveModel } from "../../llm/resolve.js";
 import { makeMemoryExecute } from "../../tools/memory-executor.js";
@@ -41,7 +41,7 @@ export async function runMemoryOptimizer(
   db: Db,
   toolName: string,
 ): Promise<{ success: boolean; error?: string; stats: { kept: number; updated: number; deleted: number } }> {
-  const memories = db
+  const memories = await db
     .select()
     .from(toolMemories)
     .where(eq(toolMemories.toolName, toolName))
@@ -53,7 +53,7 @@ export async function runMemoryOptimizer(
     return { success: true, stats: emptyStats };
   }
 
-  const resolved = resolveModel(db);
+  const resolved = await resolveModel(db);
   if ("error" in resolved) {
     return { success: false, error: resolved.error, stats: emptyStats };
   }
@@ -73,7 +73,7 @@ export async function runMemoryOptimizer(
         if (verdict === "keep") stats.kept++;
         try {
           const reviewNote = `[${verdict}] ${reason}`;
-          db.update(toolMemories)
+          await db.update(toolMemories)
             .set({ reviewNote })
             .where(eq(toolMemories.id, id))
             .run();

@@ -1,4 +1,4 @@
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/driver.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 import type { ChatToolWriter as StreamWriter, ChatMode } from "@tracer-sh/shared";
 import { DEFAULT_CHAT_MODE } from "@tracer-sh/shared";
@@ -8,15 +8,15 @@ type ChatToolsResult = Omit<BaseToolSetup, "connectedProviders" | "tools"> & {
   tools: Record<string, unknown> | undefined;
 };
 
-export function collectChatTools(
+export async function collectChatTools(
   registry: ProviderRegistry,
   db: Db,
   writer?: StreamWriter,
   activeProvider?: string,
   mode: ChatMode = DEFAULT_CHAT_MODE,
-): ChatToolsResult {
+): Promise<ChatToolsResult> {
   const { tools, promptFragments, systemPrompt, maxSteps, afterComplete, connectedProviders } =
-    collectBaseTools(registry, db, writer, mode, activeProvider, true);
+    await collectBaseTools(registry, db, writer, mode, activeProvider, true);
 
   // Debug chat returns undefined tools when no providers are connected,
   // so server.ts can show a "no providers configured" fallback prompt.

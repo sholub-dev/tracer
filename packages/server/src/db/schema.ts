@@ -1,4 +1,4 @@
-import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 import { unixNow } from "@tracer-sh/shared";
 
@@ -21,6 +21,7 @@ export const appSettings = sqliteTable("app_settings", {
 
 export const toolMemories = sqliteTable("tool_memories", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  uid: text("uid"), // stable across devices; set by a trigger when null
   toolName: text("tool_name").notNull(),
   note: text("note").notNull(),
   reviewNote: text("review_note"),
@@ -29,6 +30,7 @@ export const toolMemories = sqliteTable("tool_memories", {
     .$defaultFn(() => unixNow()),
 }, (t) => [
   index("idx_memories_tool").on(t.toolName),
+  uniqueIndex("idx_memories_uid").on(t.uid),
 ]);
 
 export const chatSessions = sqliteTable("chat_sessions", {
@@ -162,6 +164,7 @@ export const sessionTimers = sqliteTable("session_timers", {
 
 export const memoryOperations = sqliteTable("memory_operations", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  uid: text("uid"), // stable across devices; set by a trigger when null
   sessionId: text("session_id").notNull().references(() => chatSessions.id, { onDelete: "cascade" }),
   operation: text("operation").notNull(), // "create" | "update" | "delete"
   memoryId: integer("memory_id"),
@@ -171,6 +174,7 @@ export const memoryOperations = sqliteTable("memory_operations", {
     .$defaultFn(() => unixNow()),
 }, (t) => [
   index("idx_memops_session").on(t.sessionId),
+  uniqueIndex("idx_memops_uid").on(t.uid),
 ]);
 
 export const agentRuns = sqliteTable("agent_runs", {
@@ -189,4 +193,14 @@ export const agentRuns = sqliteTable("agent_runs", {
     .$defaultFn(() => unixNow()),
 }, (t) => [
   index("idx_agent_runs_session").on(t.sessionId),
+]);
+
+/** Change log for two-way sync: one entry per synced row, kept by triggers. */
+export const syncRows = sqliteTable("sync_rows", {
+  tbl: text("tbl").notNull(),
+  rowKey: text("row_key").notNull(),
+  changedAt: integer("changed_at").notNull(),
+  deleted: integer("deleted").notNull().default(0),
+}, (t) => [
+  primaryKey({ columns: [t.tbl, t.rowKey] }),
 ]);

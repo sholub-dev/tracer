@@ -7,8 +7,8 @@ import { dashboardWidgets } from "../../db/schema.js";
 export const widgetsRouter = router({
   list: publicProcedure
     .input(z.object({ dashboardId: z.string() }))
-    .query(({ ctx, input }) => {
-      const rows = ctx.db
+    .query(async ({ ctx, input }) => {
+      const rows = await ctx.db
         .select()
         .from(dashboardWidgets)
         .where(eq(dashboardWidgets.dashboardId, input.dashboardId))
@@ -26,8 +26,8 @@ export const widgetsRouter = router({
 
   delete: publicProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(({ ctx, input }) => {
-      ctx.db
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db
         .delete(dashboardWidgets)
         .where(eq(dashboardWidgets.id, input.id))
         .run();
@@ -44,8 +44,8 @@ export const widgetsRouter = router({
         posH: z.number(),
       }),
     )
-    .mutation(({ ctx, input }) => {
-      ctx.db
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db
         .update(dashboardWidgets)
         .set({
           posX: input.posX,

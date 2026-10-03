@@ -1,5 +1,5 @@
 import type { IProvider, ProviderStatus } from "@tracer-sh/shared";
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/driver.js";
 import { providerConfigs } from "../db/schema.js";
 
 export type ProviderFactory = (config: Record<string, string>) => IProvider;
@@ -72,8 +72,16 @@ export class ProviderRegistry {
     }));
   }
 
+  /** Replaces every configured provider with a fresh one from the stored settings, e.g. after a sync changed them. */
+  async reloadFromDb(db: Db): Promise<void> {
+    for (const provider of this.getAllProviders()) {
+      if (this.factories.has(provider.type)) await this.unregister(provider.name);
+    }
+    await this.initializeFromDb(db);
+  }
+
   async initializeFromDb(db: Db): Promise<void> {
-    const rows = db.select().from(providerConfigs).all();
+    const rows = await db.select().from(providerConfigs).all();
 
     for (const row of rows) {
       if (this.providers.has(row.type)) continue;

@@ -4,183 +4,153 @@
 [![CI](https://github.com/sholub-dev/tracer/actions/workflows/ci.yml/badge.svg)](https://github.com/sholub-dev/tracer/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/sholub-dev/tracer/actions/workflows/codeql.yml/badge.svg)](https://github.com/sholub-dev/tracer/actions/workflows/codeql.yml)
 
-Local-first AI-powered observability platform.
+**Ask what broke. Tracer queries your observability tools and finds the root cause.**
 
-During an incident, most time goes to switching between observability tools
-and gathering context — not fixing the problem. Tracer connects your providers
-to a single AI chat interface so you find the root cause in one place.
+Tracer is an AI incident investigator that runs on your machine and on your iPhone.
+It uses your own API keys. There is no Tracer server, no account and no telemetry.
 
-## How it works
+![An investigation in Tracer](docs/screenshots/desktop-investigation.png)
 
-```
-┌─────────┐       your API keys         ┌──────────────────┐
-│         │ ◄──────────────────────────►│  Observability   │
-│ Tracer  │                             │  Providers       │
-│  local  │       your API keys         ├──────────────────┤
-│         │ ◄──────────────────────────►│  LLM Providers   │
-└─────────┘                             └──────────────────┘
-```
+## What it does
 
-Everything runs on your machine. Your data stays local in an encrypted SQLite
-database. Tracer talks directly to your provider and LLM APIs using your own
-API keys — no intermediary servers, no telemetry, no data leaves your machine
-except the API calls you control.
+- **Investigates in chat.** Describe the problem. The agent writes and runs New Relic, PostHog and Google Cloud queries, draws the results, and states the root cause. Every query it used stays one click away.
+- **Watches for you.** Tell it what to watch. A monitor checks on a schedule, starts an investigation when it fires, and posts the finding to Slack.
+- **Goes with you.** The iPhone app runs the full agent on the phone. One QR scan syncs it with your computer.
+- **Takes any evidence.** Paste or drop screenshots, logs, code or PDFs into the chat.
+- **Shares results.** Export a post-mortem as Markdown, or an investigation as a PNG. Drop that PNG back into Tracer to reopen the full analysis.
+- **Remembers.** The agent keeps notes across sessions. Each session shows its cost.
 
-## Debug
-
-Chat with an AI agent that queries your providers in real time and finds root
-causes — all from a single conversation.
-
-- Natural language investigation across all connected providers
-- Live query execution with inline charts
-- Attach evidence to any message — screenshots, log files, code, PDFs — via paperclip, drag-and-drop, or paste
-- Post-mortem reports — download as Markdown to share
-- Share investigations as PNG — drop the exported image onto the sidebar to re-open the full analysis
-- Agent memory across sessions
-- Session history and cost tracking
-
-![Debug page](docs/screenshots/debug_page.png)
-
-## Monitors
-
-Tell an agent what to watch, and Tracer checks it on a schedule. When the
-condition is met, it starts a debug session that finds the cause for you.
-
-- Create, change, toggle and delete monitors in chat, e.g. "alert me on any new alert for the foundations team". The agent researches the data, then saves a New Relic (NRQL) or PostHog (HogQL) count query and condition (e.g. `count > 0`) right away; the grid next to the chat updates live
-- Checks run on round clock times (every 5 min at :00, :05, ...) over back-to-back time windows, so no event is counted twice or missed
-- Each trigger starts a normal debug session with the same agent and tools; results show in the Debug section of the sidebar with your other sessions; the Monitors section lists only chats that create or edit monitors
-- Repeat detection: with `FACET` (e.g. by service), a group already investigated in the last 24h is marked as a repeat and linked to that earlier session; every firing still starts a new session, and the agent can open recent past sessions of the monitor when they help
-- Each card shows live query results for the chosen range (24h / 7d / 30d / 90d) and the times it fired
-- Run toggle turns checks on or off; Alert toggle decides if a firing starts a debug session (off still records it)
-- Drag cards to reorder; drag the right edge to resize (50 / 75 / 100% width); card color shows the provider
-- Slack alerts: add an incoming webhook in Settings > Integrations. When a firing's debug session finishes, Tracer posts the issue it found to that channel: severity and a one-line root cause first, then why, what is affected, whether it was seen before and the next step, then the monitor that found it, tagging the Slack member IDs set there (firings with Alert off are not posted). Everyone in that channel sees these findings
-
-## Settings
-
-Configure providers, LLM credentials, integrations, and agent behavior. Each
-provider setup includes connectivity tests and guidance on creating
-least-privilege API keys.
-
-- LLM backends: Anthropic (Claude), Google (Gemini via AI Studio or Vertex AI)
-- Data provider setup with connectivity tests
-- Jira and Slack integrations
-- Thinking budgets and step limits
-- Agent memory management
-
-![Settings page](docs/screenshots/settings_page.png)
-
-## Supported providers
-
-**Data:** New Relic (NRQL), Google Cloud (Logs, Traces, Metrics, Errors), PostHog (HogQL)
-
-**LLM:** Anthropic (Claude), Google (Gemini — AI Studio or Vertex AI)
-
-**Integrations:** Jira — the agent reads issue details and comment threads for
-incident context, and posts comments back only when you explicitly ask. Slack —
-monitor alerts are posted to one channel through an incoming webhook.
-
-## Install
+## Quick start
 
 Requires [Node.js 22.12+](https://nodejs.org/).
-
-**Run the latest, no install:**
 
 ```bash
 npx tracer-sh@latest
 ```
 
-**Install a pinned copy:**
+1. Open `http://localhost:3579`.
+2. In **Settings**, add an LLM key (Anthropic or Google) and connect a data source.
+3. Ask a question, for example: *"Why did checkout latency spike after 14:00 UTC?"*
+
+To install a fixed version, run `npm install -g tracer-sh`, then `tracer-sh`.
+Tracer updates only when you click the version in the sidebar and select **Update now**.
+
+![Start screen](docs/screenshots/desktop-new.png)
+
+## Monitors
+
+![Monitors](docs/screenshots/desktop-monitors.png)
+
+- **Create in chat.** For example: *"Alert me when checkout errors go above 20 in 5 minutes."* The agent tests the query, then saves it.
+- **Investigates on its own.** A firing starts a normal investigation. Its result shows in the sidebar under **Alerts**.
+- **Skips repeats.** With `FACET`, a group that was investigated in the last 24 hours is marked as a repeat and linked to that session.
+- **Posts to Slack.** Add an incoming webhook in **Settings > Integrations**. Tracer posts the severity, the root cause and the next step, and tags the people you set.
+- **Never misses a window.** Checks run on round clock times over back-to-back windows, so no event counts twice.
+
+## iPhone app
+
+![Tracer on iPhone](docs/screenshots/iphone.png)
+
+The app runs the whole of Tracer on the phone: the agent, the monitors and the encrypted database.
+Calls go straight from the phone to your providers and your LLM.
+
+**Install** (Xcode and a free Apple ID are enough):
 
 ```bash
-npm install -g tracer-sh
-tracer-sh
+pnpm install
+pnpm --filter @tracer-sh/ios build
+pnpm --filter @tracer-sh/ios open
 ```
 
-Either way, Tracer stays on its installed version until you explicitly update:
-click the version in the sidebar and hit **Update now**, or re-run the install
-command. Note that bare `npx tracer-sh` reuses npm's cached copy and does NOT
-check for new releases — use the in-app update or `npx tracer-sh@latest` to get
-the newest version.
+In Xcode, select your team under **Signing & Capabilities**, select your iPhone, and click **Run**.
+A free Apple ID signs the app for 7 days. Requires iOS 15 or later.
 
-Open `http://localhost:3579`, go to **Settings** to add your API keys and
-choose an LLM — done.
+**Limits on the phone:**
+- Monitors check only while the app is open. The screen stays on while an investigation runs.
+- Google Cloud, Vertex AI, the CLI and PNG import are desktop only.
 
-## Headless / CLI
+### Sync with your computer
 
-Run an investigation from the terminal and get back the final analysis — so
-other tools and agents (including Claude Code) can drive Tracer:
+1. On the computer, open **Settings > Phone**. A QR code shows.
+2. Scan it with the iPhone Camera, then confirm on the phone.
+3. On the computer, select **Allow**.
+
+The first sync copies everything from the computer, including keys, monitors and sessions.
+Later syncs with the same computer merge both ways: the newest version of each item wins, and deletions carry over.
+A sync with a different computer replaces the phone's data.
+Monitors that are new to a device arrive paused, so the same alert never posts twice.
+
+The data moves only on your Wi-Fi, encrypted with AES-256-GCM.
+The key travels only inside the QR code. Each code works once and expires after 2 minutes.
+
+## CLI
+
+Run an investigation from a script or a coding agent. The server must be running.
 
 ```bash
 tracer-sh analyze "Why did checkout error rate spike after 14:00 UTC?"
 ```
 
-- `--session <id>` — continue a prior run with full context
-- `--provider <name>` — scope the investigation to one provider
-- `--json` — full response envelope (session id, queries, usage)
-- `tracer-sh --help` — usage for every subcommand
+| Option | Effect |
+|---|---|
+| `--session <id>` | Continue an earlier investigation with its full context |
+| `--provider <name>` | Use one provider only (`newrelic`, `gcp`, `posthog`) |
+| `--json` | Print the full result: session id, queries and token usage |
 
-Requires a running server. To let Claude Code or Cursor use it, install the
-Tracer skill from **Settings > Integrations**.
+To let Claude Code or Cursor use Tracer, install the Tracer skill from **Settings > Integrations**.
+
+## Providers
+
+| | |
+|---|---|
+| **Data** | New Relic (NRQL), PostHog (HogQL), Google Cloud (Logs, Traces, Metrics, Errors) |
+| **LLM** | Anthropic (Claude), Google (Gemini through AI Studio or Vertex AI) |
+| **Jira** | The agent reads issues and comments. It posts a comment only when you ask. |
+| **Slack** | Monitor findings go to one channel through an incoming webhook. |
+
+Each data source setup tests the connection and explains how to create a read-only key.
 
 ## Security
 
-Your secrets — API keys, integration tokens, chat history, agent memory — sit
-behind several independent layers:
+- **Local only.** Tracer talks only to your providers and your LLM, with your keys.
+- **Encrypted at rest.** SQLCipher (AES-256) encrypts the whole database. A copied `.db` file is unreadable without the key.
+- **Key in the OS keychain.** Tracer creates a random 256-bit key on first run and stores it in the macOS Keychain, Windows Credential Manager or Linux Secret Service. On iPhone, the key is in the iOS Keychain.
+- **Owner-only files.** The data folder is `0700`. A fallback key file is `0600`.
+- **Loopback only.** The desktop server listens on `127.0.0.1` and rejects requests for any other host name.
 
-- **Local-only.** No Tracer servers, no telemetry, no sync.
-- **Encrypted at rest.** The entire SQLite database is encrypted with SQLCipher (AES-256). A stolen laptop, a copied `.db` file, or a backup is ciphertext without the key.
-- **Machine-bound, user-scoped key.** A random 256-bit key is generated on first run and stored in your OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service). It never leaves the machine and other OS users can't read it.
-- **Hardened on disk.** The data directory is owner-only (`0700`); a keychain-less fallback key file is `0600`.
+Encryption protects the file, not a running session. Code that runs as your OS user can read what Tracer reads.
+If you lose the keychain entry (`tracer-sh` / `db-key`), you lose the database. Back up that entry if you need a safety net.
+Without a keychain (CI, headless Linux), set `TRACER_DB_KEY` to 64 hex characters (`openssl rand -hex 32`).
 
-Encryption is automatic — new installs are encrypted from the first run, and
-an existing plaintext database is migrated in place on first launch. In CI or
-headless environments without a keychain, supply the key yourself via
-`TRACER_DB_KEY` (64-char hex, e.g. `openssl rand -hex 32`).
-
-Two honest caveats. Encryption at rest defends the file, not your live
-session: anyone running code as your OS user can read what the app can read —
-that is the boundary of every local-first app. And the key lives only in your
-keychain, so losing it (OS reinstall, keychain reset) makes the database
-unrecoverable; back up the `tracer-sh` / `db-key` keychain value if you want
-a safety net.
-
-Verify it yourself:
+Check it yourself:
 
 ```bash
-sqlite3 ~/.tracer/data/tracer.db '.tables'    # → "Error: file is not a database"
-head -c 16 ~/.tracer/data/tracer.db | od -c   # → random bytes, not "SQLite format 3"
-```
-
-## Uninstall
-
-```bash
-npm uninstall -g tracer-sh
-rm -rf ~/.tracer    # also removes settings, sessions, API keys
-```
-
-The database encryption key lives in your OS keychain (service `tracer-sh`,
-account `db-key`). On macOS:
-
-```bash
-security delete-generic-password -s tracer-sh -a db-key
+sqlite3 ~/.tracer/data/tracer.db '.tables'    # Error: file is not a database
 ```
 
 ## Troubleshooting
 
 | Problem | Fix |
-|---------|-----|
-| Native SQLite build fails | macOS: `xcode-select --install` / Linux: `sudo apt install build-essential python3` |
+|---|---|
+| Native SQLite build fails | macOS: `xcode-select --install`. Linux: `sudo apt install build-essential python3` |
 | Port in use | `TRACER_PORT=3580 tracer-sh` |
-| No LLM responses | Add an API key in Settings |
-| Headless / CI: no keychain available | Set `TRACER_DB_KEY` to a 64-char hex key (`openssl rand -hex 32`) |
+| No LLM responses | Add an API key in **Settings** |
+| Phone does not find the computer | Put both on the same Wi-Fi. Allow **Local Network** for Tracer in iOS Settings |
+
+## Uninstall
+
+```bash
+npm uninstall -g tracer-sh
+rm -rf ~/.tracer                                       # settings, sessions and keys
+security delete-generic-password -s tracer-sh -a db-key   # macOS keychain entry
+```
 
 ## Contributing
 
-**Report bugs or request features** — [open an issue](https://github.com/sholub-dev/tracer/issues) with steps to reproduce or a clear description.
-
-**Submit a code change** — fork, branch, and open a pull request against
-`master`. All PRs require approval before merging.
+[Open an issue](https://github.com/sholub-dev/tracer/issues) for bugs and ideas.
+For code, fork the repo and open a pull request against `master`.
 
 ## License
 
-[Elastic License 2.0](https://www.elastic.co/licensing/elastic-license) — free for any use, including internal business use, modification, and redistribution. You may not offer it as a hosted or managed service competing with Tracer.
+[Elastic License 2.0](https://www.elastic.co/licensing/elastic-license). You can use, change and share Tracer, also inside your company.
+You cannot offer it as a hosted or managed service.

@@ -1,0 +1,242 @@
+import { timingSafeEqual } from "node:crypto";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
+import { hostname, networkInterfaces } from "node:os";
+import QRCode from "qrcode";
+import type { Db } from "../db/driver.js";
+import { randomSecret, seal, unseal } from "./crypto.js";
+import { getSetting, recordSync } from "./peer.js";
+import { exportSnapshot } from "./snapshot.js";
+import { exportSyncPayload, mergeSyncPayload, type SyncPayload } from "./sync.js";
+import { APPROVAL_WINDOW_MS, COPY_LINK_PREFIX, DEVICE_ID, MAX_NAME_LENGTH, type SyncMode } from "./receive.js";
+
+const MAX_BODY_BYTES = 100 * 1024 * 1024;
+const BODY_TIMEOUT_MS = 60_000;
+// The phone polls once a second: after a deny or expiry the listener answers briefly so the phone learns why.
+const END_GRACE_MS = 3000;
+const RUN_ACTIVE = "An investigation is running on this computer. Stop it or wait for it to finish, then sync again.";
+
+export type SendState = "idle" | "waiting" | "approval" | "approved" | "sent" | "denied" | "expired";
+
+export interface SendStatus {
+  state: SendState;
+  phoneName?: string;
+  mode?: SyncMode;
+  /** Merge only: rows written and deleted on this computer. */
+  applied?: number;
+  deleted?: number;
+}
+
+interface Session {
+  server: Server;
+  state: SendState;
+  timer?: ReturnType<typeof setTimeout>;
+  request?: { deviceId: string; name: string; mode: SyncMode };
+  busy: boolean;
+}
+
+let current: Session | null = null;
+let last: SendStatus = { state: "idle" };
+
+class HttpError extends Error {
+  constructor(readonly status: number, message = "") {
+    super(message);
+  }
+}
+
+function lanAddress(): string | null {
+  const addresses = Object.entries(networkInterfaces()).flatMap(([name, list]) =>
+    (list ?? []).filter((a) => a.family === "IPv4" && !a.internal).map((a) => ({ name, address: a.address })),
+  );
+  // Wi-Fi and Ethernet are en*; a VPN tunnel (utun) does not reach the phone.
+  return (addresses.find((a) => a.name.startsWith("en")) ?? addresses[0])?.address ?? null;
+}
+
+function computerName(): string {
+  return hostname().replace(/\.local$/, "").slice(0, MAX_NAME_LENGTH);
+}
+
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    const timer = setTimeout(() => fail(new HttpError(408)), BODY_TIMEOUT_MS);
+    const fail = (err: Error) => {
+      clearTimeout(timer);
+      req.off("data", onData);
+      req.resume();
+      reject(err);
+    };
+    const onData = (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) fail(new HttpError(413));
+      else chunks.push(chunk);
+    };
+    req.on("data", onData);
+    req.once("end", () => {
+      clearTimeout(timer);
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    });
+    req.once("error", fail);
+  });
+}
+
+function reply(res: ServerResponse, status: number, body?: string) {
+  res.writeHead(status, { "content-type": "text/plain" }).end(body);
+}
+
+function arm() {
+  if (!current) return;
+  const session = current;
+  clearTimeout(session.timer);
+  session.timer = setTimeout(() => { if (current === session) finish("expired"); }, APPROVAL_WINDOW_MS);
+}
+
+function finish(state: SendState, extra: Partial<SendStatus> = {}) {
+  if (!current) return;
+  const { server, request } = current;
+  clearTimeout(current.timer);
+  current.state = state;
+  last = { state, ...(request && { phoneName: request.name, mode: request.mode }), ...extra };
+  current = null;
+  const close = () => {
+    server.close();
+    server.closeAllConnections();
+  };
+  if (request && (state === "denied" || state === "expired")) setTimeout(close, END_GRACE_MS).unref();
+  else close();
+}
+
+export function stopSend(): void {
+  finish("idle");
+}
+
+export function sendStatus(): SendStatus {
+  if (!current) return last;
+  const { state, request } = current;
+  return { state, ...(request && { phoneName: request.name, mode: request.mode }) };
+}
+
+/** Lets the pending phone request through. */
+export function approve(): void {
+  if (current?.state !== "approval") throw new Error("There is no request to allow.");
+  current.state = "approved";
+  arm();
+}
+
+export function deny(): void {
+  if (current?.state !== "approval") throw new Error("There is no request to deny.");
+  finish("denied");
+}
+
+function parseRequest(text: string): NonNullable<Session["request"]> {
+  const value = JSON.parse(text) as Record<string, unknown>;
+  const { deviceId, name, mode } = value;
+  if (typeof deviceId !== "string" || !DEVICE_ID.test(deviceId) || typeof name !== "string" || (mode !== "merge" && mode !== "replace")) {
+    throw new HttpError(400);
+  }
+  // Shown to the user, so it is untrusted text: no control characters, bounded length.
+  return { deviceId, name: name.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, "").trim().slice(0, MAX_NAME_LENGTH) || "iPhone", mode };
+}
+
+/**
+ * Serves one encrypted exchange with a phone on the local network, once, for two minutes.
+ * The QR code carries the address, a one-time token and the key; the key never crosses the network.
+ * Nothing is exchanged until the person at this computer allows the phone's request.
+ * `activeRuns` counts running investigations: an exchange waits for them to finish.
+ * `afterMerge` runs after this computer merged the phone's data; it learns whether provider settings changed.
+ */
+export async function startSend(
+  db: Db,
+  activeRuns: () => number,
+  afterMerge?: (providersChanged: boolean) => Promise<void>,
+): Promise<{ link: string; qrSvg: string; expiresAt: number }> {
+  stopSend();
+  const address = lanAddress();
+  if (!address) throw new Error("This computer has no network connection. Connect it to the same Wi-Fi as the phone.");
+  const token = randomSecret();
+  const key = randomSecret();
+  const expected = Buffer.from(`/${token}`);
+  const deviceId = (await getSetting(db, "device_id")) ?? "";
+
+  const handle = async (req: IncomingMessage, res: ServerResponse) => {
+    const url = req.url ?? "";
+    const given = Buffer.from(url.slice(0, expected.length));
+    if (given.length !== expected.length || !timingSafeEqual(given, expected)) return reply(res, 404);
+    const route = `${req.method} ${url.slice(expected.length)}`;
+    if (route === "GET /status") return reply(res, 200, JSON.stringify({ state: session.state }));
+    if (current !== session) return reply(res, 404);
+
+    if (route === "POST /request") {
+      if (session.state !== "waiting") return reply(res, 409, "Another phone already used this code. Show a new code and try again.");
+      const body = await readBody(req);
+      let text: string;
+      try { text = await unseal(body, key); } catch { return reply(res, 403); }
+      const request = parseRequest(text);
+      if (current !== session || session.state !== "waiting") return reply(res, 409, "Another phone already used this code. Show a new code and try again.");
+      session.request = request;
+      session.state = "approval";
+      arm();
+      return reply(res, 200);
+    }
+
+    if (route === "GET " || route === "POST /merge") {
+      if (session.state !== "approved") return reply(res, 403);
+      const merge = route === "POST /merge";
+      if (session.request?.mode !== (merge ? "merge" : "replace")) return reply(res, 409, "This code was approved for the other kind of sync.");
+      if (session.busy) return reply(res, 409, "The exchange is already running.");
+      session.busy = true;
+      try {
+        let sealed: string;
+        let extra: Partial<SendStatus> = {};
+        if (merge) {
+          const body = await readBody(req);
+          let remote: SyncPayload;
+          try { remote = JSON.parse(await unseal(body, key)) as SyncPayload; } catch { return reply(res, 403); }
+          // Checked after the upload: a monitor or timer can start a run while the data arrives.
+          if (activeRuns() > 0) return reply(res, 409, RUN_ACTIVE);
+          const { applied, deleted } = await mergeSyncPayload(db, remote);
+          await afterMerge?.(applied.provider_configs + deleted.provider_configs > 0);
+          const total = (counts: Record<string, number>) => Object.values(counts).reduce((a, b) => a + b, 0);
+          extra = { applied: total(applied), deleted: total(deleted) };
+          sealed = await seal(JSON.stringify(await exportSyncPayload(db)), key);
+        } else {
+          // A running investigation has not saved its answer yet, so the copy would miss it.
+          if (activeRuns() > 0) return reply(res, 409, RUN_ACTIVE);
+          sealed = await seal(JSON.stringify(await exportSnapshot(db)), key);
+        }
+        await recordSync(db, { name: session.request.name });
+        return await new Promise<void>((resolve) => {
+          res.writeHead(200, { "content-type": "text/plain" }).end(sealed, () => {
+            if (current === session) finish("sent", extra);
+            resolve();
+          });
+        });
+      } finally {
+        session.busy = false;
+      }
+    }
+    reply(res, 404);
+  };
+
+  const server = createServer((req, res) => {
+    handle(req, res).catch((err: unknown) => {
+      if (!(err instanceof HttpError)) console.warn("[transfer] Request failed:", err);
+      if (!res.headersSent) reply(res, err instanceof HttpError ? err.status : 500);
+    });
+  });
+  const session: Session = { server, state: "waiting", busy: false };
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    // Only the address in the QR code: other interfaces (VPN, container bridges) must not reach the copy.
+    server.listen(0, address, resolve);
+  });
+
+  const { port } = server.address() as AddressInfo;
+  current = session;
+  arm();
+  last = { state: "waiting" };
+
+  const link = `${COPY_LINK_PREFIX}?from=${encodeURIComponent(`http://${address}:${port}/${token}`)}&key=${key}&name=${encodeURIComponent(computerName())}&device=${encodeURIComponent(deviceId)}`;
+  return { link, qrSvg: await QRCode.toString(link, { type: "svg", margin: 1, errorCorrectionLevel: "L" }), expiresAt: Date.now() + APPROVAL_WINDOW_MS };
+}

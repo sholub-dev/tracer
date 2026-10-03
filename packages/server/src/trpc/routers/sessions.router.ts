@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { on } from "node:events";
 import { eq, desc, notLike, and, ne, sql } from "drizzle-orm";
 import type { UIMessage } from "ai";
 import {
@@ -17,7 +16,7 @@ import {
 import { publicProcedure, router } from "../trpc.js";
 import { chatSessions, agentRuns, monitorTriggers, sessionTimers } from "../../db/schema.js";
 import { generateSessionSummary } from "../../agents/utility/summary.js";
-import { sessionChanged, sessionEvents } from "../../lib/session-events.js";
+import { sessionChanged, sessionChanges } from "../../lib/session-events.js";
 
 const AGENT_TYPE_LABELS: Record<string, string> = {
   chat: "Chat",
@@ -30,8 +29,8 @@ const AGENT_TYPE_LABELS: Record<string, string> = {
 };
 
 export const sessionsRouter = router({
-  list: publicProcedure.query(({ ctx }) => {
-    return ctx.db
+  list: publicProcedure.query(async ({ ctx }) => {
+    return (await ctx.db
       .select({
         id: chatSessions.id,
         title: chatSessions.title,
@@ -45,14 +44,14 @@ export const sessionsRouter = router({
         notLike(chatSessions.id, `${SESSION_PREFIX.MONITORS}%`),
       ))
       .orderBy(desc(chatSessions.updatedAt))
-      .all()
+      .all())
       .map(s => ({ ...s, titlePending: s.title === DEFAULT_SESSION_TITLE }));
   }),
 
   getTitle: publicProcedure
     .input(z.object({ id: z.string() }))
-    .query(({ ctx, input }) => {
-      const row = ctx.db
+    .query(async ({ ctx, input }) => {
+      const row = await ctx.db
         .select({ title: chatSessions.title })
         .from(chatSessions)
         .where(eq(chatSessions.id, input.id))
@@ -63,8 +62,8 @@ export const sessionsRouter = router({
 
   get: publicProcedure
     .input(z.object({ id: z.string() }))
-    .query(({ ctx, input }) => {
-      const row = ctx.db
+    .query(async ({ ctx, input }) => {
+      const row = await ctx.db
         .select()
         .from(chatSessions)
         .where(eq(chatSessions.id, input.id))
@@ -80,16 +79,16 @@ export const sessionsRouter = router({
   /** The session's pending follow-up timer; a fired one is not shown. */
   timer: publicProcedure
     .input(z.object({ id: z.string() }))
-    .query(({ ctx, input }) => {
-      const row = ctx.db.select({ fireAt: sessionTimers.fireAt, setAt: sessionTimers.setAt, note: sessionTimers.note })
+    .query(async ({ ctx, input }) => {
+      const row = await ctx.db.select({ fireAt: sessionTimers.fireAt, setAt: sessionTimers.setAt, note: sessionTimers.note })
         .from(sessionTimers).where(eq(sessionTimers.sessionId, input.id)).get();
       return row?.fireAt ? { fireAt: row.fireAt, setAt: row.setAt, note: row.note } : null;
     }),
 
   getCost: publicProcedure
     .input(z.object({ id: z.string() }))
-    .query(({ ctx, input }) => {
-      const rows = ctx.db
+    .query(async ({ ctx, input }) => {
+      const rows = await ctx.db
         .select({
           agentType: agentRuns.agentType,
           model: agentRuns.model,
@@ -118,14 +117,14 @@ export const sessionsRouter = router({
     }),
 
   onChange: publicProcedure.subscription(async function* ({ signal }) {
-    for await (const [id] of on(sessionEvents, "changed", { signal })) yield { id: id as string };
+    for await (const id of sessionChanges(signal)) yield { id };
   }),
 
   markViewed: publicProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(({ ctx, input }) => {
+    .mutation(async ({ ctx, input }) => {
       // Only transition "done" → "idle". Never overwrite "streaming" status.
-      ctx.db
+      await ctx.db
         .update(chatSessions)
         .set({ status: "idle" })
         .where(and(eq(chatSessions.id, input.id), ne(chatSessions.status, "streaming")))
@@ -136,21 +135,21 @@ export const sessionsRouter = router({
 
   delete: publicProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(({ ctx, input }) => {
-      ctx.db
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db
         .delete(chatSessions)
         .where(eq(chatSessions.id, input.id))
         .run();
       // Keep the firing in monitor history; it just loses its session link.
-      ctx.db.update(monitorTriggers).set({ sessionId: null }).where(eq(monitorTriggers.sessionId, input.id)).run();
+      await ctx.db.update(monitorTriggers).set({ sessionId: null }).where(eq(monitorTriggers.sessionId, input.id)).run();
       sessionChanged(input.id);
       return { success: true };
     }),
 
   saveMessages: publicProcedure
     .input(z.object({ id: z.string(), messages: z.array(z.any()) }))
-    .mutation(({ ctx, input }) => {
-      ctx.db
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db
         .update(chatSessions)
         .set({
           messages: JSON.stringify(input.messages),
@@ -164,7 +163,7 @@ export const sessionsRouter = router({
 
   importAnalysis: publicProcedure
     .input(ImportedAnalysisSchema)
-    .mutation(({ ctx, input }) => {
+    .mutation(async ({ ctx, input }) => {
       const id = crypto.randomUUID();
       const assistantMessage = {
         id: crypto.randomUUID(),
@@ -185,7 +184,7 @@ export const sessionsRouter = router({
         ],
       };
       const title = input.sourceTitle.slice(0, 80) || DEFAULT_SESSION_TITLE;
-      ctx.db
+      await ctx.db
         .insert(chatSessions)
         .values({
           id,
@@ -201,8 +200,8 @@ export const sessionsRouter = router({
 
   truncateMessages: publicProcedure
     .input(z.object({ id: z.string(), keepCount: z.number().int().min(0) }))
-    .mutation(({ ctx, input }) => {
-      const row = ctx.db
+    .mutation(async ({ ctx, input }) => {
+      const row = await ctx.db
         .select({ messages: chatSessions.messages, summaryUpTo: chatSessions.summaryUpTo })
         .from(chatSessions)
         .where(eq(chatSessions.id, input.id))
@@ -227,7 +226,7 @@ export const sessionsRouter = router({
       const sourceUpTo = row.summaryUpTo != null ? row.summaryUpTo + (keptAnalysisBoundary ? 1 : 0) : 0;
       const summaryStale = row.summaryUpTo != null && input.keepCount < sourceUpTo;
 
-      ctx.db
+      await ctx.db
         .update(chatSessions)
         .set({
           messages: JSON.stringify(truncated),
@@ -243,7 +242,7 @@ export const sessionsRouter = router({
   compact: publicProcedure
     .input(z.object({ id: z.string(), upToIndex: z.number().int().min(0) }))
     .mutation(async ({ ctx, input }) => {
-      const row = ctx.db
+      const row = await ctx.db
         .select()
         .from(chatSessions)
         .where(eq(chatSessions.id, input.id))
@@ -316,7 +315,7 @@ export const sessionsRouter = router({
       // a truncation/edit/stream that landed mid-generation can't end up with a
       // summary boundary that no longer matches the stored history. A stream
       // that merely appended messages keeps the prefix intact and is fine.
-      const fresh = ctx.db
+      const fresh = await ctx.db
         .select({ messages: chatSessions.messages, status: chatSessions.status })
         .from(chatSessions)
         .where(eq(chatSessions.id, input.id))
@@ -341,7 +340,7 @@ export const sessionsRouter = router({
       const summary = result.summary;
       const summaryCreatedAt = unixNow();
       // Deliberately leaves updatedAt alone — compaction shouldn't reorder the sidebar.
-      ctx.db
+      await ctx.db
         .update(chatSessions)
         .set({ summary, summaryUpTo, summaryCreatedAt })
         .where(eq(chatSessions.id, input.id))
@@ -351,8 +350,8 @@ export const sessionsRouter = router({
 
   updateSummary: publicProcedure
     .input(z.object({ id: z.string(), summary: z.string().min(1) }))
-    .mutation(({ ctx, input }) => {
-      const row = ctx.db
+    .mutation(async ({ ctx, input }) => {
+      const row = await ctx.db
         .select({ summaryUpTo: chatSessions.summaryUpTo })
         .from(chatSessions)
         .where(eq(chatSessions.id, input.id))
@@ -363,7 +362,7 @@ export const sessionsRouter = router({
       if (row.summaryUpTo == null) {
         throw new TRPCError({ code: "CONFLICT", message: "The summary no longer exists" });
       }
-      ctx.db
+      await ctx.db
         .update(chatSessions)
         .set({ summary: input.summary })
         .where(eq(chatSessions.id, input.id))
@@ -373,8 +372,8 @@ export const sessionsRouter = router({
 
   clearSummary: publicProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(({ ctx, input }) => {
-      ctx.db
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db
         .update(chatSessions)
         .set({ summary: null, summaryUpTo: null, summaryCreatedAt: null })
         .where(eq(chatSessions.id, input.id))

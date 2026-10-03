@@ -4,6 +4,8 @@ import { Loader2 } from "lucide-react";
 import { Shell } from "./components/layout/Shell";
 import { AppSidebar, type Page } from "./components/layout/Sidebar";
 import { Toaster } from "@/components/ui/sonner";
+import { CopyFromComputerDialog } from "@/components/settings/CopyFromComputerDialog";
+import { IS_IOS } from "./lib/platform";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 // Pages load lazily, then all of them are fetched in the background. A page already fetched renders
@@ -174,6 +176,7 @@ export function App() {
           {currentPage === "settings" && <Settings />}
         </Suspense>
       </Shell>
+      {IS_IOS && <CopyFromComputerDialog />}
       <Toaster
         position="bottom-center"
         theme="dark"

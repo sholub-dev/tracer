@@ -19,6 +19,8 @@ import { ProgressStore } from "../../lib/progress-store";
 import { useChatScroll, useEscapeToStop, useFileDrop } from "../../lib/hooks";
 import { handleProgressData, stopChat, useCompactedMessages } from "../../lib/chat-utils";
 import { WEB_CONFIG } from "../../lib/config";
+import { serverFetch } from "../../lib/server-fetch";
+import { IS_IOS } from "../../lib/platform";
 import { preloadResultChunks } from "../charts/ResultView";
 import { AlertSummaryPanel, alertSummaryOf } from "./AlertSummaryPanel";
 import { WorkingIndicator } from "./ChatIndicators";
@@ -232,6 +234,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
         messages: initialMessages,
         transport: new DefaultChatTransport({
           api: apiEndpoint,
+          fetch: serverFetch,
           prepareSendMessagesRequest: ({ id, messages }) => ({
             body: { id, message: messages[messages.length - 1], ...extraBodyRef.current },
           }),
@@ -271,7 +274,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
         progressStore.clear();
         // Don't steal focus from elsewhere on the page (sidebar, settings, another input).
         const active = document.activeElement;
-        if (!active || active === document.body || rootRef.current?.contains(active)) textareaRef.current?.focus();
+        if (!IS_IOS && (!active || active === document.body || rootRef.current?.contains(active))) textareaRef.current?.focus();
       }
       onStatusChangeRef.current?.(status, messagesRef.current);
     }
@@ -303,7 +306,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   // Disabling a focused textarea drops focus to <body>; restore it when the lock releases.
   const prevInputDisabled = useRef(inputDisabled);
   useEffect(() => {
-    if (prevInputDisabled.current && !inputDisabled) textareaRef.current?.focus();
+    if (!IS_IOS && prevInputDisabled.current && !inputDisabled) textareaRef.current?.focus();
     prevInputDisabled.current = inputDisabled;
   }, [inputDisabled]);
 
@@ -323,7 +326,9 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
     } else {
       sendMessage({ text });
     }
-    textareaRef.current?.focus();
+    // On iOS the keyboard would cover the reply as it streams.
+    if (IS_IOS) textareaRef.current?.blur();
+    else textareaRef.current?.focus();
   };
 
   const handleContinue = useCallback(() => {
@@ -383,7 +388,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
       sources={sources}
       cost={cost}
       textareaRef={textareaRef}
-      autoFocus
+      autoFocus={!IS_IOS}
       compact={compact}
     />
   ) : null;

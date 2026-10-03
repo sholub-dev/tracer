@@ -20,6 +20,7 @@ import {
 import { useSessionLiveUpdates } from "../../lib/hooks";
 import { trpc } from "../../lib/trpc";
 import { WEB_CONFIG } from "../../lib/config";
+import { IS_IOS } from "../../lib/platform";
 import { ConfirmDialog } from "../common/ConfirmDialog";
 import { IconButton } from "../common/IconButton";
 import { MoreActionsMenu } from "../common/MoreActionsMenu";
@@ -137,6 +138,7 @@ function VersionStatus() {
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const updateCheck = trpc.update.check.useQuery(undefined, {
     staleTime: WEB_CONFIG.updateCheckStaleTimeMs,
+    enabled: !IS_IOS,
   });
   const version = updateCheck.data?.currentVersion ?? __APP_VERSION__;
 

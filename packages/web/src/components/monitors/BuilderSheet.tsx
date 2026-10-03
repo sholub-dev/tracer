@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { useDeleteSession } from "../../lib/hooks";
 import { trpc } from "../../lib/trpc";
 import { formatTime } from "../../lib/format";
+import { IS_IOS } from "../../lib/platform";
 import { ConfirmDialog } from "../common/ConfirmDialog";
 import { IconButton } from "../common/IconButton";
 import type { ChatCoreRef } from "../chat/ChatCore";
@@ -43,7 +44,7 @@ export function BuilderSheet({ sessionId, editingName, initialInput, onOpenChat,
         onOpenAutoFocus={(e) => {
           e.preventDefault();
           const content = e.currentTarget as HTMLElement;
-          (content.querySelector("textarea") ?? content).focus();
+          (IS_IOS ? content : content.querySelector("textarea") ?? content).focus();
         }}
       >
         <SheetHeader className="flex-row items-center gap-2 border-b px-5 py-3">

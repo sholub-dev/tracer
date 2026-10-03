@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { tool } from "ai";
 import { eq, sql } from "drizzle-orm";
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/driver.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 import { unixNow } from "@tracer-sh/shared";
 import type { ChatToolWriter as StreamWriter } from "@tracer-sh/shared";
@@ -11,8 +11,8 @@ import { EVIDENCE_GROUNDING, PLAIN_LANGUAGE } from "../lib/shared-prompts.js";
 import { requireTimeRangePlaceholders, executeValidationQuery } from "./query-validation.js";
 import { CONFIG } from "../config.js";
 
-function getWidgetContext(db: Db, dashboardId: string): string {
-  const widgets = db.select().from(dashboardWidgets).where(eq(dashboardWidgets.dashboardId, dashboardId)).all();
+async function getWidgetContext(db: Db, dashboardId: string): Promise<string> {
+  const widgets = await db.select().from(dashboardWidgets).where(eq(dashboardWidgets.dashboardId, dashboardId)).all();
   if (widgets.length === 0) {
     return "## Current Dashboard Widgets\n(empty) — no widgets on the dashboard yet.";
   }
@@ -23,8 +23,8 @@ function getWidgetContext(db: Db, dashboardId: string): string {
   return `## Current Dashboard Widgets\n${lines.join("\n")}`;
 }
 
-function nextYPosition(db: Db, dashboardId: string): number {
-  const result = db
+async function nextYPosition(db: Db, dashboardId: string): Promise<number> {
+  const result = await db
     .select({ maxY: sql<number>`MAX(pos_y + pos_h)` })
     .from(dashboardWidgets)
     .where(eq(dashboardWidgets.dashboardId, dashboardId))
@@ -32,7 +32,7 @@ function nextYPosition(db: Db, dashboardId: string): number {
   return result?.maxY ?? 0;
 }
 
-export function collectDashboardTools(
+export async function collectDashboardTools(
   registry: ProviderRegistry,
   db: Db,
   writer?: StreamWriter,
@@ -41,7 +41,7 @@ export function collectDashboardTools(
   const dbId = dashboardId ?? "";
   // "unified" mode makes providers return role-less prompt fragments (domain
   // knowledge, query syntax) instead of full direct-mode system prompts.
-  const { tools, promptFragments, connectedProviders } = collectBaseTools(registry, db, writer, "unified");
+  const { tools, promptFragments, connectedProviders } = await collectBaseTools(registry, db, writer, "unified");
 
   const defaultProvider = connectedProviders[0];
 
@@ -78,16 +78,16 @@ export function collectDashboardTools(
       if ("error" in validation) return validation;
 
       const id = crypto.randomUUID();
-      const posY = nextYPosition(db, dbId);
+      const posY = await nextYPosition(db, dbId);
       const now = unixNow();
 
       // Ensure dashboard row exists (lazy creation — atomic upsert)
-      db.insert(dashboards)
+      await db.insert(dashboards)
         .values({ id: dbId, title: "New Dashboard", createdAt: now, updatedAt: now })
         .onConflictDoNothing()
         .run();
 
-      db.insert(dashboardWidgets)
+      await db.insert(dashboardWidgets)
         .values({
           id,
           dashboardId: dbId,
@@ -128,7 +128,7 @@ export function collectDashboardTools(
       height: z.number().optional().describe("New grid height"),
     }),
     execute: async ({ id, title, query, chartType, width, height }) => {
-      const existing = db
+      const existing = await db
         .select()
         .from(dashboardWidgets)
         .where(eq(dashboardWidgets.id, id))
@@ -158,7 +158,7 @@ export function collectDashboardTools(
       if (width !== undefined) updates.posW = Math.min(Math.max(width, 1), CONFIG.gridColumns);
       if (height !== undefined) updates.posH = Math.max(height, 1);
 
-      db.update(dashboardWidgets)
+      await db.update(dashboardWidgets)
         .set(updates)
         .where(eq(dashboardWidgets.id, id))
         .run();
@@ -178,14 +178,14 @@ export function collectDashboardTools(
       id: z.string().describe("Widget ID to delete"),
     }),
     execute: async ({ id }) => {
-      const existing = db
+      const existing = await db
         .select()
         .from(dashboardWidgets)
         .where(eq(dashboardWidgets.id, id))
         .get();
       if (!existing) return { error: `Widget not found: ${id}` };
 
-      db.delete(dashboardWidgets)
+      await db.delete(dashboardWidgets)
         .where(eq(dashboardWidgets.id, id))
         .run();
 
@@ -205,7 +205,7 @@ export function collectDashboardTools(
     : "## Available Providers\nNo observability providers are currently connected.";
 
   // ── Widget context (injected fresh on every request) ──
-  const widgetContext = getWidgetContext(db, dbId);
+  const widgetContext = await getWidgetContext(db, dbId);
 
   const basePrompt = `You are a dashboard builder assistant for the Tracer platform. You help users create, update, and delete dashboard widgets that display live observability data.
 

@@ -1,6 +1,6 @@
 import type { LanguageModelUsage } from "ai";
 import type { TokenUsage } from "@tracer-sh/shared";
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/driver.js";
 import { agentRuns } from "../db/schema.js";
 
 /** Extract a normalized TokenUsage from an AI SDK LanguageModelUsage. */
@@ -16,15 +16,15 @@ export function extractUsage(usage: LanguageModelUsage, model: string): TokenUsa
 }
 
 /** Record a single LLM call's token usage in the agent_runs table. Best-effort. */
-export function recordAgentRun(db: Db, opts: {
+export async function recordAgentRun(db: Db, opts: {
   sessionId: string;
   agentType: string;
   model: string;
   usage: TokenUsage;
   durationMs?: number;
-}): void {
+}): Promise<void> {
   try {
-    db.insert(agentRuns).values({
+    await db.insert(agentRuns).values({
       id: crypto.randomUUID(),
       sessionId: opts.sessionId,
       agentType: opts.agentType,

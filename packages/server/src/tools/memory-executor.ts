@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/driver.js";
 import { toolMemories, memoryOperations } from "../db/schema.js";
 
 function enforceNoteLength(note: string): string {
@@ -9,10 +9,10 @@ function enforceNoteLength(note: string): string {
 }
 
 export function makeMemoryExecute(db: Db, toolName: string, sessionId?: string) {
-  function logOp(operation: string, note?: string, memoryId?: number) {
+  async function logOp(operation: string, note?: string, memoryId?: number) {
     if (!sessionId) return;
     try {
-      db.insert(memoryOperations).values({
+      await db.insert(memoryOperations).values({
         sessionId,
         operation,
         memoryId,
@@ -38,8 +38,8 @@ export function makeMemoryExecute(db: Db, toolName: string, sessionId?: string) 
       }
       if (operation === "DELETE") {
         try {
-          db.delete(toolMemories).where(eq(toolMemories.id, id)).run();
-          logOp("delete", undefined, id);
+          await db.delete(toolMemories).where(eq(toolMemories.id, id)).run();
+          await logOp("delete", undefined, id);
           return { deleted: true, id };
         } catch (err) {
           return { error: err instanceof Error ? err.message : "Failed to delete memory" };
@@ -50,11 +50,11 @@ export function makeMemoryExecute(db: Db, toolName: string, sessionId?: string) 
       }
       try {
         const trimmed = enforceNoteLength(note);
-        db.update(toolMemories)
+        await db.update(toolMemories)
           .set({ note: trimmed, toolName })
           .where(eq(toolMemories.id, id))
           .run();
-        logOp("update", trimmed, id);
+        await logOp("update", trimmed, id);
         return { updated: true, id };
       } catch (err) {
         return { error: err instanceof Error ? err.message : "Failed to update memory" };
@@ -65,8 +65,8 @@ export function makeMemoryExecute(db: Db, toolName: string, sessionId?: string) 
     }
     try {
       const trimmed = enforceNoteLength(note);
-      db.insert(toolMemories).values({ toolName, note: trimmed }).run();
-      logOp("create", trimmed);
+      await db.insert(toolMemories).values({ toolName, note: trimmed }).run();
+      await logOp("create", trimmed);
       return { saved: true };
     } catch (err) {
       return { error: err instanceof Error ? err.message : "Failed to save memory" };

@@ -1,14 +1,16 @@
 import { useState } from "react";
-import { Brain, Cpu, Database, Plug, SlidersHorizontal, type LucideIcon } from "lucide-react";
+import { Brain, Cpu, Database, Plug, Smartphone, SlidersHorizontal, type LucideIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { PageSidebarButton } from "../components/layout/Shell";
 import { ModelsSettings } from "../components/settings/ModelsSettings";
 import { DataSourcesSettings } from "../components/settings/DataSourcesSettings";
 import { IntegrationsSettings } from "../components/settings/IntegrationsSettings";
 import { AgentSettings } from "../components/settings/AgentSettings";
 import { MemorySettings } from "../components/settings/MemorySettings";
+import { PhoneSettings } from "../components/settings/PhoneSettings";
 
-type Tab = "models" | "sources" | "integrations" | "agent" | "memory";
+type Tab = "models" | "sources" | "integrations" | "agent" | "memory" | "phone";
 
 const TABS: { value: Tab; label: string; icon: LucideIcon; panel: () => React.JSX.Element }[] = [
   { value: "models", label: "Models", icon: Cpu, panel: ModelsSettings },
@@ -16,6 +18,7 @@ const TABS: { value: Tab; label: string; icon: LucideIcon; panel: () => React.JS
   { value: "integrations", label: "Integrations", icon: Plug, panel: IntegrationsSettings },
   { value: "agent", label: "Agent", icon: SlidersHorizontal, panel: AgentSettings },
   { value: "memory", label: "Memory", icon: Brain, panel: MemorySettings },
+  { value: "phone", label: "Phone", icon: Smartphone, panel: PhoneSettings },
 ];
 
 export function Settings() {
@@ -24,14 +27,15 @@ export function Settings() {
 
   return (
     <div className="min-h-full bg-background text-foreground">
-      <header className="sticky top-0 z-10 border-b bg-background/90 backdrop-blur-md">
-        <div className="mx-auto max-w-[1000px] px-4 py-3 sm:px-6">
+      <header data-page-header className="sticky top-0 z-10 border-b bg-background/90 backdrop-blur-md">
+        <div className="mx-auto flex max-w-[1000px] items-center gap-2 px-4 py-3 sm:px-6">
+          <PageSidebarButton />
           <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
         </div>
       </header>
       <div className="mx-auto flex max-w-[1000px] flex-col gap-6 px-4 py-6 sm:px-6 md:flex-row md:items-start md:gap-10 md:py-8">
-        <nav aria-label="Settings sections" className="-mx-4 shrink-0 overflow-x-auto px-4 md:sticky md:top-20 md:mx-0 md:w-48 md:px-0">
-          <ul className="flex gap-1 md:flex-col">
+        <nav aria-label="Settings sections" className="shrink-0 md:sticky md:top-20 md:w-48 md:overflow-x-auto">
+          <ul className="flex flex-wrap gap-1 md:flex-col md:flex-nowrap">
             {TABS.map(({ value, label, icon: Icon }) => (
               <li key={value}>
                 <button

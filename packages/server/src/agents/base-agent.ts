@@ -1,4 +1,3 @@
-import { setTimeout as delay } from "node:timers/promises";
 import { streamText, convertToModelMessages, isStepCount, createUIMessageStream, toUIMessageStream, type UIMessage, type ToolSet } from "ai";
 import { eq, sql } from "drizzle-orm";
 import { DEFAULT_SESSION_TITLE, unixNow, splitAtAnalysis, type AfterCompleteParams } from "@tracer-sh/shared";
@@ -47,12 +46,12 @@ export function sanitizeMessages(messages: UIMessage[]): UIMessage[] {
   });
 }
 
-export function loadSessionMessages(
+export async function loadSessionMessages(
   db: Context["db"],
   sessionId: string,
   newMessage: UIMessage,
-): { messages: UIMessage[]; summary: string | null; summaryUpTo: number | null } {
-  const existing = db.select().from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
+): Promise<{ messages: UIMessage[]; summary: string | null; summaryUpTo: number | null }> {
+  const existing = await db.select().from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
   let previous: UIMessage[] = [];
   if (existing) {
     try {
@@ -77,13 +76,13 @@ export interface ChatAgentConfig {
   summary?: string | null;
   summaryUpTo?: number | null;
   context: Context;
-  collectTools: (writer: StreamWriter) => {
+  collectTools: (writer: StreamWriter) => Promise<{
     tools: Record<string, unknown> | undefined;
     systemPrompt?: string;
     promptFragments?: string[];
     maxSteps?: number;
     afterComplete?: (params: AfterCompleteParams) => void;
-  };
+  }>;
   sessionTitle: (messages: UIMessage[]) => string;
   /** Wait before each automatic re-run of an attempt that failed with an error; no re-runs when omitted. */
   retryDelaysMs?: readonly number[];
@@ -95,9 +94,9 @@ export interface ChatAgentConfig {
  * Idempotent session cleanup: mark done in DB, signal broadcaster, remove from active map.
  * DB update runs first so clients refetching after broadcaster.finish() see status="done".
  */
-function finalizeSession(sessionId: string, context: Context, broadcaster: StreamBroadcaster): void {
+async function finalizeSession(sessionId: string, context: Context, broadcaster: StreamBroadcaster): Promise<void> {
   if (!context.activeStreams.has(sessionId)) return;
-  context.db
+  await context.db
     .update(chatSessions)
     .set({ status: "done", updatedAt: unixNow() })
     .where(eq(chatSessions.id, sessionId))
@@ -108,6 +107,20 @@ function finalizeSession(sessionId: string, context: Context, broadcaster: Strea
 }
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+/** Resolves after `ms`, or at once when `signal` aborts. */
+function delay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener("abort", done);
+  });
+}
 
 /**
  * Background LLM processing — runs completely independent of the HTTP response.
@@ -138,7 +151,7 @@ async function processLLMStream(
     },
     sessionId,
   };
-  const collected = collectTools(writer);
+  const collected = await collectTools(writer);
   const tools = collected.tools;
 
   // Compaction: when the session has a summary, the model sees only
@@ -198,7 +211,7 @@ When the user's question spans multiple providers, query each relevant provider 
       : `${basePrompt}\n\n${PLAIN_LANGUAGE}\n\nNo observability providers are currently configured. If the user asks about observability data, let them know they can connect providers in the Settings page.`;
   }
 
-  systemPrompt += "\n\n" + getCurrentDateBlock(context.db);
+  systemPrompt += "\n\n" + await getCurrentDateBlock(context.db);
 
   if (modelInput.some((m) => m.parts.some((p) => p.type === "file"))) {
     systemPrompt += "\n\n" + IMAGE_ANALYSIS_GUIDANCE;
@@ -264,14 +277,14 @@ When the user's question spans multiple providers, query each relevant provider 
           const now = unixNow();
           const messagesJson = JSON.stringify(enrichedMessages);
 
-          recordAgentRun(context.db, {
+          await recordAgentRun(context.db, {
             sessionId,
             agentType: "chat",
             model: modelId,
             usage: chatUsage,
           });
 
-          context.db
+          await context.db
             .insert(chatSessions)
             .values({
               id: sessionId,
@@ -351,6 +364,8 @@ When the user's question spans multiple providers, query each relevant provider 
   } catch (err) {
     console.warn(`[chat] Stream error for ${sessionId}:`, err);
     failure ??= errorText(err);
+    // A dropped connection throws here instead of sending an error part; clients need one to show Retry.
+    if (final && !serverAbort.signal.aborted) broadcaster.emit({ type: "error", errorText: "An error occurred." });
   } finally {
     reader.releaseLock();
   }
@@ -367,8 +382,8 @@ When the user's question spans multiple providers, query each relevant provider 
 export async function runChatAgent({
   sessionId, messages: incoming, summary, summaryUpTo, context, collectTools, sessionTitle, retryDelaysMs = [], onFailed,
 }: ChatAgentConfig) {
-  const messages = stampSentTime(incoming, getCurrentTimeText(context.db));
-  const resolved = resolveModel(context.db);
+  const messages = stampSentTime(incoming, await getCurrentTimeText(context.db));
+  const resolved = await resolveModel(context.db);
   if ("error" in resolved) return { error: resolved.error };
   const { model, provider, modelId, providerOptions } = resolved;
 
@@ -384,7 +399,7 @@ export async function runChatAgent({
 
   const now = unixNow();
   const messagesJson = JSON.stringify(messages);
-  context.db
+  await context.db
     .insert(chatSessions)
     .values({
       id: sessionId,
@@ -416,7 +431,7 @@ export async function runChatAgent({
       if (!final) {
         broadcaster.discard({ type: "reset-step" });
         console.warn(`[chat] Attempt ${attempt + 1} for ${sessionId} failed, retrying in ${retryDelaysMs[attempt] / 1000}s:`, error);
-        await delay(retryDelaysMs[attempt], undefined, { signal: serverAbort.signal }).catch(() => {});
+        await delay(retryDelaysMs[attempt], serverAbort.signal);
         // A user stop during the wait is not a failure.
         if (serverAbort.signal.aborted) break;
       }

@@ -9,8 +9,8 @@ function maskToken(token: string): string {
 }
 
 export const integrationsRouter = router({
-  getJira: publicProcedure.query(({ ctx }) => {
-    const config = readJiraConfig(ctx.db);
+  getJira: publicProcedure.query(async ({ ctx }) => {
+    const config = await readJiraConfig(ctx.db);
     if (!config) return { configured: false, config: null };
     return {
       configured: true,
@@ -48,17 +48,17 @@ export const integrationsRouter = router({
       if (!result.ok) {
         return { success: false, error: result.error ?? "Connection failed" };
       }
-      writeJiraConfig(ctx.db, config);
+      await writeJiraConfig(ctx.db, config);
       return { success: true };
     }),
 
-  removeJira: publicProcedure.mutation(({ ctx }) => {
-    deleteJiraConfig(ctx.db);
+  removeJira: publicProcedure.mutation(async ({ ctx }) => {
+    await deleteJiraConfig(ctx.db);
     return { success: true };
   }),
 
-  getSlack: publicProcedure.query(({ ctx }) => {
-    const config = readSlackConfig(ctx.db);
+  getSlack: publicProcedure.query(async ({ ctx }) => {
+    const config = await readSlackConfig(ctx.db);
     if (!config) return { configured: false, config: null };
     return { configured: true, config: { webhookUrl: maskToken(config.webhookUrl), mentions: config.mentions ?? "" } };
   }),
@@ -73,12 +73,12 @@ export const integrationsRouter = router({
       if ("error" in parsed) return { success: false, error: parsed.error };
       const result = await postSlack(webhookUrl, { text: `${mentionPrefix(parsed.mentions)}Tracer is connected. Monitor alerts will be posted here.` });
       if ("error" in result) return { success: false, error: result.error };
-      writeSlackConfig(ctx.db, { webhookUrl, mentions });
+      await writeSlackConfig(ctx.db, { webhookUrl, mentions });
       return { success: true };
     }),
 
-  removeSlack: publicProcedure.mutation(({ ctx }) => {
-    deleteSlackConfig(ctx.db);
+  removeSlack: publicProcedure.mutation(async ({ ctx }) => {
+    await deleteSlackConfig(ctx.db);
     return { success: true };
   }),
 });

@@ -1,4 +1,4 @@
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/driver.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 import type { ChatToolWriter as StreamWriter, AfterCompleteParams, ChatMode } from "@tracer-sh/shared";
 import { toolMemories } from "../db/schema.js";
@@ -16,15 +16,15 @@ export interface BaseToolSetup {
   connectedProviders: ReturnType<ProviderRegistry["getAllProviders"]>;
 }
 
-export function collectBaseTools(
+export async function collectBaseTools(
   registry: ProviderRegistry,
   db: Db,
   writer?: StreamWriter,
   mode?: ChatMode,
   activeProvider?: string,
   includeIntegrations = false,
-): BaseToolSetup {
-  const memories = db.select().from(toolMemories).all();
+): Promise<BaseToolSetup> {
+  const memories = await db.select().from(toolMemories).all();
   const tools: Record<string, unknown> = {};
   const promptFragments: string[] = [];
   const systemPrompts: string[] = [];
@@ -65,7 +65,7 @@ export function collectBaseTools(
   // Jira is a non-observability integration: when enabled (chat only — not the dashboard/monitor
   // builders) its tools are always-on, independent of the active-provider filter above, so they're
   // available alongside whatever provider is selected.
-  const jiraKit = includeIntegrations ? getJiraChatTools(db) : null;
+  const jiraKit = includeIntegrations ? await getJiraChatTools(db) : null;
   if (jiraKit) {
     Object.assign(tools, jiraKit.tools);
     promptFragments.push(jiraKit.promptFragment);

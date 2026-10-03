@@ -10,7 +10,7 @@ import {
   injectMemories,
   type SubAgentQuery,
 } from "../../agents/chat/sub-agent.js";
-import type { Db } from "../../db/client.js";
+import type { Db } from "../../db/driver.js";
 import { getTimezone } from "../../lib/current-context.js";
 import { toolModelOutput, buildAfterComplete } from "../../tools/provider-tool-helpers.js";
 import { beginAnalysisTool, ANALYSIS_TOOL_NAME } from "../../tools/analysis-tool.js";
@@ -42,7 +42,7 @@ function buildExecuteNrqlTool(
     }),
     execute: async ({ query }, { toolCallId }) => {
       try {
-        const timezone = getTimezone(db);
+        const timezone = await getTimezone(db);
         const raw = await provider.executeRawQuery(withTimezone(query, timezone));
         const cleaned = sanitizeNrqlRows(raw as Record<string, unknown>[]);
         collectedQueries.push({ query, results: cleaned });

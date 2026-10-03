@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { trpc } from "./trpc";
 import { AVAILABLE_MODELS } from "./models";
 import { WEB_CONFIG } from "./config";
+import { IS_IOS } from "./platform";
 
 /** Chat scroll that follows content growth; any upward scroll pauses it until the bottom is reached again. A new `mountKey` re-attaches to a swapped container. */
 export function useChatScroll(mountKey?: unknown) {
@@ -184,6 +185,8 @@ export function useEscapeToStop(active: boolean, onStop: () => void) {
 export function useGcpAuthStatus() {
   return trpc.provider.gcpAuthStatus.useQuery(undefined, {
     refetchInterval: WEB_CONFIG.sessionStaleTimeMs,
+    // The iOS app has no gcloud credentials to read.
+    enabled: !IS_IOS,
   });
 }
 

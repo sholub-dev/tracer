@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import Database from "better-sqlite3-multiple-ciphers";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "../db/schema.js";
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/driver.js";
 import type { Context } from "../trpc/context.js";
 import type { StartSessionOptions } from "../agents/start-session.js";
 import { CONFIG } from "../config.js";
@@ -30,32 +30,32 @@ function memoryDb(): Db {
   return drizzle(sqlite, { schema }) as unknown as Db;
 }
 
-function addSession(db: Db, id: string, createdAt = now()) {
-  db.insert(schema.chatSessions).values({ id, title: id, messages: "[]", status: "idle", createdAt, updatedAt: createdAt }).run();
+async function addSession(db: Db, id: string, createdAt = now()) {
+  await db.insert(schema.chatSessions).values({ id, title: id, messages: "[]", status: "idle", createdAt, updatedAt: createdAt }).run();
 }
 
 function run(db: Db, sessionId: string, input: { minutes: number; note: string }) {
   return setTimerTool(db, sessionId).execute!(input, { toolCallId: "c", messages: [] } as never);
 }
 
-const timers = (db: Db) => db.select().from(schema.sessionTimers).all();
+const timers = async (db: Db) => await db.select().from(schema.sessionTimers).all();
 
 test("set_timer keeps one timer per session, replaces it, and cancels with 0", async () => {
   const db = memoryDb();
-  addSession(db, "s1");
+  await addSession(db, "s1");
   assert.ok("dueAt" in (await run(db, "s1", { minutes: 10, note: "first" }) as object));
   assert.ok("dueAt" in (await run(db, "s1", { minutes: 30, note: "second" }) as object));
-  const [row] = timers(db);
-  assert.equal(timers(db).length, 1);
+  const [row] = await timers(db);
+  assert.equal((await timers(db)).length, 1);
   assert.equal(row.note, "second");
   assert.ok(Math.abs(row.fireAt! - (now() + 1800)) <= 2);
   assert.deepEqual(await run(db, "s1", { minutes: 0, note: "" }), { cancelled: true });
-  assert.deepEqual(timers(db), []);
+  assert.deepEqual(await timers(db), []);
 });
 
 test("set_timer rejects out-of-range minutes and fire times over 24h after the session started", async () => {
   const db = memoryDb();
-  addSession(db, "s1", now() - CONFIG.timerMaxAfterSessionSeconds + 600);
+  await addSession(db, "s1", now() - CONFIG.timerMaxAfterSessionSeconds + 600);
   assert.ok("error" in (await run(db, "s1", { minutes: 0.5, note: "x" }) as object));
   assert.ok("error" in (await run(db, "s1", { minutes: 61, note: "x" }) as object));
   assert.ok("dueAt" in (await run(db, "s1", { minutes: 1, note: "x" }) as object));
@@ -65,8 +65,8 @@ test("set_timer rejects out-of-range minutes and fire times over 24h after the s
 
 test("fireDueTimers wakes a due session, pushes a busy one by 60s and leaves one not yet due", async () => {
   const db = memoryDb();
-  for (const id of ["due", "busy", "later"]) addSession(db, id);
-  db.insert(schema.sessionTimers).values([
+  for (const id of ["due", "busy", "later"]) await addSession(db, id);
+  await db.insert(schema.sessionTimers).values([
     { sessionId: "due", fireAt: now() - 5, note: "check the deploy", setAt: now() - 600 },
     { sessionId: "busy", fireAt: now() - 5, note: "x", setAt: 0 },
     { sessionId: "later", fireAt: now() + 600, note: "x", setAt: 0 },
@@ -77,7 +77,7 @@ test("fireDueTimers wakes a due session, pushes a busy one by 60s and leaves one
 
   assert.deepEqual(started.map((s) => s.sessionId), ["due"]);
   assert.match(started[0].message, /^Follow-up timer \(set .+, due .+, now .+\): check the deploy\. Check it now\.$/);
-  const rows = Object.fromEntries(timers(db).map((r) => [r.sessionId, r.fireAt]));
+  const rows = Object.fromEntries((await timers(db)).map((r) => [r.sessionId, r.fireAt]));
   assert.equal(rows.due, undefined);
   assert.ok(Math.abs(rows.busy! - (now() + CONFIG.timerBusyRetrySeconds)) <= 2);
   assert.ok(rows.later! > now());
@@ -85,9 +85,9 @@ test("fireDueTimers wakes a due session, pushes a busy one by 60s and leaves one
 
 test("fireDueTimers reschedules a wake-up that fails to start", async () => {
   const db = memoryDb();
-  addSession(db, "s1");
-  db.insert(schema.sessionTimers).values({ sessionId: "s1", fireAt: now() - 5, note: "x", setAt: 0 }).run();
+  await addSession(db, "s1");
+  await db.insert(schema.sessionTimers).values({ sessionId: "s1", fireAt: now() - 5, note: "x", setAt: 0 }).run();
   const context = { db, activeStreams: new Map() } as unknown as Context;
   await fireDueTimers(context, async () => ({ error: "no model" }));
-  assert.ok(timers(db)[0].fireAt! > now());
+  assert.ok((await timers(db))[0].fireAt! > now());
 });

@@ -10,7 +10,7 @@ import {
   injectMemories,
   type SubAgentQuery,
 } from "../../agents/chat/sub-agent.js";
-import type { Db } from "../../db/client.js";
+import type { Db } from "../../db/driver.js";
 import { toolModelOutput, buildAfterComplete } from "../../tools/provider-tool-helpers.js";
 import { beginAnalysisTool, ANALYSIS_TOOL_NAME } from "../../tools/analysis-tool.js";
 import { formatHogqlCsv, toChartRows } from "./posthog-formatter.js";

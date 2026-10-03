@@ -20,9 +20,9 @@ export function hasPendingTimer(db: Db, sessionId: string): boolean {
 
 export function setTimerTool(db: Db, sessionId: string): Tool<TimerInput, TimerResult> {
   return tool({
-    description: "Wake this chat later to follow up. Use it only when a follow-up is truly needed (e.g. an issue may recover, a deploy is rolling out). For a live incident use the shortest wait; checking too often beats waiting too long.",
+    description: `Wake this chat later to follow up. Use it only when a follow-up is truly needed (e.g. an issue may recover, a deploy is rolling out). For a live incident wait ${CONFIG.timerFollowUpMinutes} minutes; checking too often beats waiting too long.`,
     inputSchema: z.object({
-      minutes: z.number().int().describe(`Minutes from now, ${CONFIG.timerMinMinutes} to ${CONFIG.timerMaxMinutes}; 0 cancels the pending timer`),
+      minutes: z.number().describe(`Minutes from now, ${CONFIG.timerMinMinutes} to ${CONFIG.timerMaxMinutes}; 0 cancels the pending timer`),
       note: z.string().describe("What to check when it fires; no customer data"),
     }),
     execute: async ({ minutes, note }) => {
@@ -37,7 +37,7 @@ export function setTimerTool(db: Db, sessionId: string): Tool<TimerInput, TimerR
       const session = db.select({ createdAt: chatSessions.createdAt }).from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
       if (!session) return { error: "This session no longer exists" };
       const now = unixNow();
-      const fireAt = now + minutes * 60;
+      const fireAt = now + Math.round(minutes * 60);
       const limit = session.createdAt + CONFIG.timerMaxAfterSessionSeconds;
       if (fireAt > limit) {
         return { error: `Too late: follow-ups must fire within ${CONFIG.timerMaxAfterSessionSeconds / 3600}h of the session start (by ${formatLocalTime(limit, getTimezone(db))})` };

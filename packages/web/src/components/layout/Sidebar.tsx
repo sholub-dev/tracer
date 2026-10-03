@@ -1,20 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
-import { Activity, CircleCheck, LayoutDashboard, MessageSquare, MoreHorizontal, Plus, Settings } from "lucide-react";
+import { useCallback, useState } from "react";
+import { Activity, CircleCheck, LayoutDashboard, Plus, Settings } from "lucide-react";
 import { toast } from "sonner";
-import { FEATURES, SESSION_KIND } from "@tracer-sh/shared";
+import { FEATURES } from "@tracer-sh/shared";
 import { cn } from "@/lib/utils";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import {
   Sidebar,
   SidebarContent,
@@ -22,16 +12,17 @@ import {
   SidebarGroup,
   SidebarHeader,
   SidebarMenu,
-  SidebarMenuAction,
   SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useSessionLiveUpdates } from "../../lib/hooks";
 import { trpc } from "../../lib/trpc";
 import { WEB_CONFIG } from "../../lib/config";
+import { ConfirmDialog } from "../common/ConfirmDialog";
+import { IconButton } from "../common/IconButton";
+import { MoreActionsMenu } from "../common/MoreActionsMenu";
 import { RecentSessions } from "./RecentSessions";
 import { UpdateModal } from "./UpdateModal";
 
@@ -61,32 +52,8 @@ export function AppSidebar({
   onNewDashboard,
 }: AppSidebarProps) {
   const { setOpenMobile } = useSidebar();
-  const sessionsQuery = trpc.sessions.list.useQuery(undefined, { refetchOnWindowFocus: true });
   const monitorsQuery = trpc.monitors.list.useQuery(undefined, { enabled: FEATURES.monitors });
-  const activeStatusQuery = trpc.sessions.activeCount.useQuery(undefined, { refetchOnWindowFocus: true });
-  const utils = trpc.useUtils();
   useSessionLiveUpdates();
-
-  const markViewedMutation = trpc.sessions.markViewed.useMutation();
-
-  // If the user is viewing a session and polling returns it as "done", fix it to "idle".
-  useEffect(() => {
-    if (!currentSessionId || currentPage !== "debug" || !sessionsQuery.data) return;
-    const current = sessionsQuery.data.find(s => s.id === currentSessionId);
-    if (!current || current.status !== "done") return;
-    utils.sessions.list.setData(undefined, (prev) =>
-      prev?.map(s => s.id === currentSessionId ? { ...s, status: "idle" } : s),
-    );
-    utils.sessions.activeCount.setData(undefined, (prev) =>
-      prev ? { ...prev, done: Math.max(0, prev.done - 1) } : prev,
-    );
-    markViewedMutation.mutate({ id: currentSessionId });
-  }, [sessionsQuery.data, currentSessionId, currentPage]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const doneSessionCount = currentPage === "debug" && sessionsQuery.data
-    ? sessionsQuery.data.filter(s => s.status === "done" && s.id !== currentSessionId && s.kind !== SESSION_KIND.API).length
-    : (activeStatusQuery.data?.done ?? 0);
-  const inSavedSession = !!sessionsQuery.data?.some(s => s.id === currentSessionId);
 
   const go = (fn: () => void) => {
     fn();
@@ -97,7 +64,7 @@ export function AppSidebar({
     if (id === currentSessionId) onNewSession();
   }, [currentSessionId, onNewSession]);
 
-  const onImported = useCallback((id: string) => {
+  const openSession = useCallback((id: string) => {
     onSelectSession(id);
     setOpenMobile(false);
   }, [onSelectSession, setOpenMobile]);
@@ -128,20 +95,6 @@ export function AppSidebar({
                 onDeleted={(id) => { if (id === currentDashboardId) onNavigate("dashboard"); }}
               />
             )}
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                isActive={currentPage === "debug" && !inSavedSession}
-                onClick={() => go(() => onNavigate("debug"))}
-              >
-                <MessageSquare />
-                <span>Investigations</span>
-              </SidebarMenuButton>
-              {doneSessionCount > 0 && (
-                <SidebarMenuBadge className="text-primary" aria-label={`${doneSessionCount} unread`}>
-                  {doneSessionCount}
-                </SidebarMenuBadge>
-              )}
-            </SidebarMenuItem>
             {FEATURES.monitors && (
               <SidebarMenuItem>
                 <SidebarMenuButton isActive={currentPage === "monitors"} onClick={() => go(() => onNavigate("monitors"))}>
@@ -158,29 +111,23 @@ export function AppSidebar({
 
         <RecentSessions
           currentSessionId={currentPage === "debug" ? currentSessionId : null}
-          onSelectSession={(id) => go(() => onSelectSession(id))}
+          onSelectSession={openSession}
           onDeleted={onDeleted}
-          onImported={onImported}
+          onImported={openSession}
         />
       </SidebarContent>
 
       <SidebarFooter className="flex-row items-center gap-2 border-t border-sidebar-border px-3 py-2">
         <VersionStatus />
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Settings"
-              aria-current={currentPage === "settings" ? "page" : undefined}
-              className={cn(currentPage === "settings" && "bg-sidebar-accent text-foreground")}
-              onClick={() => go(() => onNavigate("settings"))}
-            >
-              <Settings />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top">Settings</TooltipContent>
-        </Tooltip>
+        <IconButton
+          label="Settings"
+          side="top"
+          aria-current={currentPage === "settings" ? "page" : undefined}
+          className={cn(currentPage === "settings" && "bg-sidebar-accent text-foreground")}
+          onClick={() => go(() => onNavigate("settings"))}
+        >
+          <Settings />
+        </IconButton>
       </SidebarFooter>
     </Sidebar>
   );
@@ -275,39 +222,21 @@ function DashboardNav({ active, currentDashboardId, onOpen, onSelect, onNew, onD
               <SidebarMenuButton size="sm" className="pl-8" isActive={currentDashboardId === d.id} onClick={() => onSelect(d.id)}>
                 <span>{d.title}</span>
               </SidebarMenuButton>
-              <DropdownMenu>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <DropdownMenuTrigger asChild>
-                      <SidebarMenuAction showOnHover aria-label={`More actions for ${d.title}`} className="[@media(hover:none)]:opacity-100">
-                        <MoreHorizontal />
-                      </SidebarMenuAction>
-                    </DropdownMenuTrigger>
-                  </TooltipTrigger>
-                  <TooltipContent side="right">More actions</TooltipContent>
-                </Tooltip>
-                <DropdownMenuContent side="right" align="start" className="w-48">
-                  <DropdownMenuItem variant="destructive" onSelect={() => setDeleting(d)}>Delete</DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <MoreActionsMenu label={`More actions for ${d.title}`} sidebar side="right" align="start">
+                <DropdownMenuItem variant="destructive" onSelect={() => setDeleting(d)}>Delete</DropdownMenuItem>
+              </MoreActionsMenu>
             </SidebarMenuItem>
           ))}
         </>
       )}
-      <AlertDialog open={deleting !== null} onOpenChange={(open) => !open && setDeleting(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete this dashboard?</AlertDialogTitle>
-            <AlertDialogDescription>
-              "{deleting?.title}" and all its widgets are removed. This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={confirmDelete}>Delete</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={deleting !== null}
+        onOpenChange={(open) => !open && setDeleting(null)}
+        title="Delete this dashboard?"
+        description={`"${deleting?.title}" and all its widgets are removed. This cannot be undone.`}
+        actionLabel="Delete"
+        onConfirm={confirmDelete}
+      />
     </>
   );
 }

@@ -41,10 +41,10 @@ function tzLabel(tz: string): string {
 }
 
 const LIMITS = [
-  { key: "directModeMaxSteps", label: "Steps per answer", description: "Most tool calls the agent makes for one answer", min: 1, max: 500, step: 1 },
-  { key: "subAgentMaxSteps", label: "Steps per data source", description: "Most queries one data source agent runs per question", min: 1, max: 500, step: 1 },
-  { key: "thinkingBudgetGoogle", label: "Thinking budget, Google", description: "Tokens the model may spend reasoning before it answers", min: 0, max: 100000, step: 256 },
-  { key: "thinkingBudgetAnthropic", label: "Thinking budget, Anthropic", description: "Tokens the model may spend reasoning before it answers", min: 0, max: 100000, step: 1000 },
+  { key: "directModeMaxSteps", label: "Steps per answer", description: "Most tool calls the agent makes for one answer", min: 1, max: 500 },
+  { key: "subAgentMaxSteps", label: "Steps per data source", description: "Most queries one data source agent runs per question", min: 1, max: 500 },
+  { key: "thinkingBudgetGoogle", label: "Thinking budget, Google", description: "Tokens the model may spend reasoning before it answers", min: 0, max: 100000 },
+  { key: "thinkingBudgetAnthropic", label: "Thinking budget, Anthropic", description: "Tokens the model may spend reasoning before it answers", min: 0, max: 100000 },
 ] as const;
 
 type Values = { timezone: string } & Record<(typeof LIMITS)[number]["key"], number>;
@@ -122,7 +122,6 @@ export function AgentSettings() {
                     inputMode="numeric"
                     min={l.min}
                     max={l.max}
-                    step={l.step}
                     value={values[l.key]}
                     onChange={(e) => set(l.key, Number(e.target.value))}
                     className="w-28 bg-card text-right tabular-nums"

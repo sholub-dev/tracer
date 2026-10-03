@@ -1,9 +1,9 @@
 import { lazy, memo, Suspense, useState, type ComponentProps, type ReactNode } from "react";
-import { Streamdown } from "streamdown";
 import { Button } from "@/components/ui/button";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { MD_LINK_SAFETY } from "../../lib/markdown";
+import { Markdown } from "../../lib/markdown";
+import { hasErrorOutput } from "../../lib/chat-utils";
 import type { Threshold } from "./ChartView";
 import { HIDDEN_KEYS, formatValue, isPercentileResult, buildColumns, pivotCompareWith, coerceNumeric, type Column } from "../../lib/result-utils";
 import { KeyFigures } from "./KeyFigures";
@@ -159,17 +159,15 @@ export default memo(function ResultView({ data, containerSize, threshold, chartT
   // Markdown summary from LLM summarizer
   if (typeof data === "string") {
     return (
-      <div className="my-2 rounded-md border border-border bg-card px-4 py-3 text-sm leading-relaxed text-foreground">
-        <Streamdown linkSafety={MD_LINK_SAFETY}>{data}</Streamdown>
-      </div>
+      <Markdown text={data} className="my-2 rounded-md border border-border bg-card px-4 py-3 text-sm leading-relaxed text-foreground" />
     );
   }
 
   // Error response from tool
-  if (data && typeof data === "object" && !Array.isArray(data) && "error" in data) {
+  if (hasErrorOutput(data)) {
     return (
       <div role="alert" className="my-2 rounded-md border border-destructive/25 bg-destructive-tint px-3 py-2 text-[13px] leading-[18px] text-destructive">
-        {String((data as Record<string, unknown>).error)}
+        {String(data.error)}
       </div>
     );
   }

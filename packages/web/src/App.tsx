@@ -1,4 +1,4 @@
-import { type CSSProperties, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
+import { type ComponentType, type CSSProperties, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
 import { FEATURES } from "@tracer-sh/shared";
 import { Loader2 } from "lucide-react";
 import { Shell } from "./components/layout/Shell";
@@ -6,14 +6,29 @@ import { AppSidebar, type Page } from "./components/layout/Sidebar";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-const Debug = lazy(() => import("./pages/Debug").then(m => ({ default: m.Debug })));
-const Settings = lazy(() => import("./pages/Settings").then(m => ({ default: m.Settings })));
-const Dashboard = FEATURES.dashboards
-  ? lazy(() => import("./pages/Dashboard").then(m => ({ default: m.Dashboard })))
-  : null;
-const Monitors = FEATURES.monitors
-  ? lazy(() => import("./pages/Monitors").then(m => ({ default: m.Monitors })))
-  : null;
+// Pages load lazily, then all of them are fetched in the background. A page already fetched renders
+// directly: a lazy one suspends once on first visit, and React holds a revealed fallback for 300ms.
+function lazyPage<P extends object>(load: () => Promise<ComponentType<P>>) {
+  let loaded: ComponentType<P> | undefined;
+  const fetchPage = () => load().then((c) => (loaded = c));
+  const Lazy = lazy(() => fetchPage().then((c) => ({ default: c })));
+  function LoadedPage(props: P) {
+    const [Component] = useState<ComponentType<P>>(() => loaded ?? Lazy);
+    return <Component {...props} />;
+  }
+  return Object.assign(LoadedPage, { preload: () => void fetchPage().catch(() => {}) });
+}
+
+const Debug = lazyPage(() => import("./pages/Debug").then((m) => m.Debug));
+const Settings = lazyPage(() => import("./pages/Settings").then((m) => m.Settings));
+const Dashboard = FEATURES.dashboards ? lazyPage(() => import("./pages/Dashboard").then((m) => m.Dashboard)) : null;
+const Monitors = FEATURES.monitors ? lazyPage(() => import("./pages/Monitors").then((m) => m.Monitors)) : null;
+
+function preloadPages() {
+  const load = () => [Debug, Settings, Dashboard, Monitors].forEach((p) => p?.preload());
+  if ("requestIdleCallback" in window) window.requestIdleCallback(load, { timeout: 3000 });
+  else setTimeout(load, 1000);
+}
 
 const validPages = new Set<string>([
   "debug",
@@ -75,6 +90,8 @@ export function App() {
     dashboardId: currentDashboardId,
     builderSessionId: currentBuilderSessionId,
   } = useSyncExternalStore(subscribe, getRouteSnapshot);
+
+  useEffect(preloadPages, []);
 
   const navigate = useCallback((page: Page) => {
     pushPath(page === "debug" ? "/" : `/${page}`);

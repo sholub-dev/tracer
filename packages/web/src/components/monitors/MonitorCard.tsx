@@ -1,16 +1,6 @@
 import { memo, useState } from "react";
-import { AlertTriangle, ChevronDown, Copy, GripVertical, MoreHorizontal } from "lucide-react";
+import { AlertTriangle, ChevronDown, GripVertical } from "lucide-react";
 import { toast } from "sonner";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -26,9 +16,12 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { trpc } from "../../lib/trpc";
-import { formatFrequency, formatTime } from "../../lib/monitor-utils";
+import { formatFrequency } from "../../lib/monitor-utils";
+import { formatTime } from "../../lib/format";
 import { providerLabel } from "../../lib/providers";
-import { copyText } from "../chat/MessageActions";
+import { QueryBlock } from "../chat/ToolParts";
+import { ConfirmDialog } from "../common/ConfirmDialog";
+import { MoreActionsMenu } from "../common/MoreActionsMenu";
 import { ProviderDot } from "../common/ProviderDot";
 import { MonitorChart } from "./MonitorChart";
 import { MonitorTriggers } from "./MonitorTriggers";
@@ -198,26 +191,14 @@ export const MonitorCard = memo(function MonitorCard({
               </DropdownMenuRadioGroup>
             </DropdownMenuContent>
           </DropdownMenu>
-          <DropdownMenu>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon-sm" className="size-7" aria-label={`More actions for ${monitor.name}`}>
-                    <MoreHorizontal />
-                  </Button>
-                </DropdownMenuTrigger>
-              </TooltipTrigger>
-              <TooltipContent>More actions</TooltipContent>
-            </Tooltip>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuItem onSelect={() => onEdit(monitor.id)}>Edit with agent</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setQueryOpen(true)}>View query</DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem variant="destructive" disabled={remove.isPending} onSelect={() => setConfirmDelete(true)}>
-                Delete monitor
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <MoreActionsMenu label={`More actions for ${monitor.name}`} triggerClassName="size-7">
+            <DropdownMenuItem onSelect={() => onEdit(monitor.id)}>Edit with agent</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setQueryOpen(true)}>View query</DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" disabled={remove.isPending} onSelect={() => setConfirmDelete(true)}>
+              Delete monitor
+            </DropdownMenuItem>
+          </MoreActionsMenu>
         </div>
 
         <p className="flex min-w-0 items-start gap-1.5 text-[13px] leading-[18px] text-ink-2">
@@ -252,44 +233,24 @@ export const MonitorCard = memo(function MonitorCard({
             <DialogTitle>{monitor.name}</DialogTitle>
             <DialogDescription>{provider} · {condition} · {frequency}</DialogDescription>
           </DialogHeader>
-          <div className="relative">
-            <pre tabIndex={0} className="max-h-72 outline-none focus-visible:ring-3 focus-visible:ring-ring/50 overflow-auto rounded-md border bg-background py-3 pr-11 pl-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">
-              <code>{monitor.query}</code>
-            </pre>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon-xs" aria-label="Copy query" className="absolute top-2 right-2 text-muted-foreground" onClick={() => copyText(monitor.query, "Query copied")}>
-                  <Copy />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Copy query</TooltipContent>
-            </Tooltip>
-          </div>
+          <QueryBlock query={monitor.query} />
           {monitor.chartQuery && (
             <div className="space-y-1.5">
               <p className="text-xs text-muted-foreground">Chart query</p>
-              <pre tabIndex={0} className="max-h-72 outline-none focus-visible:ring-3 focus-visible:ring-ring/50 overflow-auto rounded-md border bg-background p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">
-                <code>{monitor.chartQuery}</code>
-              </pre>
+              <QueryBlock query={monitor.chartQuery} />
             </div>
           )}
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete "{monitor.name}"?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Its trigger history and the sessions it opened are deleted too. This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={() => remove.mutate({ id: monitor.id })}>Delete monitor</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title={`Delete "${monitor.name}"?`}
+        description="Its trigger history and the sessions it opened are deleted too. This cannot be undone."
+        actionLabel="Delete monitor"
+        onConfirm={() => remove.mutate({ id: monitor.id })}
+      />
     </article>
   );
 });

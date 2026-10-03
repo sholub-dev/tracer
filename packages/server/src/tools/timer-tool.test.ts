@@ -56,8 +56,9 @@ test("set_timer keeps one timer per session, replaces it, and cancels with 0", a
 test("set_timer rejects out-of-range minutes and fire times over 24h after the session started", async () => {
   const db = memoryDb();
   addSession(db, "s1", now() - CONFIG.timerMaxAfterSessionSeconds + 600);
-  assert.ok("error" in (await run(db, "s1", { minutes: 2, note: "x" }) as object));
-  assert.ok("error" in (await run(db, "s1", { minutes: 1441, note: "x" }) as object));
+  assert.ok("error" in (await run(db, "s1", { minutes: 0.5, note: "x" }) as object));
+  assert.ok("error" in (await run(db, "s1", { minutes: 61, note: "x" }) as object));
+  assert.ok("dueAt" in (await run(db, "s1", { minutes: 1, note: "x" }) as object));
   assert.ok("error" in (await run(db, "s1", { minutes: 15, note: "x" }) as object));
   assert.ok("dueAt" in (await run(db, "s1", { minutes: 5, note: "x" }) as object));
 });

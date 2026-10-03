@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { on } from "node:events";
-import { eq, desc, notLike, and, or, ne, sql, isNull } from "drizzle-orm";
+import { eq, desc, notLike, and, ne, sql } from "drizzle-orm";
 import type { UIMessage } from "ai";
 import {
   SESSION_PREFIX,
@@ -119,35 +119,6 @@ export const sessionsRouter = router({
 
   onChange: publicProcedure.subscription(async function* ({ signal }) {
     for await (const [id] of on(sessionEvents, "changed", { signal })) yield { id: id as string };
-  }),
-
-  activeCount: publicProcedure.query(({ ctx }) => {
-    const rows = ctx.db
-      .select({ status: chatSessions.status, count: sql<number>`count(*)` })
-      .from(chatSessions)
-      .where(and(
-        notLike(chatSessions.id, `${SESSION_PREFIX.DASHBOARD}%`),
-        notLike(chatSessions.id, `${SESSION_PREFIX.MONITORS}%`),
-        // Imported sessions are read-only and API sessions are driven headlessly by
-        // external agents — neither should drive the "unviewed done" nav badge.
-        or(
-          isNull(chatSessions.kind),
-          and(
-            ne(chatSessions.kind, SESSION_KIND.IMPORTED),
-            ne(chatSessions.kind, SESSION_KIND.API),
-          ),
-        ),
-        or(
-          eq(chatSessions.status, "streaming"),
-          eq(chatSessions.status, "done"),
-        ),
-      ))
-      .groupBy(chatSessions.status)
-      .all();
-    return {
-      streaming: rows.find((r) => r.status === "streaming")?.count ?? 0,
-      done: rows.find((r) => r.status === "done")?.count ?? 0,
-    };
   }),
 
   markViewed: publicProcedure

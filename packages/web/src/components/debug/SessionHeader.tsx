@@ -1,30 +1,16 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Brain, FileText, Minus, MoreHorizontal, Pencil, Plus } from "lucide-react";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { Brain, FileText, Minus, Pencil, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { usePolling } from "../../lib/hooks";
 import { trpc } from "../../lib/trpc";
-import { COLUMN } from "../chat/ChatCore";
-import { downloadImage, slugify } from "../chat/MessageActions";
+import { COLUMN } from "../chat/Transcript";
+import { downloadImage, stampedPngName } from "../chat/MessageActions";
+import { ConfirmDialog } from "../common/ConfirmDialog";
+import { MoreActionsMenu } from "../common/MoreActionsMenu";
 
 const MEMORY_OPS = {
   create: { icon: Plus, verb: "Saved" },
@@ -201,56 +187,38 @@ export function SessionHeader({
             <TooltipContent>{postMortemBlocked ? "Available when the run finishes" : "Write a post-mortem"}</TooltipContent>
           </Tooltip>
         )}
-        <DropdownMenu>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon-sm" aria-label="More actions">
-                  <MoreHorizontal />
-                </Button>
-              </DropdownMenuTrigger>
-            </TooltipTrigger>
-            <TooltipContent>More actions</TooltipContent>
-          </Tooltip>
-          <DropdownMenuContent align="end" className="w-64">
-            {!readOnly && onCompact && (
-              <DropdownMenuItem disabled={busy || streaming} onSelect={onCompact} className="flex-col items-start gap-0.5">
-                <span>Compact</span>
-                <span className="text-xs text-muted-foreground">Summarize older replies to free up context</span>
-              </DropdownMenuItem>
-            )}
-            <DropdownMenuItem onSelect={onCopyText}>Copy as text</DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => {
-                // The header sits first in the transcript element, so its parent is the whole session.
-                const transcript = headerRef.current?.parentElement;
-                if (transcript) void downloadImage(transcript, `${slugify(title ?? "investigation")}.png`);
-              }}
-            >
-              Download image
+        <MoreActionsMenu label="More actions" contentClassName="w-64">
+          {!readOnly && onCompact && (
+            <DropdownMenuItem disabled={busy || streaming} onSelect={onCompact} className="flex-col items-start gap-0.5">
+              <span>Compact</span>
+              <span className="text-xs text-muted-foreground">Summarize older replies to free up context</span>
             </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" disabled={streaming} onSelect={() => setConfirmDelete(true)}>
-              Delete investigation
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+          )}
+          <DropdownMenuItem onSelect={onCopyText}>Copy as text</DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => {
+              // The header sits first in the transcript element, so its parent is the whole session.
+              const transcript = headerRef.current?.parentElement;
+              if (transcript) void downloadImage(transcript, stampedPngName("investigation"));
+            }}
+          >
+            Download image
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem variant="destructive" disabled={streaming} onSelect={() => setConfirmDelete(true)}>
+            Delete investigation
+          </DropdownMenuItem>
+        </MoreActionsMenu>
       </div>
       {children}
-      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete this investigation?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {title ? `"${title}" and its queries are removed.` : "This investigation and its queries are removed."} This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={onDelete}>Delete</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title="Delete this investigation?"
+        description={`${title ? `"${title}" and its queries are removed.` : "This investigation and its queries are removed."} This cannot be undone.`}
+        actionLabel="Delete"
+        onConfirm={onDelete}
+      />
     </header>
   );
 }

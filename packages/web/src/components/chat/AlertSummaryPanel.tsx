@@ -3,6 +3,7 @@ import type { UIMessage } from "ai";
 import { CircleAlert, CircleCheck, CircleHelp, type LucideIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { hasErrorOutput } from "../../lib/chat-utils";
 
 const SEVERITY = {
   high: { label: "High", className: "bg-destructive-tint text-destructive" },
@@ -34,13 +35,14 @@ const STATUS: Record<string, { icon: LucideIcon; className: string }> = {
   unknown: { icon: CircleHelp, className: "text-muted-foreground" },
 };
 
-/** Input of the last recorded call of a tool, newest first. */
+/** Input of the last successful call of a tool; a call the server rejected returns `{ error }`. */
 function lastToolInput(messages: UIMessage[], type: string): Record<string, unknown> | null {
   for (let m = messages.length - 1; m >= 0; m--) {
     const parts = messages[m].parts;
     for (let p = parts.length - 1; p >= 0; p--) {
-      const part = parts[p] as { type: string; state?: string; input?: unknown };
-      if (part.type === type && part.state === "output-available" && part.input && typeof part.input === "object") {
+      const part = parts[p] as { type: string; state?: string; input?: unknown; output?: unknown };
+      const rejected = hasErrorOutput(part.output);
+      if (part.type === type && part.state === "output-available" && !rejected && part.input && typeof part.input === "object") {
         return part.input as Record<string, unknown>;
       }
     }

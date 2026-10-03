@@ -1,7 +1,8 @@
 import { useMemo, useState, type ComponentProps } from "react";
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, ReferenceArea, ReferenceLine, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Line, LineChart, ReferenceArea, ReferenceLine, XAxis, YAxis } from "recharts";
 import { ChartContainer, ChartLegend, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
 import { cn } from "@/lib/utils";
+import { formatClock, formatDateTime, formatShortDate } from "../../lib/format";
 import { coerceNumeric } from "../../lib/result-utils";
 
 const SKIP_KEYS = new Set(["beginTimeSeconds", "endTimeSeconds", "inspectedCount", "facet", "comparison"]);
@@ -33,15 +34,8 @@ function useSeriesVisibility(series: Series[]) {
   return { toggle, isVisible };
 }
 
-const timeFmt = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
-const dayFmt = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
-
 function formatTick(unix: number, span: number): string {
-  return span <= DAY ? timeFmt.format(unix * 1000) : dayFmt.format(unix * 1000);
-}
-
-function formatFull(unix: number): string {
-  return `${dayFmt.format(unix * 1000)}, ${timeFmt.format(unix * 1000)}`;
+  return span <= DAY ? formatClock(unix) : formatShortDate(unix);
 }
 
 // About six ticks on local clock boundaries: minutes/hours within a day, whole days beyond.
@@ -86,27 +80,12 @@ function isFacetDupe(row: Record<string, unknown>, key: string): boolean {
   return row[key] === facet;
 }
 
-// Integer-only series are counts per bucket, drawn as steps; anything fractional is a continuous measure, drawn smooth.
+// Integer-only series are counts: whole-number ticks, and gaps for empty buckets.
 function isCountSeries(s: Series): boolean {
   return s.data.every((p) => p.y == null || Number.isInteger(p.y));
 }
 
-function breaches(value: number, t: Threshold): boolean {
-  switch (t.operator) {
-    case ">": return value > t.value;
-    case ">=": return value >= t.value;
-    case "<": return value < t.value;
-    case "<=": return value <= t.value;
-  }
-}
-
-function lastBucketEnd(rows: Record<string, unknown>[]): number | null {
-  let end = -Infinity;
-  for (const r of rows) if (typeof r.endTimeSeconds === "number") end = Math.max(end, r.endTimeSeconds);
-  return Number.isFinite(end) ? Math.min(end, Date.now() / 1000) : null;
-}
-
-function SeriesLegend({ series, isVisible, onToggle }: { series: Series[]; isVisible: (name: string) => boolean; onToggle: (name: string) => void }) {
+function SeriesLegend({ series, isVisible, onToggle, onRight }: { series: Series[]; isVisible: (name: string) => boolean; onToggle: (name: string) => void; onRight?: boolean[] }) {
   return (
     <div className="chart-legend flex max-h-16 flex-wrap justify-center gap-x-4 gap-y-1 overflow-y-auto pt-3">
       {series.map((s, i) => {
@@ -127,6 +106,7 @@ function SeriesLegend({ series, isVisible, onToggle }: { series: Series[]; isVis
               style={s.dashed ? { borderColor: seriesColor(i) } : { backgroundColor: seriesColor(i) }}
             />
             {s.name}
+            {onRight?.[i] && <span className="text-muted-foreground/70">(right axis)</span>}
           </button>
         );
       })}
@@ -156,39 +136,38 @@ function ChartFrame({ config, containerSize, plotHeight, label, children }: {
   );
 }
 
-function TimeseriesPlot({ series, containerSize, plotHeight, threshold, endAt }: {
+function TimeseriesPlot({ series, containerSize, plotHeight, threshold, dualAxis }: {
   series: Series[];
   containerSize?: ContainerSize;
   plotHeight: number;
   threshold?: Threshold;
-  endAt: number | null;
+  dualAxis: boolean;
 }) {
   const { toggle, isVisible } = useSeriesVisibility(series);
   const keys = useMemo(() => series.map((_, i) => `s${i}`), [series]);
   const counts = useMemo(() => series.map(isCountSeries), [series]);
+  // Distinct metrics 10x smaller than the largest get a right axis, so e.g. Apdex (0-1) isn't flat next to request counts.
+  const onRight = useMemo(() => {
+    const peaks = series.map((s) => Math.max(0, ...s.data.map((p) => Math.abs(p.y ?? 0))));
+    const top = Math.max(0, ...peaks);
+    return peaks.map((p) => dualAxis && p > 0 && p * 10 < top);
+  }, [series, dualAxis]);
+  const hasRight = onRight.some(Boolean);
 
   const { data, xs } = useMemo(() => {
     const lookup = series.map((s) => new Map(s.data.map((p) => [p.x, p.y])));
     const xSet = new Set<number>();
     for (const s of series) s.data.forEach((p) => xSet.add(p.x));
     const xs = [...xSet].sort((a, b) => a - b);
-    const rows: Record<string, number | boolean | null>[] = xs.map((x) => {
+    const rows = xs.map((x) => {
       const row: Record<string, number | null> = { x };
       lookup.forEach((m, i) => { row[`s${i}`] = m.get(x) ?? null; });
       return row;
     });
-    // Each value covers its whole bucket, so every line runs to the last bucket's end.
-    const last = rows[rows.length - 1];
-    if (last && endAt != null && endAt > xs[xs.length - 1]) {
-      const tail: Record<string, number | boolean | null> = { x: endAt, tail: true };
-      keys.forEach((k) => { tail[k] = last[k]; });
-      rows.push(tail);
-      xs.push(endAt);
-    }
     return { data: rows, xs };
-  }, [series, keys, endAt]);
+  }, [series]);
 
-  const config: ChartConfig = Object.fromEntries(series.map((s, i) => [keys[i], { label: s.name, color: seriesColor(i) }]));
+  const config: ChartConfig = Object.fromEntries(series.map((s, i) => [keys[i], { label: onRight[i] ? `${s.name} (right axis)` : s.name, color: seriesColor(i) }]));
   const min = xs[0] ?? 0;
   const max = xs[xs.length - 1] ?? 0;
   const span = max - min;
@@ -201,17 +180,10 @@ function TimeseriesPlot({ series, containerSize, plotHeight, threshold, endAt }:
   // Shading is noise when the safe side is empty, e.g. `count > 0` on a zero-based axis.
   const shade = threshold && (above ? threshold.value > yMin : threshold.value < yMax);
 
-  const breachDot = (props: { cx?: number; cy?: number; index?: number; value?: unknown; payload?: { tail?: boolean } }) => {
-    const v = Array.isArray(props.value) ? props.value[1] : props.value;
-    const hit = threshold && typeof v === "number" && !props.payload?.tail && breaches(v, threshold);
-    if (!hit || props.cx == null || props.cy == null) return <g key={props.index} />;
-    return <circle key={props.index} cx={props.cx} cy={props.cy} r={3.5} fill="var(--destructive)" stroke="var(--card)" strokeWidth={1.5} />;
-  };
-
   return (
     <ChartFrame config={config} containerSize={containerSize} plotHeight={plotHeight} label={`Chart of ${series.map((s) => s.name).join(", ")}`}>
-      <AreaChart data={data} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
-        <CartesianGrid vertical={false} strokeOpacity={0.6} />
+      <LineChart data={data} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.6} />
         <XAxis
           dataKey="x"
           type="number"
@@ -222,10 +194,13 @@ function TimeseriesPlot({ series, containerSize, plotHeight, threshold, endAt }:
           interval="preserveStartEnd"
           minTickGap={24}
           tickLine={false}
-          axisLine={false}
+          axisLine={{ stroke: "var(--input)" }}
           tickMargin={8}
         />
-        <YAxis width={44} tickFormatter={formatYAxis} allowDecimals={!counts.every(Boolean)} tickCount={4} tickLine={false} axisLine={false} />
+        <YAxis width={44} tickFormatter={formatYAxis} allowDecimals={!counts.every(Boolean)} tickLine={false} axisLine={{ stroke: "var(--input)" }} />
+        {hasRight && (
+          <YAxis yAxisId="right" orientation="right" width={44} tickFormatter={formatYAxis} tickLine={false} axisLine={{ stroke: "var(--input)" }} />
+        )}
         {threshold && shade && (
           // recharts fills a missing y1 to the top edge and a missing y2 to the bottom edge
           above
@@ -241,7 +216,7 @@ function TimeseriesPlot({ series, containerSize, plotHeight, threshold, endAt }:
             <ChartTooltipContent
               indicator="line"
               className="[&_.font-mono]:font-sans"
-              labelFormatter={(_, payload) => formatFull(Number(payload?.[0]?.payload?.x))}
+              labelFormatter={(_, payload) => formatDateTime(Number(payload?.[0]?.payload?.x))}
               formatter={(value, name) => (
                 <div className="flex w-full items-center justify-between gap-4">
                   <span className="text-muted-foreground">{config[String(name)]?.label}</span>
@@ -251,26 +226,25 @@ function TimeseriesPlot({ series, containerSize, plotHeight, threshold, endAt }:
             />
           }
         />
-        {series.length > 1 && <ChartLegend content={<SeriesLegend series={series} isVisible={isVisible} onToggle={toggle} />} />}
+        {series.length > 1 && <ChartLegend content={<SeriesLegend series={series} isVisible={isVisible} onToggle={toggle} onRight={onRight} />} />}
         {series.map((s, i) => (
-          <Area
+          <Line
             key={keys[i]}
             dataKey={keys[i]}
             name={keys[i]}
+            yAxisId={onRight[i] ? "right" : undefined}
             hide={!isVisible(s.name)}
-            type={counts[i] ? "stepAfter" : "monotone"}
+            type="monotone"
             stroke={`var(--color-${keys[i]})`}
-            strokeWidth={1.5}
+            strokeWidth={2}
             strokeDasharray={s.dashed ? "6 4" : undefined}
-            fill={`var(--color-${keys[i]})`}
-            fillOpacity={series.length === 1 ? 0.06 : 0}
             connectNulls={!counts[i]}
-            dot={threshold ? breachDot : false}
-            activeDot={{ r: 3.5, strokeWidth: 1.5, stroke: "var(--card)" }}
+            dot={false}
+            activeDot={{ r: 4, strokeWidth: 2, stroke: "var(--card)" }}
             isAnimationActive={false}
           />
         ))}
-      </AreaChart>
+      </LineChart>
     </ChartFrame>
   );
 }
@@ -282,14 +256,13 @@ export function TimeseriesChart({ rows, containerSize, threshold }: { rows: Reco
     () => (hasFacet ? facetSeries(rows) : hasComparison ? compareSeries(rows) : simpleSeries(rows)),
     [rows, hasFacet, hasComparison],
   );
-  const endAt = useMemo(() => (hasComparison ? null : lastBucketEnd(rows)), [rows, hasComparison]);
   return (
     <TimeseriesPlot
       series={series}
       containerSize={containerSize}
       plotHeight={hasFacet ? 300 : 280}
       threshold={hasComparison ? undefined : threshold}
-      endAt={endAt}
+      dualAxis={!hasFacet && !hasComparison && !threshold}
     />
   );
 }
@@ -380,9 +353,9 @@ export function HistogramChart({ row, containerSize }: { row: Record<string, unk
         label={`${metricName} distribution`}
       >
         <BarChart data={data} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
-          <CartesianGrid vertical={false} strokeOpacity={0.6} />
-          <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={12} />
-          <YAxis width={44} tickFormatter={formatYAxis} allowDecimals={false} tickCount={4} tickLine={false} axisLine={false} />
+          <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.6} />
+          <XAxis dataKey="label" tickLine={false} axisLine={{ stroke: "var(--input)" }} tickMargin={8} minTickGap={12} />
+          <YAxis width={44} tickFormatter={formatYAxis} allowDecimals={false} tickLine={false} axisLine={{ stroke: "var(--input)" }} />
           <ChartTooltip cursor={false} content={<ChartTooltipContent indicator="line" className="[&_.font-mono]:font-sans" />} />
           <Bar dataKey="value" fill="var(--color-value)" radius={[2, 2, 0, 0]} maxBarSize={60} isAnimationActive={false} />
         </BarChart>

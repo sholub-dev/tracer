@@ -1,22 +1,14 @@
 import { useRef, useState } from "react";
-import { ChevronRight, Copy, Pencil, Trash2 } from "lucide-react";
-import { Streamdown } from "streamdown";
+import { Copy, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { Textarea } from "@/components/ui/textarea";
-import { MD_CONTROLS, MD_LINK_SAFETY } from "../../lib/markdown";
-import { IconButton } from "./IconButton";
+import { formatShortDate } from "../../lib/format";
+import { Markdown } from "../../lib/markdown";
+import { ConfirmDialog } from "../common/ConfirmDialog";
+import { FoldTrigger } from "../common/FoldTrigger";
+import { IconButton } from "../common/IconButton";
 import { copyText, extractMessageText } from "./MessageActions";
 import { ANSWER_PROSE_COMPACT } from "./prose";
 
@@ -53,7 +45,7 @@ export function SessionSummaryBlock({
 
   const meta = [
     summarizedCount ? `${summarizedCount} ${summarizedCount === 1 ? "message" : "messages"} summarized` : null,
-    createdAt ? new Date(createdAt * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : null,
+    createdAt ? formatShortDate(createdAt) : null,
   ].filter(Boolean);
 
   const save = async () => {
@@ -73,11 +65,10 @@ export function SessionSummaryBlock({
   return (
     <Collapsible open={open || draft !== null} onOpenChange={setOpen} className="group/summary rounded-lg border bg-card">
       <div className="flex items-center gap-2 pr-2">
-        <CollapsibleTrigger className="group/trigger flex min-w-0 flex-1 items-center gap-2 rounded-lg px-4 py-3 text-left text-sm font-medium outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
-          <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 ease-out group-data-[state=open]/trigger:rotate-90" aria-hidden="true" />
+        <FoldTrigger className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-4 py-3 text-left text-sm font-medium" chevronClassName="text-muted-foreground">
           Summary
           {meta.length > 0 && <span className="truncate font-normal text-muted-foreground">· {meta.join(" · ")}</span>}
-        </CollapsibleTrigger>
+        </FoldTrigger>
         {!readOnly && draft === null && (
           <div className="flex shrink-0 items-center gap-0.5 transition-opacity group-focus-within/summary:opacity-100 group-hover/summary:opacity-100 [@media(hover:hover)]:opacity-0">
             <IconButton label="Copy summary" size="icon-xs" className="text-muted-foreground" onClick={() => copyText(extractMessageText([{ type: "text", text: summary }]), "Summary copied")}>
@@ -128,9 +119,7 @@ export function SessionSummaryBlock({
               </div>
             </div>
           ) : (
-            <div className={ANSWER_PROSE_COMPACT}>
-              <Streamdown isAnimating={false} controls={MD_CONTROLS} linkSafety={MD_LINK_SAFETY}>{summary}</Streamdown>
-            </div>
+            <Markdown text={summary} className={ANSWER_PROSE_COMPACT} />
           )}
         </div>
       </CollapsibleContent>
@@ -142,20 +131,14 @@ export function SessionSummaryBlock({
         </div>
       )}
 
-      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete the summary?</AlertDialogTitle>
-            <AlertDialogDescription>
-              The next message uses the full conversation again. The original messages are not affected.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={() => onDelete?.()}>Delete</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title="Delete the summary?"
+        description="The next message uses the full conversation again. The original messages are not affected."
+        actionLabel="Delete"
+        onConfirm={() => onDelete?.()}
+      />
     </Collapsible>
   );
 }

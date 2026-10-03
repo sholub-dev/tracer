@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { usePersistedState } from "../../lib/hooks";
 
 interface Option {
   value: string;
@@ -20,7 +21,7 @@ interface SearchableSelectProps {
   onChange: (value: string) => void;
   placeholder?: string;
   /** localStorage key for starred items. */
-  storageKey?: string;
+  storageKey: string;
   /** When true, the dropdown expands to fit content instead of matching button width. */
   fitContent?: boolean;
   disabled?: boolean;
@@ -28,28 +29,10 @@ interface SearchableSelectProps {
   className?: string;
 }
 
-function useStarred(storageKey: string | undefined): [Set<string>, (value: string) => void] {
-  const key = storageKey ? `tracer:starred:${storageKey}` : null;
-  const [starred, setStarred] = useState<Set<string>>(() => {
-    if (!key) return new Set();
-    try {
-      const raw = localStorage.getItem(key);
-      return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
-    } catch {
-      return new Set();
-    }
-  });
-
-  const toggle = (value: string) => {
-    setStarred((prev) => {
-      const next = new Set(prev);
-      if (next.has(value)) next.delete(value);
-      else next.add(value);
-      if (key) localStorage.setItem(key, JSON.stringify([...next]));
-      return next;
-    });
-  };
-
+function useStarred(storageKey: string): [Set<string>, (value: string) => void] {
+  const [list, setList] = usePersistedState<string[]>(`tracer:starred:${storageKey}`, []);
+  const starred = useMemo(() => new Set(list), [list]);
+  const toggle = (value: string) => setList(starred.has(value) ? list.filter((v) => v !== value) : [...list, value]);
   return [starred, toggle];
 }
 
@@ -57,7 +40,7 @@ interface SearchableOptionsProps {
   options: Option[];
   value: string;
   onSelect: (value: string) => void;
-  storageKey?: string;
+  storageKey: string;
   loading?: boolean;
   searchLabel?: string;
 }

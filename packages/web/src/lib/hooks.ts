@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState, useEffect, useCallback } from "react";
+import { toast } from "sonner";
 import { trpc } from "./trpc";
 import { AVAILABLE_MODELS } from "./models";
 import { WEB_CONFIG } from "./config";
@@ -117,13 +118,12 @@ export function useSessionLiveUpdates() {
 
   const invalidateLists = useCallback(() => {
     utils.sessions.list.invalidate();
-    utils.sessions.activeCount.invalidate();
     utils.monitors.builderChats.invalidate();
     utils.monitors.triggers.invalidate();
     utils.monitors.list.invalidate();
   }, [utils]);
 
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); timer.current = null; }, []);
 
   trpc.sessions.onChange.useSubscription(undefined, {
     // Also fires on every reconnect, covering changes missed while disconnected.
@@ -147,6 +147,23 @@ export function useSessionLiveUpdates() {
   });
 }
 
+/** Deletes a session and refreshes every list that can show it; `noun` names it in the toasts. */
+export function useDeleteSession({ noun = "investigation", onDeleted }: { noun?: string; onDeleted?: (id: string) => void } = {}) {
+  const utils = trpc.useUtils();
+  const mutation = trpc.sessions.delete.useMutation({
+    onSuccess: (_, { id }) => {
+      utils.sessions.list.invalidate();
+      utils.monitors.triggers.invalidate();
+      utils.monitors.list.invalidate();
+      utils.monitors.builderChats.invalidate();
+      toast(`${noun.charAt(0).toUpperCase()}${noun.slice(1)} deleted`);
+      onDeleted?.(id);
+    },
+    onError: () => toast.error(`Couldn't delete the ${noun}`),
+  });
+  return (id: string) => mutation.mutate({ id });
+}
+
 /** Escape calls `onStop` while `active`, unless an open dialog or menu took the key. */
 export function useEscapeToStop(active: boolean, onStop: () => void) {
   const onStopRef = useRef(onStop);
@@ -168,6 +185,24 @@ export function useGcpAuthStatus() {
   return trpc.provider.gcpAuthStatus.useQuery(undefined, {
     refetchInterval: WEB_CONFIG.sessionStaleTimeMs,
   });
+}
+
+/** GCP projects as select options; `enabled` defers the fetch until a picker opens. */
+export function useGcpProjectOptions(enabled = true) {
+  const { data, isLoading } = trpc.provider.listGcpProjects.useQuery(undefined, {
+    staleTime: WEB_CONFIG.gcpProjectsStaleTimeMs,
+    enabled,
+  });
+  const options = useMemo(
+    () =>
+      (data ?? []).map((p) => ({
+        value: p.projectId,
+        label: p.name ? `${p.name} (${p.projectId})` : p.projectId,
+        displayLabel: p.name || p.projectId,
+      })),
+    [data],
+  );
+  return { options, isLoading };
 }
 
 /** Returns the set of LLM provider names that are configured (API key, or Vertex project). */
@@ -229,11 +264,14 @@ export function useFileDrop(onFiles: (files: FileList) => void, enabled = true) 
 /** useState backed by localStorage (JSON); falls back to `initial` when storage is unavailable or unreadable. */
 export function usePersistedState<T>(key: string, initial: T): [T, (value: T) => void] {
   const [value, setValueRaw] = useState<T>(() => {
+    let raw: string | null;
+    try { raw = localStorage.getItem(key); } catch { return initial; }
+    if (raw === null) return initial;
     try {
-      const raw = localStorage.getItem(key);
-      return raw === null ? initial : (JSON.parse(raw) as T);
+      return JSON.parse(raw) as T;
     } catch {
-      return initial;
+      // Older builds stored plain strings unquoted.
+      return typeof initial === "string" ? (raw as T) : initial;
     }
   });
   const setValue = useCallback((next: T) => {

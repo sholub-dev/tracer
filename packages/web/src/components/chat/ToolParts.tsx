@@ -1,16 +1,17 @@
-import { memo, useRef } from "react";
-import { AlertCircle, ChevronRight, ClipboardCheck, Copy, History, LayoutGrid, Timer, type LucideIcon } from "lucide-react";
-import { Streamdown } from "streamdown";
+import { memo, useRef, useState } from "react";
+import { AlertCircle, ClipboardCheck, Copy, History, LayoutGrid, Loader2, Timer, type LucideIcon } from "lucide-react";
 import { CLIENT_TOOL_NAMES, type ProgressPart } from "@tracer-sh/shared";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
-import { MD_CONTROLS, MD_LINK_SAFETY } from "../../lib/markdown";
+import { Markdown } from "../../lib/markdown";
 import ResultView, { JsonTree } from "../charts/ResultView";
 import { useProgress, type ProgressStore } from "../../lib/progress-store";
+import { hasErrorOutput } from "../../lib/chat-utils";
 import { MonitorSavedCard, type MonitorSavedOutput } from "../monitors/MonitorSavedCard";
+import { FoldTrigger } from "../common/FoldTrigger";
 import { ProviderDot } from "../common/ProviderDot";
 import { WorkingIndicator } from "./ChatIndicators";
-import { IconButton } from "./IconButton";
+import { IconButton } from "../common/IconButton";
 import { copyText } from "./MessageActions";
 import { ReasoningBlock } from "./ReasoningBlock";
 import { ANSWER_PROSE_COMPACT } from "./prose";
@@ -106,7 +107,7 @@ function stepTitle(part: ToolPart, provider: string): string {
   return `${providerLabel(provider)} query`;
 }
 
-const QueryBlock = memo(function QueryBlock({ query }: { query: string }) {
+export const QueryBlock = memo(function QueryBlock({ query }: { query: string }) {
   return (
     <div className="relative">
       <pre className="max-h-64 overflow-auto rounded-md border bg-background py-2.5 pr-11 pl-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-ink-2">
@@ -130,14 +131,11 @@ function ErrorLine({ children }: { children: string }) {
 
 export function Narration({ content, isAnimating }: { content: string; isAnimating: boolean }) {
   if (!content.trim()) return null;
-  return (
-    <div className="max-w-[68ch] text-sm leading-relaxed text-ink-2">
-      <Streamdown isAnimating={isAnimating} controls={MD_CONTROLS} linkSafety={MD_LINK_SAFETY}>{content}</Streamdown>
-    </div>
-  );
+  return <Markdown text={content} isAnimating={isAnimating} className="max-w-[68ch] text-sm leading-relaxed text-ink-2" />;
 }
 
-function ProgressItems({ parts, isAnimating }: { parts: ProgressPart[]; isAnimating: boolean }) {
+function ProgressItems({ parts, isAnimating, resultsOnly = false }: { parts: ProgressPart[]; isAnimating: boolean; resultsOnly?: boolean }) {
+  if (resultsOnly) return <>{parts.map((p, i) => (p.type === "query" ? <ResultView key={i} data={p.results} /> : null))}</>;
   let inAnalysis = false;
   return (
     <>
@@ -157,11 +155,7 @@ function ProgressItems({ parts, isAnimating }: { parts: ProgressPart[]; isAnimat
         if (p.type === "reasoning") return <ReasoningBlock key={i} content={p.content} isAnimating={isAnimating} />;
         if (p.type === "tool-call") return isAnimating ? <WorkingIndicator key={i} label={`Running ${p.toolName.replace(/_/g, " ")}`} /> : null;
         if (inAnalysis && p.type === "text") {
-          return (
-            <div key={i} className={ANSWER_PROSE_COMPACT}>
-              <Streamdown isAnimating={isAnimating} controls={MD_CONTROLS} linkSafety={MD_LINK_SAFETY}>{p.content}</Streamdown>
-            </div>
-          );
+          return <Markdown key={i} text={p.content} isAnimating={isAnimating} className={ANSWER_PROSE_COMPACT} />;
         }
         return <Narration key={i} content={p.content} isAnimating={isAnimating} />;
       })}
@@ -260,13 +254,19 @@ const JiraIssueCard = memo(function JiraIssueCard({ issue }: { issue: JiraIssueV
   );
 });
 
-function StepBody({ part, progressStore }: { part: ToolPart; progressStore: ProgressStore }) {
+function stepError(part: ToolPart): string | null {
+  if (part.state === "output-error") return part.errorText ?? "The query failed";
+  const output = part.state === "output-available" ? part.output : undefined;
+  return isSubAgentOutput(output) && output.error ? output.error : null;
+}
+
+function StepBody({ part, progressStore, resultsOnly = false }: { part: ToolPart; progressStore: ProgressStore; resultsOnly?: boolean }) {
   const progress = useProgress(progressStore, part.toolCallId);
   const complete = part.state === "output-available";
   const output = complete ? part.output : undefined;
 
-  if (part.state === "output-error") return <ErrorLine>{part.errorText ?? "The query failed"}</ErrorLine>;
-  if (isSubAgentOutput(output) && output.error) return <ErrorLine>{output.error}</ErrorLine>;
+  const error = stepError(part);
+  if (error) return <ErrorLine>{error}</ErrorLine>;
 
   if (complete && part.type === "tool-get_jira_issue") {
     const issue = jiraIssueOf(output);
@@ -289,6 +289,7 @@ function StepBody({ part, progressStore }: { part: ToolPart; progressStore: Prog
   const parts = stepParts(part, progress?.parts);
   if (parts.length > 0 || !complete) {
     const query = typeof part.input?.query === "string" ? part.input.query : null;
+    if (resultsOnly) return <ProgressItems parts={parts} isAnimating={!complete} resultsOnly />;
     return (
       <>
         {parts.length === 0 && query && <QueryBlock query={query} />}
@@ -302,17 +303,18 @@ function StepBody({ part, progressStore }: { part: ToolPart; progressStore: Prog
   const query = typeof part.input?.query === "string" ? part.input.query : part.input && Object.keys(part.input).length ? JSON.stringify(part.input, null, 2) : null;
   return (
     <>
-      {query && <QueryBlock query={query} />}
+      {query && !resultsOnly && <QueryBlock query={query} />}
       {output != null && <ResultView data={output} />}
     </>
   );
 }
 
-type StepProps = { part: ToolPart; progressStore: ProgressStore };
+// keepResults: a step in the answer keeps its charts and tables visible while the query folds.
+type StepProps = { part: ToolPart; progressStore: ProgressStore; keepResults?: boolean };
 
 // The AI SDK clones the streaming message per chunk, so part identity changes even when nothing read here did.
 function stepPropsEqual(prev: StepProps, next: StepProps): boolean {
-  if (prev.progressStore !== next.progressStore) return false;
+  if (prev.progressStore !== next.progressStore || prev.keepResults !== next.keepResults) return false;
   const a = prev.part;
   const b = next.part;
   if (a === b) return true;
@@ -321,18 +323,34 @@ function stepPropsEqual(prev: StepProps, next: StepProps): boolean {
   return a.output === b.output && a.errorText === b.errorText && a.input?.task === b.input?.task && a.input?.query === b.input?.query;
 }
 
-export const ProviderStep = memo(function ProviderStep({ part, progressStore }: StepProps) {
+export const ProviderStep = memo(function ProviderStep({ part, progressStore, keepResults = false }: StepProps) {
+  const [open, setOpen] = useState(false);
   const provider = providerOf(part.type);
+  const running = part.state !== "output-available" && part.state !== "output-error";
+  const error = open || keepResults ? null : stepError(part);
   return (
     <li className="animate-in fade-in duration-200">
-      <div className="flex items-center gap-2">
-        <ProviderDot provider={provider} />
-        <span className="sr-only">{providerLabel(provider)}:</span>
-        <span className="min-w-0 flex-1 truncate text-sm font-medium">{stepTitle(part, provider)}</span>
-      </div>
-      <div className="mt-2 ml-4 space-y-2">
-        <StepBody part={part} progressStore={progressStore} />
-      </div>
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <FoldTrigger
+          chevronEnd
+          chevronClassName="text-muted-foreground"
+          className="-ml-1.5 flex max-w-full items-center gap-2 rounded-md px-1.5 py-1 text-left hover:text-foreground"
+        >
+          <ProviderDot provider={provider} />
+          <span className="sr-only">{providerLabel(provider)}:</span>
+          <span className="min-w-0 truncate text-sm font-medium">{stepTitle(part, provider)}</span>
+          {running && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-label="Running" />}
+        </FoldTrigger>
+        <CollapsibleContent className="mt-2 ml-4 space-y-2">
+          <StepBody part={part} progressStore={progressStore} />
+        </CollapsibleContent>
+      </Collapsible>
+      {!open && keepResults && (
+        <div className="mt-2 ml-4 space-y-2">
+          <StepBody part={part} progressStore={progressStore} resultsOnly />
+        </div>
+      )}
+      {error && <div className="mt-1 ml-4"><ErrorLine>{error}</ErrorLine></div>}
     </li>
   );
 }, stepPropsEqual);
@@ -365,20 +383,21 @@ export const OtherToolPart = memo(function OtherToolPart({ part }: { part: ToolP
   if (!spec) return null;
   if (part.state === "output-error") return <ErrorLine>{`${spec.errorLabel}: ${part.errorText ?? "failed"}`}</ErrorLine>;
   if (part.state !== "output-available") return <WorkingIndicator label={spec.loading} />;
-  const failed = !!part.output && typeof part.output === "object" && "error" in part.output;
+  const failed = hasErrorOutput(part.output);
   const Icon = failed ? AlertCircle : spec.icon;
   return (
     <Collapsible>
-      <CollapsibleTrigger
+      <FoldTrigger
+        chevronEnd
+        chevronClassName="mt-0.5 text-muted-foreground"
         className={cn(
-          "group/trigger -ml-1.5 flex max-w-full items-start gap-2 rounded-md px-1.5 py-1 text-left text-[13px]/[18px] outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50",
+          "-ml-1.5 flex max-w-full items-start gap-2 rounded-md px-1.5 py-1 text-left text-[13px]/[18px] hover:text-foreground",
           failed ? "text-destructive" : "text-ink-2",
         )}
       >
         <Icon className={cn("mt-0.5 size-3.5 shrink-0", !failed && "text-muted-foreground")} aria-hidden="true" />
         <span className="min-w-0">{smallToolLabel(part, spec)}</span>
-        <ChevronRight className="mt-0.5 size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 group-data-[state=open]/trigger:rotate-90" aria-hidden="true" />
-      </CollapsibleTrigger>
+      </FoldTrigger>
       <CollapsibleContent>
         <div className="mt-1 ml-4 rounded-md border bg-background px-3 py-2 font-mono text-xs">
           <JsonTree data={part.output} />

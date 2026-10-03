@@ -117,7 +117,7 @@ export const MessageParts = React.memo(
       if (isProviderTool(part.type)) {
         return (
           <ol key={key}>
-            <ProviderStep part={part as ToolPart} progressStore={progressStore} keepResults />
+            <ProviderStep part={part as ToolPart} progressStore={progressStore} />
           </ol>
         );
       }

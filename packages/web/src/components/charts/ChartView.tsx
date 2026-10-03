@@ -176,6 +176,8 @@ function TimeseriesPlot({ series, containerSize, plotHeight, threshold, dualAxis
   const values = series.filter((s) => isVisible(s.name)).flatMap((s) => s.data.map((p) => p.y)).filter((v): v is number => v != null);
   const yMin = Math.min(0, ...values);
   const yMax = Math.max(0, ...values);
+  // Recharts pads integer axes to 5 ticks, so a max of 1 would read 0-4.
+  const integers = counts.every(Boolean);
   const above = threshold && (threshold.operator === ">" || threshold.operator === ">=");
   // Shading is noise when the safe side is empty, e.g. `count > 0` on a zero-based axis.
   const shade = threshold && (above ? threshold.value > yMin : threshold.value < yMax);
@@ -197,7 +199,14 @@ function TimeseriesPlot({ series, containerSize, plotHeight, threshold, dualAxis
           axisLine={{ stroke: "var(--input)" }}
           tickMargin={8}
         />
-        <YAxis width={44} tickFormatter={formatYAxis} allowDecimals={!counts.every(Boolean)} tickLine={false} axisLine={{ stroke: "var(--input)" }} />
+        <YAxis
+          width={44}
+          tickFormatter={formatYAxis}
+          allowDecimals={!integers}
+          tickCount={integers ? Math.min(5, Math.max(2, Math.ceil(yMax - yMin) + 1)) : undefined}
+          tickLine={false}
+          axisLine={{ stroke: "var(--input)" }}
+        />
         {hasRight && (
           <YAxis yAxisId="right" orientation="right" width={44} tickFormatter={formatYAxis} tickLine={false} axisLine={{ stroke: "var(--input)" }} />
         )}
@@ -226,7 +235,7 @@ function TimeseriesPlot({ series, containerSize, plotHeight, threshold, dualAxis
             />
           }
         />
-        {series.length > 1 && <ChartLegend content={<SeriesLegend series={series} isVisible={isVisible} onToggle={toggle} onRight={onRight} />} />}
+        <ChartLegend content={<SeriesLegend series={series} isVisible={isVisible} onToggle={toggle} onRight={onRight} />} />
         {series.map((s, i) => (
           <Line
             key={keys[i]}

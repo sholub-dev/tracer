@@ -2,12 +2,10 @@ import React from "react";
 import type { UIMessage } from "ai";
 import { Download, FileText, Loader2 } from "lucide-react";
 import { ANALYSIS_MARKER, findAnalysisMarker } from "@tracer-sh/shared";
-import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Markdown } from "../../lib/markdown";
-import { FoldTrigger } from "../common/FoldTrigger";
 import type { ProgressStore } from "../../lib/progress-store";
 import { ReasoningBlock } from "./ReasoningBlock";
 import { Narration, OtherToolPart, ProviderStep, isHiddenPart, isMonitorTool, isProviderTool, providerOf, stepQueryCount, type ToolPart } from "./ToolParts";
@@ -132,15 +130,13 @@ export const MessageParts = React.memo(
         .filter(Boolean)
         .join(" · ");
       investigation = (
-        <Collapsible defaultOpen={isAnimating}>
-          <FoldTrigger className="-ml-1.5 inline-flex max-w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[13px]/[18px] text-muted-foreground transition-colors hover:text-foreground">
+        <div>
+          <p className="inline-flex max-w-full items-center gap-1.5 py-1 text-[13px]/[18px] text-muted-foreground">
             {running && <Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />}
             <span className="min-w-0 truncate">{label}</span>
-          </FoldTrigger>
-          <CollapsibleContent>
-            <ol className="mt-2 space-y-3">{work.map(renderWork)}</ol>
-          </CollapsibleContent>
-        </Collapsible>
+          </p>
+          <ol className="mt-2 space-y-3">{work.map(renderWork)}</ol>
+        </div>
       );
     } else if (work.length > 0) {
       investigation = <ol className="space-y-3">{work.map(renderWork)}</ol>;

@@ -309,12 +309,12 @@ function StepBody({ part, progressStore, resultsOnly = false }: { part: ToolPart
   );
 }
 
-// keepResults: a step in the answer keeps its charts and tables visible while the query folds.
-type StepProps = { part: ToolPart; progressStore: ProgressStore; keepResults?: boolean };
+// A folded step keeps its charts and tables visible; only the query hides.
+type StepProps = { part: ToolPart; progressStore: ProgressStore };
 
 // The AI SDK clones the streaming message per chunk, so part identity changes even when nothing read here did.
 function stepPropsEqual(prev: StepProps, next: StepProps): boolean {
-  if (prev.progressStore !== next.progressStore || prev.keepResults !== next.keepResults) return false;
+  if (prev.progressStore !== next.progressStore) return false;
   const a = prev.part;
   const b = next.part;
   if (a === b) return true;
@@ -323,11 +323,11 @@ function stepPropsEqual(prev: StepProps, next: StepProps): boolean {
   return a.output === b.output && a.errorText === b.errorText && a.input?.task === b.input?.task && a.input?.query === b.input?.query;
 }
 
-export const ProviderStep = memo(function ProviderStep({ part, progressStore, keepResults = false }: StepProps) {
+export const ProviderStep = memo(function ProviderStep({ part, progressStore }: StepProps) {
   const [open, setOpen] = useState(false);
   const provider = providerOf(part.type);
   const running = part.state !== "output-available" && part.state !== "output-error";
-  const error = open || keepResults ? null : stepError(part);
+  const error = open ? null : stepError(part);
   return (
     <li className="animate-in fade-in duration-200">
       <Collapsible open={open} onOpenChange={setOpen}>
@@ -345,7 +345,7 @@ export const ProviderStep = memo(function ProviderStep({ part, progressStore, ke
           <StepBody part={part} progressStore={progressStore} />
         </CollapsibleContent>
       </Collapsible>
-      {!open && keepResults && (
+      {!open && (
         <div className="mt-2 ml-4 space-y-2">
           <StepBody part={part} progressStore={progressStore} resultsOnly />
         </div>

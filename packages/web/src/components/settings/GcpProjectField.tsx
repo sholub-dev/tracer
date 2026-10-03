@@ -1,24 +1,12 @@
-import { useId, useMemo } from "react";
+import { useId } from "react";
 
 import { Label } from "@/components/ui/label";
-import { SearchableSelect } from "@/components/ui/SearchableSelect";
-import { trpc } from "../../lib/trpc";
-import { WEB_CONFIG } from "../../lib/config";
+import { SearchableSelect } from "@/components/common/SearchableSelect";
+import { useGcpProjectOptions } from "../../lib/hooks";
 
 export function GcpProjectField({ value, onChange, disabled }: { value: string; onChange: (projectId: string) => void; disabled?: boolean }) {
   const id = useId();
-  const { data: projects, isLoading } = trpc.provider.listGcpProjects.useQuery(undefined, {
-    staleTime: WEB_CONFIG.updateCheckStaleTimeMs,
-  });
-  const options = useMemo(
-    () =>
-      (projects ?? []).map((p) => ({
-        value: p.projectId,
-        label: p.name ? `${p.name} (${p.projectId})` : p.projectId,
-        displayLabel: p.name || p.projectId,
-      })),
-    [projects],
-  );
+  const { options, isLoading } = useGcpProjectOptions();
 
   return (
     <div className="space-y-1.5">

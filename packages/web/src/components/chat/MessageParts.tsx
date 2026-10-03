@@ -1,13 +1,13 @@
 import React from "react";
 import type { UIMessage } from "ai";
-import { ChevronRight, Download, FileText, Loader2 } from "lucide-react";
-import { Streamdown } from "streamdown";
+import { Download, FileText, Loader2 } from "lucide-react";
 import { ANALYSIS_MARKER, findAnalysisMarker } from "@tracer-sh/shared";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { MD_CONTROLS, MD_LINK_SAFETY } from "../../lib/markdown";
+import { Markdown } from "../../lib/markdown";
+import { FoldTrigger } from "../common/FoldTrigger";
 import type { ProgressStore } from "../../lib/progress-store";
 import { ReasoningBlock } from "./ReasoningBlock";
 import { Narration, OtherToolPart, ProviderStep, isHiddenPart, isMonitorTool, isProviderTool, providerOf, stepQueryCount, type ToolPart } from "./ToolParts";
@@ -60,11 +60,7 @@ export function FileAttachment({ part, className }: { part: FilePartLike; classN
 
 function AnswerText({ text, isAnimating, compact }: { text: string; isAnimating: boolean; compact: boolean }) {
   if (!text.trim()) return null;
-  return (
-    <div className={compact ? ANSWER_PROSE_COMPACT : ANSWER_PROSE}>
-      <Streamdown isAnimating={isAnimating} controls={MD_CONTROLS} linkSafety={MD_LINK_SAFETY}>{text}</Streamdown>
-    </div>
-  );
+  return <Markdown text={text} isAnimating={isAnimating} className={compact ? ANSWER_PROSE_COMPACT : ANSWER_PROSE} />;
 }
 
 interface Props {
@@ -121,7 +117,7 @@ export const MessageParts = React.memo(
       if (isProviderTool(part.type)) {
         return (
           <ol key={key}>
-            <ProviderStep part={part as ToolPart} progressStore={progressStore} />
+            <ProviderStep part={part as ToolPart} progressStore={progressStore} keepResults />
           </ol>
         );
       }
@@ -137,13 +133,12 @@ export const MessageParts = React.memo(
         .join(" · ");
       investigation = (
         <Collapsible defaultOpen={isAnimating}>
-          <CollapsibleTrigger className="group/trigger -ml-1.5 inline-flex max-w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[13px]/[18px] text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50">
-            <ChevronRight className="size-3.5 shrink-0 transition-transform duration-200 ease-out group-data-[state=open]/trigger:rotate-90" aria-hidden="true" />
+          <FoldTrigger className="-ml-1.5 inline-flex max-w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[13px]/[18px] text-muted-foreground transition-colors hover:text-foreground">
             {running && <Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />}
             <span className="min-w-0 truncate">{label}</span>
-          </CollapsibleTrigger>
+          </FoldTrigger>
           <CollapsibleContent>
-            <ol className="mt-3 space-y-5">{work.map(renderWork)}</ol>
+            <ol className="mt-2 space-y-3">{work.map(renderWork)}</ol>
           </CollapsibleContent>
         </Collapsible>
       );
@@ -155,7 +150,16 @@ export const MessageParts = React.memo(
       <div className={cn("space-y-4", compact && "space-y-3")}>
         {investigation}
         {aside.map(({ part, key }) => (part.type === "file" ? <FileAttachment key={key} part={part as FilePartLike} /> : <OtherToolPart key={key} part={part as ToolPart} />))}
-        {answer.map(renderAnswer)}
+        {marker && answer.length > 0 ? (
+          <section
+            aria-label="Analysis"
+            className={cn("space-y-4 rounded-lg border border-primary/20 bg-primary-tint px-5 py-4", compact && "space-y-3 px-4 py-3")}
+          >
+            {answer.map(renderAnswer)}
+          </section>
+        ) : (
+          answer.map(renderAnswer)
+        )}
       </div>
     );
   },

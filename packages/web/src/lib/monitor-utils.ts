@@ -18,14 +18,6 @@ export function sinceToSeconds(since: string): number {
   return n * 86400;
 }
 
-export function formatTime(ts: number | null | undefined): string {
-  if (!ts) return "never";
-  const d = new Date(ts * 1000);
-  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  if (d.toDateString() === new Date().toDateString()) return time;
-  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
-}
-
 export function formatFrequency(seconds: number): string {
   const units: Array<[number, string]> = [[86400, "day"], [3600, "hour"], [60, "min"]];
   for (const [size, label] of units) {

@@ -10,8 +10,8 @@ import { usePersistedState } from "../lib/hooks";
 import { WidgetCard } from "../components/dashboard/WidgetCard";
 import { DashboardChatPanel } from "../components/dashboard/DashboardChatPanel";
 import { DEFAULT_SINCE, TIME_RANGE_PRESETS } from "../lib/nrql-utils";
-import { TimeRangePicker } from "../components/ui/TimeRangePicker";
-import { IconButton } from "../components/chat/IconButton";
+import { TimeRangePicker } from "../components/common/TimeRangePicker";
+import { IconButton } from "../components/common/IconButton";
 
 const GridLayout = WidthProvider(ReactGridLayout);
 

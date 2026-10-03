@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { SearchableOptions } from "@/components/ui/SearchableSelect";
+import { SearchableOptions } from "@/components/common/SearchableSelect";
 import { cn } from "@/lib/utils";
+import { useGcpProjectOptions } from "../../lib/hooks";
 import { trpc } from "../../lib/trpc";
-import { WEB_CONFIG } from "../../lib/config";
 
 interface GcpProjectPickerProps {
   projectId: string;
@@ -15,18 +15,10 @@ export function GcpProjectPicker({ projectId, existingConfig }: GcpProjectPicker
   const [open, setOpen] = useState(false);
 
   const utils = trpc.useUtils();
-  const { data: projects, isLoading } = trpc.provider.listGcpProjects.useQuery(undefined, {
-    staleTime: WEB_CONFIG.updateCheckStaleTimeMs,
-    enabled: open,
-  });
+  const { options, isLoading } = useGcpProjectOptions(open);
   const saveConfig = trpc.provider.saveConfig.useMutation({
     onSuccess: () => utils.provider.getConfigs.invalidate(),
   });
-
-  const options = useMemo(
-    () => (projects ?? []).map((p) => ({ value: p.projectId, label: p.name ? `${p.name} (${p.projectId})` : p.projectId })),
-    [projects],
-  );
 
   return (
     <Popover open={open} onOpenChange={setOpen}>

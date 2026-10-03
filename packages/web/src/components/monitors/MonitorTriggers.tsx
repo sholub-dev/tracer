@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { trpc } from "../../lib/trpc";
-import { formatTime, sinceToSeconds } from "../../lib/monitor-utils";
+import { sinceToSeconds } from "../../lib/monitor-utils";
+import { formatTime } from "../../lib/format";
 
 const MAX_KEYS_SHOWN = 2;
 

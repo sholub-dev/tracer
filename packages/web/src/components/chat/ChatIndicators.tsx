@@ -1,6 +1,6 @@
 import { ArrowDown, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { IconButton } from "./IconButton";
+import { IconButton } from "../common/IconButton";
 
 export function WorkingIndicator({ label = "Working", className }: { label?: string; className?: string }) {
   return (

@@ -45,10 +45,10 @@ export function extractMessageText(parts: UIMessage["parts"]): string {
   return chunks.join("\n\n").trim();
 }
 
-/** The parts after the analysis marker, or every part when there is none. */
-function analysisParts(parts: UIMessage["parts"]): UIMessage["parts"] {
+/** The parts after the analysis marker; null when there is none. */
+function analysisParts(parts: UIMessage["parts"]): UIMessage["parts"] | null {
   const marker = findAnalysisMarker(parts);
-  if (!marker) return parts;
+  if (!marker) return null;
   const out: UIMessage["parts"] = [];
   for (let i = marker.partIdx; i < parts.length; i++) {
     const p = parts[i];
@@ -72,16 +72,19 @@ export function copyText(text: string, message: string) {
 const MAX_CANVAS_SIDE = 16_000;
 const MAX_CANVAS_AREA = 16_000_000;
 
-async function capture(el: HTMLElement): Promise<string> {
-  const { domToPng } = await import("modern-screenshot");
+async function capture(el: HTMLElement): Promise<Blob> {
+  const { domToBlob } = await import("modern-screenshot");
   const w = Math.max(1, el.scrollWidth);
   const h = Math.max(1, el.scrollHeight);
   const scale = Math.min(2, MAX_CANVAS_SIDE / Math.max(w, h), Math.sqrt(MAX_CANVAS_AREA / (w * h)));
-  return domToPng(el, { scale, backgroundColor: getComputedStyle(document.body).backgroundColor });
+  return domToBlob(el, { scale, type: "image/png", backgroundColor: getComputedStyle(document.body).backgroundColor });
 }
 
-export function slugify(s: string) {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "tracer";
+/** `<prefix>-YYYY-MM-DD-HH-MM.png` in local time. */
+export function stampedPngName(prefix: string) {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${prefix}-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}-${pad(now.getMinutes())}.png`;
 }
 
 function saveFile(blob: Blob, name: string) {
@@ -96,8 +99,7 @@ function saveFile(blob: Blob, name: string) {
 /** PNG of an element, downloaded as a file. */
 export async function downloadImage(el: HTMLElement, name: string) {
   try {
-    const blob = await (await fetch(await capture(el))).blob();
-    saveFile(blob, name);
+    saveFile(await capture(el), name);
     toast.success("Image saved", { description: name });
   } catch {
     toast.error("Couldn't create the image");
@@ -111,24 +113,23 @@ export interface SourceMeta {
   resolveSourceTitle?: () => Promise<string | undefined>;
 }
 
-/** PNG that carries the reply's parts, so dropping it back into Tracer re-imports it. */
-async function downloadReplyImage(el: HTMLElement, parts: UIMessage["parts"], meta: SourceMeta) {
+/** PNG that carries the reply's analysis parts, so dropping it back into Tracer re-imports it. */
+async function downloadReplyImage(el: HTMLElement, analysis: UIMessage["parts"], meta: SourceMeta) {
   try {
-    const bytes = new Uint8Array(await (await fetch(await capture(el))).arrayBuffer());
+    const bytes = new Uint8Array(await (await capture(el)).arrayBuffer());
     const payload = JSON.stringify({
       v: 1,
       kind: "analysis",
       sourceTitle: (await meta.resolveSourceTitle?.()) ?? meta.sourceTitle ?? "",
       sourceCreatedAt: meta.sourceCreatedAt ?? Math.floor(Date.now() / 1000),
-      parts: analysisParts(parts),
+      parts: analysis,
     });
     if (payload.length > 2 * 1024 * 1024) {
       toast.error("This reply is too large to embed in an image");
       return;
     }
     const out = await encodePngWithPayload(bytes, new TextEncoder().encode(payload));
-    const now = new Date();
-    const name = `analysis-${now.toISOString().slice(0, 10)}-${String(now.getHours()).padStart(2, "0")}-${String(now.getMinutes()).padStart(2, "0")}.png`;
+    const name = stampedPngName("analysis");
     saveFile(new Blob([out.buffer as ArrayBuffer], { type: "image/png" }), name);
     toast.success("Image saved", { description: name });
   } catch {
@@ -138,19 +139,19 @@ async function downloadReplyImage(el: HTMLElement, parts: UIMessage["parts"], me
 
 async function copyImage(el: HTMLElement) {
   try {
-    const blob = await (await fetch(await capture(el))).blob();
-    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": capture(el) })]);
     toast.success("Image copied");
   } catch {
     toast.error("Couldn't copy the image");
   }
 }
 
-/** Hover actions under a message; also shown on focus-within and always on touch screens. */
+/** Actions under a message. `hoverOnly` reveals them on hover or focus-within (always on touch); `download` applies only to replies with an analysis. */
 export function MessageActions({
   parts,
   contentRef,
   download = false,
+  hoverOnly = false,
   meta = {},
   children,
   className,
@@ -158,14 +159,18 @@ export function MessageActions({
   parts: UIMessage["parts"];
   contentRef: RefObject<HTMLElement | null>;
   download?: boolean;
+  hoverOnly?: boolean;
   meta?: SourceMeta;
   children?: ReactNode;
   className?: string;
 }) {
+  const analysis = download ? analysisParts(parts) : null;
   return (
     <div
       className={cn(
-        "flex flex-wrap items-center gap-1 transition-opacity duration-150 group-focus-within/turn:pointer-events-auto group-focus-within/turn:opacity-100 group-hover/turn:pointer-events-auto group-hover/turn:opacity-100 [@media(hover:hover)]:pointer-events-none [@media(hover:hover)]:opacity-0",
+        "flex flex-wrap items-center gap-1",
+        hoverOnly &&
+          "transition-opacity duration-150 group-focus-within/turn:pointer-events-auto group-focus-within/turn:opacity-100 group-hover/turn:pointer-events-auto group-hover/turn:opacity-100 [@media(hover:hover)]:pointer-events-none [@media(hover:hover)]:opacity-0",
         className,
       )}
     >
@@ -174,23 +179,23 @@ export function MessageActions({
         size="xs"
         className="text-muted-foreground"
         onClick={() => {
-          const text = extractMessageText(parts);
+          const text = extractMessageText(analysis ?? parts);
           if (text) copyText(text, "Copied as text");
         }}
       >
         <Copy />
-        Copy
+        Copy text
       </Button>
       <Button variant="ghost" size="xs" className="text-muted-foreground" onClick={() => contentRef.current && copyImage(contentRef.current)}>
         <ImageIcon />
         Copy image
       </Button>
-      {download && (
+      {analysis && (
         <Button
           variant="ghost"
           size="xs"
           className="text-muted-foreground"
-          onClick={() => contentRef.current && downloadReplyImage(contentRef.current, parts, meta)}
+          onClick={() => contentRef.current && downloadReplyImage(contentRef.current, analysis, meta)}
         >
           <Download />
           Download image

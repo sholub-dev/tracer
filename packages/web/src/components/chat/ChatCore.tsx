@@ -13,30 +13,27 @@ import {
 import { useChat, Chat } from "@ai-sdk/react";
 import { DefaultChatTransport, type FileUIPart, type UIMessage } from "ai";
 import { toast } from "sonner";
-import { analysisSectionParts } from "@tracer-sh/shared";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ProgressStore } from "../../lib/progress-store";
 import { useChatScroll, useEscapeToStop, useFileDrop } from "../../lib/hooks";
-import { handleProgressData, normalizeClipboard, stopChat } from "../../lib/chat-utils";
+import { handleProgressData, stopChat, useCompactedMessages } from "../../lib/chat-utils";
 import { WEB_CONFIG } from "../../lib/config";
 import { preloadResultChunks } from "../charts/ResultView";
 import { AlertSummaryPanel, alertSummaryOf } from "./AlertSummaryPanel";
-import { WorkingIndicator, ScrollToBottomButton } from "./ChatIndicators";
+import { WorkingIndicator } from "./ChatIndicators";
 import { Composer, type Attachment } from "./Composer";
 import { FollowUpTimerBar } from "./FollowUpTimerBar";
-import { MessageView, type MessageViewOptions } from "./MessageView";
+import { MessageView, textOf, type MessageViewOptions } from "./MessageView";
+import { Transcript } from "./Transcript";
 import type { SourceMeta } from "./MessageActions";
 
-const INITIAL_ROWS = 6;
+const INITIAL_ROWS = 2;
 const MAX_ATTACH_BYTES = 10 * 1024 * 1024;
 
 // Empty type allowed: many text files report no MIME type.
 const isAttachable = (type: string) =>
   type === "" || type.startsWith("image/") || type.startsWith("text/") || type === "application/pdf" || type === "application/json";
-
-/** Centered reading column shared by the transcript, the dock and the session header. */
-export const COLUMN = "mx-auto w-full max-w-[808px] px-4 sm:px-6";
 
 export type RenderView = (options?: MessageViewOptions) => ReactNode;
 
@@ -91,9 +88,10 @@ export interface ChatCoreRef {
   readonly messages: UIMessage[];
   setMessages: (msgs: UIMessage[]) => void;
   sendMessage: (msg: { text: string }) => void;
-  setInput: (text: string) => void;
   scrollToBottom: (opts?: { animation?: "instant" | "smooth" }) => void;
   scrollToTop: (opts?: { animation?: "instant" | "smooth" }) => void;
+  readonly streaming: boolean;
+  stop: () => void;
 }
 
 // Memoized so a streaming chunk only re-renders the row whose message object changed.
@@ -179,7 +177,6 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const progressStore = useRef(new ProgressStore()).current;
   const compact = variant === "panel";
-  const column = compact ? "w-full px-5" : COLUMN;
   const rootRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -259,17 +256,8 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   const showEmptyState = !!emptyState && messages.length === 0 && status !== "submitted";
   const { scrollRef, contentRef, isAtBottom, scrollToBottom, scrollToTop } = useChatScroll(showEmptyState);
 
-  // Render-only collapse; a boundary past the list end (stale summary) hides nothing.
-  const collapse = collapseCount <= messages.length ? collapseCount : 0;
+  const { collapse, analysisOnlyMsg } = useCompactedMessages(messages, collapseCount, analysisOnlyIndex);
   const firstRow = showAll ? collapse : Math.max(collapse, messages.length - INITIAL_ROWS);
-
-  // Keyed on the boundary message itself, so its row's memo survives streamed tokens.
-  const boundaryMsg = analysisOnlyIndex !== undefined ? messages[analysisOnlyIndex] : undefined;
-  const analysisOnlyMsg = useMemo(() => {
-    if (!boundaryMsg || boundaryMsg.role !== "assistant") return null;
-    const parts = analysisSectionParts(boundaryMsg.parts);
-    return parts ? { ...boundaryMsg, parts } : null;
-  }, [boundaryMsg]);
 
   const alert = useMemo(() => (compact ? null : alertSummaryOf(messages)), [compact, messages]);
   const meta = useMemo<SourceMeta>(() => ({ sourceTitle, sourceCreatedAt, resolveSourceTitle }), [sourceTitle, sourceCreatedAt, resolveSourceTitle]);
@@ -309,6 +297,8 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
     stop();
   };
   useEscapeToStop(isLoading, handleStop);
+  const stopRef = useRef({ isLoading, handleStop });
+  stopRef.current = { isLoading, handleStop };
 
   // Disabling a focused textarea drops focus to <body>; restore it when the lock releases.
   const prevInputDisabled = useRef(inputDisabled);
@@ -346,14 +336,10 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   onRetryTruncateRef.current = onRetryTruncate;
   const handleRetry = useCallback(async () => {
     const msgs = messagesRef.current;
-    let userIdx = -1;
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i]?.role === "user") { userIdx = i; break; }
-    }
-    if (userIdx === -1) return;
+    const userIdx = msgs.findLastIndex((m) => m.role === "user");
     const msg = msgs[userIdx];
-    const textPart = msg.parts.find((p) => p.type === "text");
-    if (!textPart || textPart.type !== "text") return;
+    const text = msg ? textOf(msg) : "";
+    if (!text) return;
     // The failed message may be persisted already; trim it server-side too or the re-send duplicates it.
     try {
       await onRetryTruncateRef.current?.(userIdx);
@@ -364,7 +350,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
     const files = msg.parts.filter((p): p is FileUIPart => p.type === "file");
     setMessages(msgs.slice(0, userIdx));
     scrollToBottom({ animation: "instant" });
-    sendMessageRef.current({ text: textPart.text, files });
+    sendMessageRef.current({ text, files });
   }, [setMessages, scrollToBottom]);
 
   useImperativeHandle(
@@ -373,12 +359,10 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
       get messages() { return messagesRef.current; },
       setMessages,
       sendMessage: (msg) => sendMessageRef.current(msg),
-      setInput: (text) => {
-        setInput(text);
-        textareaRef.current?.focus();
-      },
       scrollToBottom,
       scrollToTop,
+      get streaming() { return stopRef.current.isLoading; },
+      stop: () => stopRef.current.handleStop(),
     }),
     [setMessages, scrollToBottom, scrollToTop],
   );
@@ -424,57 +408,55 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
       {dropOverlay}
       {header}
 
-      <div className="relative min-h-0 flex-1">
-        <div ref={scrollRef} className="h-full overflow-x-hidden overflow-y-auto" onCopy={normalizeClipboard}>
-          <div ref={contentRef} className="flex min-h-full flex-col bg-background">
-            {scrollHeader}
-            <div className={cn(column, "flex-1 space-y-8 pb-10", compact ? "pt-5" : "pt-6")}>
-              {alert && <AlertSummaryPanel summary={alert.summary} triage={alert.triage} />}
-              {beforeMessages}
-              {messages.length === 0 && status !== "submitted" && (
-                emptyHint ?? <p className="py-16 text-center text-sm text-muted-foreground">{placeholder}</p>
-              )}
-              {messages.map((msg, msgIndex) => msgIndex < firstRow ? null : (
-                <MessageRow
-                  key={msg.id || `msg-${msgIndex}`}
-                  msg={msgIndex === analysisOnlyIndex && analysisOnlyMsg ? analysisOnlyMsg : msg}
-                  msgIndex={msgIndex}
-                  isLast={msgIndex === messages.length - 1}
-                  isAnimating={msg.id === lastId}
-                  progressStore={progressStore}
-                  compact={compact}
-                  meta={meta}
-                  renderMessage={renderMessage}
-                />
-              ))}
-              {showWorking && <WorkingIndicator label="Investigating" />}
-              {!readOnly && !inputDisabled && needsContinue && (
-                <NoticeRow action={<Button variant="outline" size="sm" onClick={handleContinue}>Continue</Button>}>
-                  The reply was interrupted.
-                </NoticeRow>
-              )}
-              {canRetry && !error && onRetryTruncate && lastMessage?.role === "user" && (
-                <NoticeRow action={<Button variant="outline" size="sm" onClick={handleRetry}>Retry</Button>}>
-                  No reply to this message.
-                </NoticeRow>
-              )}
-              {canRetry && error && (
-                <NoticeRow tone="error" action={<Button variant="outline" size="sm" onClick={handleRetry}>Retry</Button>}>
-                  {error.message}
-                </NoticeRow>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="relative z-10 bg-background before:pointer-events-none before:absolute before:inset-x-0 before:bottom-full before:h-10 before:bg-linear-to-t before:from-background before:to-transparent">
-        <ScrollToBottomButton isAtBottom={isAtBottom} scrollToBottom={scrollToBottom} />
-        <div className={cn(column, compact ? "pt-1 pb-3" : "pt-1 pb-4")}>
-          <FollowUpTimerBar sessionId={chatId} />
-          {composer ?? readOnlyNotice}
-        </div>
-      </div>
+      <Transcript
+        scrollRef={scrollRef}
+        contentRef={contentRef}
+        isAtBottom={isAtBottom}
+        scrollToBottom={scrollToBottom}
+        header={scrollHeader}
+        compact={compact}
+        dock={
+          <>
+            <FollowUpTimerBar sessionId={chatId} />
+            {composer ?? readOnlyNotice}
+          </>
+        }
+      >
+        {alert && <AlertSummaryPanel summary={alert.summary} triage={alert.triage} />}
+        {beforeMessages}
+        {messages.length === 0 && status !== "submitted" && (
+          emptyHint ?? <p className="py-16 text-center text-sm text-muted-foreground">{placeholder}</p>
+        )}
+        {messages.map((msg, msgIndex) => msgIndex < firstRow ? null : (
+          <MessageRow
+            key={msg.id || `msg-${msgIndex}`}
+            msg={msgIndex === analysisOnlyIndex && analysisOnlyMsg ? analysisOnlyMsg : msg}
+            msgIndex={msgIndex}
+            isLast={msgIndex === messages.length - 1}
+            isAnimating={msg.id === lastId}
+            progressStore={progressStore}
+            compact={compact}
+            meta={meta}
+            renderMessage={renderMessage}
+          />
+        ))}
+        {showWorking && <WorkingIndicator label="Investigating" />}
+        {!readOnly && !inputDisabled && needsContinue && (
+          <NoticeRow action={<Button variant="outline" size="sm" onClick={handleContinue}>Continue</Button>}>
+            The reply was interrupted.
+          </NoticeRow>
+        )}
+        {canRetry && !error && onRetryTruncate && lastMessage?.role === "user" && (
+          <NoticeRow action={<Button variant="outline" size="sm" onClick={handleRetry}>Retry</Button>}>
+            No reply to this message.
+          </NoticeRow>
+        )}
+        {canRetry && error && (
+          <NoticeRow tone="error" action={<Button variant="outline" size="sm" onClick={handleRetry}>Retry</Button>}>
+            {error.message}
+          </NoticeRow>
+        )}
+      </Transcript>
     </div>
   );
 });

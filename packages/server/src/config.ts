@@ -74,8 +74,9 @@ export const CONFIG = {
 
   // ── Session follow-up timers ──
 
-  timerMinMinutes: 5,
-  timerMaxMinutes: 1440,
+  timerMinMinutes: 1,
+  timerMaxMinutes: 60,
+  timerFollowUpMinutes: 5,
   /** A timer may not fire later than this after its session was created. */
   timerMaxAfterSessionSeconds: 86_400,
   timerMaxWakeupsPerTick: 3,

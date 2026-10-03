@@ -4,8 +4,10 @@ export const WEB_CONFIG = {
   sessionStaleTimeMs: 30_000,
   /** Coalesces bursts of live session change events into one refetch. */
   sessionEventCoalesceMs: 100,
+  subscriptionRetryMaxMs: 10_000,
   monitorPollingMs: 60_000,
   updateCheckStaleTimeMs: 5 * 60 * 1000,
+  gcpProjectsStaleTimeMs: 5 * 60 * 1000,
   /** Grace period before probing a self-updating server, so the old one exits first. */
   updateRestartProbeDelayMs: 1_500,
   updateRestartPollMs: 1_000,

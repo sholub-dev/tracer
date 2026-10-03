@@ -1,7 +1,7 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { httpBatchStreamLink, httpSubscriptionLink, splitLink } from "@trpc/client";
+import { httpBatchStreamLink, httpSubscriptionLink, retryLink, splitLink } from "@trpc/client";
 import superjson from "superjson";
 import { trpc } from "./lib/trpc";
 import { WEB_CONFIG } from "./lib/config";
@@ -24,7 +24,11 @@ function Root() {
       links: [
         splitLink({
           condition: (op) => op.type === "subscription",
-          true: httpSubscriptionLink({ url: "/api/trpc", transformer: superjson }),
+          // A failed reconnect (e.g. 502 while the server restarts) otherwise ends the subscription for good.
+          true: [
+            retryLink({ retry: () => true, retryDelayMs: (attempt) => Math.min(1_000 * attempt, WEB_CONFIG.subscriptionRetryMaxMs) }),
+            httpSubscriptionLink({ url: "/api/trpc", transformer: superjson }),
+          ],
           false: httpBatchStreamLink({ url: "/api/trpc", transformer: superjson }),
         }),
       ],

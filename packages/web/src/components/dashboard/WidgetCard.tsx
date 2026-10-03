@@ -1,18 +1,9 @@
 import React, { useState } from "react";
 import { RotateCw, Trash2 } from "lucide-react";
 import { substituteTimeRange } from "@tracer-sh/shared";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { QueryChart } from "../charts/QueryChart";
-import { IconButton } from "../chat/IconButton";
+import { ConfirmDialog } from "../common/ConfirmDialog";
+import { IconButton } from "../common/IconButton";
 import { trpc } from "../../lib/trpc";
 
 class WidgetErrorBoundary extends React.Component<
@@ -78,18 +69,14 @@ export function WidgetCard({ widget, since, until }: { widget: Widget; since: st
         />
       </WidgetErrorBoundary>
 
-      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete "{widget.title}"?</AlertDialogTitle>
-            <AlertDialogDescription>The widget is removed from this dashboard. This cannot be undone.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={() => deleteMutation.mutate({ id: widget.id })}>Delete widget</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title={`Delete "${widget.title}"?`}
+        description="The widget is removed from this dashboard. This cannot be undone."
+        actionLabel="Delete widget"
+        onConfirm={() => deleteMutation.mutate({ id: widget.id })}
+      />
     </article>
   );
 }

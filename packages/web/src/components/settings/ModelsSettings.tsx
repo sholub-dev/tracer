@@ -1,7 +1,7 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
-import { ChevronRight, Loader2, TriangleAlert } from "lucide-react";
+import { Loader2, TriangleAlert } from "lucide-react";
 
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -10,7 +10,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 import { trpc } from "../../lib/trpc";
 import { useAvailableModels, useConfiguredProviders, useGcpAuthStatus } from "../../lib/hooks";
-import { AVAILABLE_MODELS, effectivePrices, groupModelsByProvider, modelKey, providerLabel } from "../../lib/models";
+import { AVAILABLE_MODELS, effectivePrices, groupModelsByProvider, modelKey, llmProviderLabel } from "../../lib/models";
+import { FoldTrigger } from "../common/FoldTrigger";
 import { ConnectionRow, Group, Row, Section } from "./parts";
 import { GOOGLE_AI_NOTE } from "./notes";
 import { GcloudHint, GcpProjectField } from "./GcpProjectField";
@@ -54,7 +55,7 @@ function ModelRow() {
           {unavailable && (
             <span className="mt-1 flex items-start gap-1.5 text-warning">
               <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-              {providerLabel(chatModel.provider)} · {chatModel.modelId} isn’t available. Configure its provider or pick
+              {llmProviderLabel(chatModel.provider)} · {chatModel.modelId} isn’t available. Configure its provider or pick
               another model.
             </span>
           )}
@@ -243,14 +244,10 @@ function Pricing() {
   const configured = useConfiguredProviders();
   return (
     <Collapsible className="rounded-lg border bg-card">
-      <CollapsibleTrigger className="group/trigger flex w-full items-center gap-2 rounded-lg px-4 py-3 text-left text-sm font-medium outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
-        <ChevronRight
-          className="size-4 text-muted-foreground transition-transform duration-200 ease-out group-data-[state=open]/trigger:rotate-90"
-          aria-hidden="true"
-        />
+      <FoldTrigger className="flex w-full items-center gap-2 rounded-lg px-4 py-3 text-left text-sm font-medium" chevronClassName="size-4 text-muted-foreground">
         Model pricing
         <span className="ml-auto text-[13px]/[18px] font-normal text-muted-foreground">Per 1M tokens</span>
-      </CollapsibleTrigger>
+      </FoldTrigger>
       <CollapsibleContent>
         <div className="border-t">
           <Table className="text-[13px]/[18px]">
@@ -268,7 +265,7 @@ function Pricing() {
                 return (
                   <TableRow key={m.modelId} className={cn("hover:bg-transparent", !configured.has(m.provider) && "text-muted-foreground")}>
                     <TableCell className="pl-4 font-mono text-xs">{m.modelId}</TableCell>
-                    <TableCell>{providerLabel(m.provider)}</TableCell>
+                    <TableCell>{llmProviderLabel(m.provider)}</TableCell>
                     <TableCell className="text-right tabular-nums">${inputPrice.toFixed(2)}</TableCell>
                     <TableCell className="pr-4 text-right tabular-nums">${outputPrice.toFixed(2)}</TableCell>
                   </TableRow>

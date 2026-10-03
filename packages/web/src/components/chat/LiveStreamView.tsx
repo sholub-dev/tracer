@@ -1,16 +1,15 @@
 import { useState, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { readUIMessageStream, type UIMessage, type UIMessageChunk } from "ai";
-import { cn } from "@/lib/utils";
 import { ProgressStore } from "../../lib/progress-store";
-import { handleProgressData, normalizeClipboard, stopChat } from "../../lib/chat-utils";
+import { handleProgressData, stopChat, useCompactedMessages } from "../../lib/chat-utils";
 import { useChatScroll, useEscapeToStop } from "../../lib/hooks";
 import { WEB_CONFIG } from "../../lib/config";
 import { AlertSummaryPanel, alertSummaryOf } from "./AlertSummaryPanel";
-import { WorkingIndicator, ScrollToBottomButton } from "./ChatIndicators";
-import { COLUMN } from "./ChatCore";
+import { WorkingIndicator } from "./ChatIndicators";
 import { Composer } from "./Composer";
 import { FollowUpTimerBar } from "./FollowUpTimerBar";
 import { MessageView } from "./MessageView";
+import { Transcript } from "./Transcript";
 
 interface LiveStreamViewProps {
   sessionId: string;
@@ -20,12 +19,16 @@ interface LiveStreamViewProps {
   header?: ReactNode;
   /** Rendered above the messages (compaction summary). */
   beforeMessages?: ReactNode;
+  /** Hide the first N messages, as in ChatCore. */
+  collapseCount?: number;
+  /** Render only the analysis section of this message, as in ChatCore. */
+  analysisOnlyIndex?: number;
   sources?: ReactNode;
   cost?: ReactNode;
 }
 
 /** Reconnects to an in-progress server stream over SSE and rebuilds the growing reply from replayed and live chunks. */
-export function LiveStreamView({ sessionId, initialMessages, onComplete, header, beforeMessages, sources, cost }: LiveStreamViewProps) {
+export function LiveStreamView({ sessionId, initialMessages, onComplete, header, beforeMessages, collapseCount = 0, analysisOnlyIndex, sources, cost }: LiveStreamViewProps) {
   const [messages, setMessages] = useState<UIMessage[]>(initialMessages);
   const progressStore = useRef(new ProgressStore()).current;
   const initialMessagesRef = useRef(initialMessages);
@@ -116,49 +119,47 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
   const alert = useMemo(() => alertSummaryOf(messages), [messages]);
   const lastIdx = messages.length - 1;
   const waiting = messages[lastIdx]?.role === "user";
+  const { collapse, analysisOnlyMsg } = useCompactedMessages(messages, collapseCount, analysisOnlyIndex);
 
   return (
     <div className="flex h-full flex-col">
-      <div className="relative min-h-0 flex-1">
-        <div ref={scrollRef} className="h-full overflow-x-hidden overflow-y-auto" onCopy={normalizeClipboard}>
-          <div ref={contentRef} className="flex min-h-full flex-col bg-background">
-            {header}
-            <div className={cn(COLUMN, "flex-1 space-y-6 pt-6 pb-10")}>
-              {alert && <AlertSummaryPanel summary={alert.summary} triage={alert.triage} />}
-              {beforeMessages}
-              {messages.map((message, index) => (
-                <MessageView
-                  key={message.id || `msg-${index}`}
-                  msg={message}
-                  isAnimating={message.role === "assistant" && index === lastIdx}
-                  progressStore={progressStore}
-                  showActions={false}
-                />
-              ))}
-              {waiting && <WorkingIndicator label="Investigating" />}
-            </div>
-          </div>
-        </div>
-        <ScrollToBottomButton isAtBottom={isAtBottom} scrollToBottom={scrollToBottom} />
-      </div>
-
-      <div className="relative z-10 bg-background">
-        <div className={cn(COLUMN, "pt-1 pb-4")}>
-          <FollowUpTimerBar sessionId={sessionId} />
-          <Composer
-            value=""
-            onChange={() => {}}
-            onSubmit={() => {}}
-            placeholder="Ask a follow-up"
-            canSend={false}
-            disabled
-            streaming
-            onStop={() => void stopChat(sessionId)}
-            sources={sources}
-            cost={cost}
+      <Transcript
+        scrollRef={scrollRef}
+        contentRef={contentRef}
+        isAtBottom={isAtBottom}
+        scrollToBottom={scrollToBottom}
+        header={header}
+        dock={
+          <>
+            <FollowUpTimerBar sessionId={sessionId} />
+            <Composer
+              value=""
+              onChange={() => {}}
+              onSubmit={() => {}}
+              placeholder="Ask a follow-up"
+              canSend={false}
+              disabled
+              streaming
+              onStop={() => void stopChat(sessionId)}
+              sources={sources}
+              cost={cost}
+            />
+          </>
+        }
+      >
+        {alert && <AlertSummaryPanel summary={alert.summary} triage={alert.triage} />}
+        {beforeMessages}
+        {messages.map((message, index) => index < collapse ? null : (
+          <MessageView
+            key={message.id || `msg-${index}`}
+            msg={index === analysisOnlyIndex && analysisOnlyMsg ? analysisOnlyMsg : message}
+            isAnimating={message.role === "assistant" && index === lastIdx}
+            progressStore={progressStore}
+            showActions={false}
           />
-        </div>
-      </div>
+        ))}
+        {waiting && <WorkingIndicator label="Investigating" />}
+      </Transcript>
     </div>
   );
 }

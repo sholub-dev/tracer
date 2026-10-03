@@ -2,33 +2,19 @@ import React, { useState, useRef, useEffect, useMemo, useCallback } from "react"
 import type { UIMessage } from "ai";
 import { Loader2, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import {
-  DEFAULT_SESSION_TITLE,
-  SESSION_KIND,
-  UNIFIED_SCOPE,
-  analysisSectionParts,
-  compactionUpTo,
-  isAnalysisMessage,
-} from "@tracer-sh/shared";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { DEFAULT_SESSION_TITLE, SESSION_KIND, UNIFIED_SCOPE, compactionUpTo, isAnalysisMessage } from "@tracer-sh/shared";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { trpc } from "../lib/trpc";
 import { useParsedMessages } from "../lib/chat-utils";
-import { formatTime } from "../lib/monitor-utils";
+import { useDeleteSession, usePersistedState } from "../lib/hooks";
+import { sessionKindLabel } from "../lib/session-kind";
+import { formatTime } from "../lib/format";
 import type { ProgressStore } from "../lib/progress-store";
 import { LiveStreamView } from "../components/chat/LiveStreamView";
-import { COLUMN, ChatCore, type ChatCoreRef, type RenderView } from "../components/chat/ChatCore";
-import { POST_MORTEM_PROMPT, monitorNameOf, transcriptOf } from "../components/chat/MessageView";
+import { ChatCore, type ChatCoreRef, type RenderView } from "../components/chat/ChatCore";
+import { COLUMN } from "../components/chat/Transcript";
+import { POST_MORTEM_PROMPT, monitorNameOf, textOf, transcriptOf } from "../components/chat/MessageView";
 import { copyText } from "../components/chat/MessageActions";
 import { SessionSummaryBlock } from "../components/chat/SessionSummaryBlock";
 import { SourcesToggle } from "../components/chat/SourcesToggle";
@@ -36,38 +22,16 @@ import { SessionHeader } from "../components/debug/SessionHeader";
 import { CostDisplay, computeCostBreakdown } from "../components/debug/CostDisplay";
 import { EditMessageForm } from "../components/debug/EditMessageForm";
 import { NewInvestigation } from "../components/debug/NewInvestigation";
+import { ConfirmDialog } from "../components/common/ConfirmDialog";
 
-const KIND_LABELS: Record<string, string> = {
-  [SESSION_KIND.MONITOR]: "Alert",
-  [SESSION_KIND.API]: "API",
-  [SESSION_KIND.IMPORTED]: "Imported",
-};
+const PROVIDER_KEY = "tracer:activeProvider";
 
 function sessionMeta(kind: string | null | undefined, messages: UIMessage[], at: number | undefined): string[] {
   return [
-    KIND_LABELS[kind ?? ""] ?? "Chat",
+    sessionKindLabel(kind),
     kind === SESSION_KIND.MONITOR ? monitorNameOf(messages) : undefined,
     at ? formatTime(at) : undefined,
   ].filter((s): s is string => !!s);
-}
-
-function useDeleteSession(sessionId: string, onDeleted: () => void) {
-  const utils = trpc.useUtils();
-  const mutation = trpc.sessions.delete.useMutation();
-  return () =>
-    mutation.mutate(
-      { id: sessionId },
-      {
-        onSuccess: () => {
-          utils.sessions.list.invalidate();
-          utils.monitors.triggers.invalidate();
-          utils.monitors.list.invalidate();
-          toast("Investigation deleted");
-          onDeleted();
-        },
-        onError: () => toast.error("Couldn't delete the investigation"),
-      },
-    );
 }
 
 function CompactBanner({ children, action }: { children: React.ReactNode; action?: React.ReactNode }) {
@@ -83,29 +47,22 @@ function CompactBanner({ children, action }: { children: React.ReactNode; action
 
 export function Debug({ sessionId, isNew, onDeleted }: { sessionId: string; isNew: boolean; onDeleted: () => void }) {
   // Everyone starts in the cross-provider unified scope; picking a provider is remembered across sessions.
-  const [activeProvider, setActiveProviderRaw] = useState<string | null>(
-    () => localStorage.getItem("tracer:activeProvider") ?? UNIFIED_SCOPE,
-  );
-  const setActiveProvider = useCallback((type: string) => {
-    localStorage.setItem("tracer:activeProvider", type);
-    setActiveProviderRaw(type);
-  }, []);
+  const [activeProvider, setActiveProvider] = usePersistedState<string>(PROVIDER_KEY, UNIFIED_SCOPE);
 
   const utils = trpc.useUtils();
   const markViewed = trpc.sessions.markViewed.useMutation();
-  const deleteSession = useDeleteSession(sessionId, onDeleted);
+  const deleteSessionById = useDeleteSession({ onDeleted });
+  const deleteSession = () => deleteSessionById(sessionId);
 
   const sessionQuery = trpc.sessions.get.useQuery({ id: sessionId }, { gcTime: 0, enabled: !isNew });
-  const sessionStatus = sessionQuery.data?.status;
 
-  // Mark the session viewed on select, updating the list caches optimistically.
+  // Mark the open session viewed whenever the list shows it unread (on select, or when a run finishes here).
+  const listStatus = trpc.sessions.list.useQuery(undefined, { select: (l) => l.find((s) => s.id === sessionId)?.status }).data;
   useEffect(() => {
-    const session = utils.sessions.list.getData()?.find((s) => s.id === sessionId);
-    if (!session || session.status === "idle" || session.status === "streaming") return;
+    if (!listStatus || listStatus === "idle" || listStatus === "streaming") return;
     utils.sessions.list.setData(undefined, (prev) => prev?.map((s) => (s.id === sessionId ? { ...s, status: "idle" } : s)));
-    utils.sessions.activeCount.setData(undefined, (prev) => (prev ? { ...prev, done: Math.max(0, prev.done - 1) } : prev));
     markViewed.mutate({ id: sessionId });
-  }, [sessionId, sessionStatus]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sessionId, listStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const initialMessages = useParsedMessages(sessionQuery.data?.messagesJson);
 
@@ -132,17 +89,13 @@ export function Debug({ sessionId, isNew, onDeleted }: { sessionId: string; isNe
     const live = sessionQuery.data;
     const liveMsgs = initialMessages ?? [];
     const liveUpTo = live.summary && live.summaryUpTo && live.summaryUpTo <= liveMsgs.length ? live.summaryUpTo : 0;
-    const liveTail = liveUpTo > 0 ? liveMsgs.slice(liveUpTo) : liveMsgs;
-    // A kept analysis boundary heads the tail; show only its analysis section, like the regular compacted view.
-    if (liveUpTo > 0 && liveTail[0]?.role === "assistant") {
-      const parts = analysisSectionParts(liveTail[0].parts);
-      if (parts) liveTail[0] = { ...liveTail[0], parts };
-    }
     body = (
       <LiveStreamView
         key={sessionId}
         sessionId={sessionId}
-        initialMessages={liveTail}
+        initialMessages={liveMsgs}
+        collapseCount={liveUpTo}
+        analysisOnlyIndex={liveUpTo > 0 ? liveUpTo : undefined}
         onComplete={() => sessionQuery.refetch()}
         header={
           <SessionHeader
@@ -340,10 +293,11 @@ function DebugChat({ chatId, initialMessages, sources, cost, activeProvider, ses
   };
 
   const handleStartEdit = (index: number) => {
-    const textPart = coreRef.current?.messages[index]?.parts.find((p) => p.type === "text");
-    if (!textPart || textPart.type !== "text") return;
+    const msg = coreRef.current?.messages[index];
+    const text = msg ? textOf(msg) : "";
+    if (!text) return;
     setEditingIndex(index);
-    setEditText(textPart.text);
+    setEditText(text);
   };
 
   const handleEditSubmit = async (text: string) => {
@@ -532,7 +486,7 @@ function DebugChat({ chatId, initialMessages, sources, cost, activeProvider, ses
         sourceCreatedAt={sessionUpdatedAt}
         resolveSourceTitle={resolveSourceTitle}
         scrollHeader={header}
-        emptyState={(composer) => <NewInvestigation composer={composer} onPick={(text) => coreRef.current?.setInput(text)} />}
+        emptyState={(composer) => <NewInvestigation composer={composer} />}
         beforeMessages={
           summary ? (
             <SessionSummaryBlock
@@ -564,13 +518,10 @@ function DebugChat({ chatId, initialMessages, sources, cost, activeProvider, ses
           if (msgs.length > 0) setHasMessages(true);
           setHasBoundary(hasCompactBoundary(msgs));
           if (status === "submitted") {
-            let added = false;
             utils.sessions.list.setData(undefined, (prev) => {
               if (!prev || prev.some((s) => s.id === chatId)) return prev;
-              added = true;
               return [{ id: chatId, title: DEFAULT_SESSION_TITLE, status: "streaming", kind: null, updatedAt: Math.floor(Date.now() / 1000), titlePending: true }, ...prev];
             });
-            if (added) utils.sessions.activeCount.setData(undefined, (prev) => (prev ? { ...prev, streaming: prev.streaming + 1 } : prev));
           }
           if (status === "ready") {
             if (!hasMarkedViewed.current) {
@@ -586,18 +537,14 @@ function DebugChat({ chatId, initialMessages, sources, cost, activeProvider, ses
         renderMessage={renderMessage}
       />
 
-      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete from here?</AlertDialogTitle>
-            <AlertDialogDescription>This message and everything after it are removed. This cannot be undone.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={handleDeleteConfirm}>Delete</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title="Delete from here?"
+        description="This message and everything after it are removed. This cannot be undone."
+        actionLabel="Delete"
+        onConfirm={handleDeleteConfirm}
+      />
     </>
   );
 }

@@ -1,10 +1,11 @@
 import { memo, useRef, type ReactNode } from "react";
 import type { UIMessage } from "ai";
-import { Bell, ChevronRight, FileText, Timer } from "lucide-react";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Bell, FileText, Timer } from "lucide-react";
+import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import type { ProgressStore } from "../../lib/progress-store";
-import { formatTime } from "../../lib/monitor-utils";
+import { formatTime } from "../../lib/format";
+import { FoldTrigger } from "../common/FoldTrigger";
 import { FileAttachment, MessageParts } from "./MessageParts";
 import { MessageActions, extractMessageText, type SourceMeta } from "./MessageActions";
 
@@ -44,7 +45,7 @@ function eventOf(text: string): ServerEvent | null {
   return null;
 }
 
-const textOf = (msg: UIMessage) => msg.parts.find((p): p is { type: "text"; text: string } => p.type === "text")?.text ?? "";
+export const textOf = (msg: UIMessage) => msg.parts.find((p): p is { type: "text"; text: string } => p.type === "text")?.text ?? "";
 
 /** The monitor that started an alert session, from its first message. */
 export function monitorNameOf(messages: UIMessage[]): string | undefined {
@@ -68,7 +69,7 @@ function EventRow({ event, prompt }: { event: ServerEvent; prompt: string }) {
   const Icon = event.kind === "alert" ? Bell : Timer;
   return (
     <Collapsible>
-      <CollapsibleTrigger className="group/trigger flex w-full items-center gap-3 rounded-lg text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+      <FoldTrigger chevronEnd chevronClassName="text-muted-foreground" className="flex w-full items-center gap-3 rounded-lg text-left">
         <span
           className={cn(
             "flex size-7 shrink-0 items-center justify-center rounded-full",
@@ -79,9 +80,8 @@ function EventRow({ event, prompt }: { event: ServerEvent; prompt: string }) {
         </span>
         <span className="min-w-0 flex-1 text-sm text-ink-2">{event.text}</span>
         {event.time && <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{event.time}</span>}
-        <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 group-data-[state=open]/trigger:rotate-90" aria-hidden="true" />
         <span className="sr-only">Show the message Tracer received</span>
-      </CollapsibleTrigger>
+      </FoldTrigger>
       <CollapsibleContent>
         <pre className="mt-2 ml-10 max-h-80 overflow-auto rounded-md border bg-card px-3 py-2.5 font-mono text-xs leading-relaxed whitespace-pre-wrap text-ink-2">{prompt}</pre>
       </CollapsibleContent>
@@ -90,7 +90,7 @@ function EventRow({ event, prompt }: { event: ServerEvent; prompt: string }) {
 }
 
 export interface MessageViewOptions {
-  /** Extra hover actions after the defaults (edit, delete from here). */
+  /** Extra actions after the defaults (edit, delete from here). */
   actions?: ReactNode;
   showActions?: boolean;
   /** Replaces the message body, e.g. an edit form. */
@@ -157,7 +157,7 @@ export const MessageView = memo(function MessageView({ msg, isAnimating, progres
           )}
         >
           {showActions && (
-            <MessageActions parts={msg.parts} contentRef={contentRef} download={!isUser} meta={meta}>
+            <MessageActions parts={msg.parts} contentRef={contentRef} download={!isUser} hoverOnly={isUser} meta={meta}>
               {actions}
             </MessageActions>
           )}

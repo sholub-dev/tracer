@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import type { UIMessage } from "ai";
 import type { ProgressStore } from "./progress-store";
-import type { ProgressPart } from "@tracer-sh/shared";
+import { analysisSectionParts, type ProgressPart } from "@tracer-sh/shared";
 
 /** Shared onData handler for progress store updates (ChatCore and LiveStreamView). */
 export function handleProgressData(
@@ -51,6 +51,11 @@ export function handleProgressData(
   });
 }
 
+/** A tool result the server rejected comes back as `{ error }`. */
+export function hasErrorOutput(output: unknown): output is { error: unknown } {
+  return !!output && typeof output === "object" && "error" in output;
+}
+
 /** Ask the server to abort a session's in-flight stream. */
 export function stopChat(sessionId: string): Promise<void> {
   return fetch("/api/chat/stop", {
@@ -79,4 +84,21 @@ export function useParsedMessages(json: string | undefined): UIMessage[] | undef
       return [];
     }
   }, [json]);
+}
+
+/** Only the analysis section of a kept compaction boundary; null when it has none. */
+function analysisOnly(msg: UIMessage | undefined): UIMessage | null {
+  if (!msg || msg.role !== "assistant") return null;
+  const parts = analysisSectionParts(msg.parts);
+  return parts ? { ...msg, parts } : null;
+}
+
+/** Render-only compaction: rows before `collapse` are hidden and the boundary row shows only its analysis. */
+export function useCompactedMessages(messages: UIMessage[], collapseCount: number, analysisOnlyIndex: number | undefined) {
+  // A boundary past the list end (stale summary) hides nothing.
+  const collapse = collapseCount <= messages.length ? collapseCount : 0;
+  // Keyed on the boundary message itself, so its row's memo survives streamed tokens.
+  const boundaryMsg = analysisOnlyIndex !== undefined ? messages[analysisOnlyIndex] : undefined;
+  const analysisOnlyMsg = useMemo(() => analysisOnly(boundaryMsg), [boundaryMsg]);
+  return { collapse, analysisOnlyMsg };
 }

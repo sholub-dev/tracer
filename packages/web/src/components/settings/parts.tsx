@@ -6,18 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
+import { ConfirmDialog } from "../common/ConfirmDialog";
 import { ProviderDot } from "../common/ProviderDot";
 
 export function Section({ title, description, children }: { title: string; description: string; children: ReactNode }) {
@@ -112,33 +102,22 @@ type ConfirmProps = {
 };
 
 export function ConfirmButton({ title, description, action, onConfirm, disabled, trigger, triggerLabel, size = "sm" }: ConfirmProps) {
+  const [open, setOpen] = useState(false);
   return (
-    <AlertDialog>
-      <AlertDialogTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size={size}
-          disabled={disabled}
-          aria-label={triggerLabel}
-          className="text-destructive hover:bg-destructive-tint hover:text-destructive"
-        >
-          {trigger}
-        </Button>
-      </AlertDialogTrigger>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>{title}</AlertDialogTitle>
-          <AlertDialogDescription>{description}</AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction variant="destructive" onClick={onConfirm}>
-            {action}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        size={size}
+        disabled={disabled}
+        aria-label={triggerLabel}
+        onClick={() => setOpen(true)}
+        className="text-destructive hover:bg-destructive-tint hover:text-destructive"
+      >
+        {trigger}
+      </Button>
+      <ConfirmDialog open={open} onOpenChange={setOpen} title={title} description={description} actionLabel={action} onConfirm={onConfirm} />
+    </>
   );
 }
 
@@ -304,7 +283,7 @@ export function ConnectionRow({
                       onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
                       onFocus={(e) => masked && e.target.select()}
                       placeholder={f.placeholder ?? `Enter ${f.label.toLowerCase()}`}
-                      autoComplete="off"
+                      autoComplete={f.type === "password" ? "new-password" : "off"}
                       aria-invalid={masked || undefined}
                       className={cn(
                         "bg-card",
@@ -342,10 +321,16 @@ export function ConnectionRow({
                   action={remove.label}
                   disabled={busy}
                   onConfirm={async () => {
-                    await remove.onConfirm();
+                    const removing = remove.label === "Remove";
+                    try {
+                      await remove.onConfirm();
+                    } catch (err) {
+                      toast.error(`Couldn't ${removing ? "remove" : "disconnect"} ${name}`, { description: err instanceof Error ? err.message : undefined });
+                      return;
+                    }
                     setOpen(false);
                     setResult(null);
-                    toast(`${name} ${remove.label === "Remove" ? "removed" : "disconnected"}`);
+                    toast(`${name} ${removing ? "removed" : "disconnected"}`);
                   }}
                 />
               </span>

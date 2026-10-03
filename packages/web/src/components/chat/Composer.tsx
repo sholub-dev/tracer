@@ -2,7 +2,7 @@ import { useRef, type ReactNode, type RefObject } from "react";
 import { ArrowUp, FileText, Paperclip, Square, X } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { IconButton } from "./IconButton";
+import { IconButton } from "../common/IconButton";
 
 export type Attachment = { file: File; url: string | null };
 

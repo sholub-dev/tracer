@@ -32,7 +32,7 @@ const LLM_PROVIDER_LABELS: Record<string, string> = {
   "google-vertex": "Vertex AI",
 };
 
-export function providerLabel(provider: string): string {
+export function llmProviderLabel(provider: string): string {
   return LLM_PROVIDER_LABELS[provider] ?? provider;
 }
 
@@ -54,7 +54,7 @@ export function groupModelsByProvider(
       const ib = PROVIDER_ORDER.indexOf(b);
       return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
     })
-    .map((provider) => ({ provider, label: providerLabel(provider), models: byProvider.get(provider)! }));
+    .map((provider) => ({ provider, label: llmProviderLabel(provider), models: byProvider.get(provider)! }));
 }
 
 export const AVAILABLE_MODELS = [

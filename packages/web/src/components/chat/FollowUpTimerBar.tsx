@@ -4,7 +4,7 @@ import { unixNow } from "@tracer-sh/shared";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { trpc } from "../../lib/trpc";
-import { formatTime } from "../../lib/monitor-utils";
+import { formatTime } from "../../lib/format";
 
 const countdown = (secs: number) => {
   const m = Math.floor(secs / 60);

@@ -1,23 +1,15 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { History, Trash2, X } from "lucide-react";
-import { toast } from "sonner";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
+import { useDeleteSession } from "../../lib/hooks";
 import { trpc } from "../../lib/trpc";
-import { formatTime } from "../../lib/monitor-utils";
+import { formatTime } from "../../lib/format";
+import { ConfirmDialog } from "../common/ConfirmDialog";
+import { IconButton } from "../common/IconButton";
+import type { ChatCoreRef } from "../chat/ChatCore";
 import { MonitorChatPanel } from "./MonitorChatPanel";
 
 type BuilderChat = { id: string; title: string; status: string; updatedAt: number };
@@ -33,6 +25,7 @@ interface BuilderSheetProps {
 export function BuilderSheet({ sessionId, editingName, initialInput, onOpenChat, onClose }: BuilderSheetProps) {
   const chats = trpc.monitors.builderChats.useQuery().data ?? [];
   const current = chats.find((c) => c.id === sessionId);
+  const chatRef = useRef<ChatCoreRef>(null);
   const title = editingName ? `Edit ${editingName}` : current?.title || "New monitor";
 
   return (
@@ -41,6 +34,12 @@ export function BuilderSheet({ sessionId, editingName, initialInput, onOpenChat,
         side="right"
         showCloseButton={false}
         className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl"
+        // While a reply streams, Esc stops it instead of closing the sheet.
+        onEscapeKeyDown={(e) => {
+          if (!chatRef.current?.streaming) return;
+          e.preventDefault();
+          chatRef.current.stop();
+        }}
         onOpenAutoFocus={(e) => {
           e.preventDefault();
           const content = e.currentTarget as HTMLElement;
@@ -51,18 +50,11 @@ export function BuilderSheet({ sessionId, editingName, initialInput, onOpenChat,
           <SheetTitle className="min-w-0 flex-1 truncate text-lg font-semibold">{title}</SheetTitle>
           <SheetDescription className="sr-only">Describe what to watch and the agent writes and tests the query.</SheetDescription>
           <BuilderChats chats={chats} currentId={sessionId} onOpen={onOpenChat} onDeletedCurrent={onClose} />
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <SheetClose asChild>
-                <Button variant="ghost" size="icon-sm" aria-label="Close">
-                  <X />
-                </Button>
-              </SheetClose>
-            </TooltipTrigger>
-            <TooltipContent side="left">Close</TooltipContent>
-          </Tooltip>
+          <IconButton label="Close" side="left" onClick={onClose}>
+            <X />
+          </IconButton>
         </SheetHeader>
-        {sessionId && <MonitorChatPanel key={sessionId} sessionId={sessionId} initialInput={initialInput} />}
+        {sessionId && <MonitorChatPanel ref={chatRef} key={sessionId} sessionId={sessionId} initialInput={initialInput} />}
       </SheetContent>
     </Sheet>
   );
@@ -78,15 +70,7 @@ interface BuilderChatsProps {
 function BuilderChats({ chats, currentId, onOpen, onDeletedCurrent }: BuilderChatsProps) {
   const [open, setOpen] = useState(false);
   const [deleting, setDeleting] = useState<BuilderChat | null>(null);
-  const utils = trpc.useUtils();
-  const remove = trpc.sessions.delete.useMutation({
-    onSuccess: (_, { id }) => {
-      utils.monitors.builderChats.invalidate();
-      utils.sessions.list.invalidate();
-      if (id === currentId) onDeletedCurrent();
-    },
-    onError: (e) => toast.error(e.message),
-  });
+  const deleteChat = useDeleteSession({ noun: "chat", onDeleted: (id) => id === currentId && onDeletedCurrent() });
 
   return (
     <>
@@ -116,20 +100,15 @@ function BuilderChats({ chats, currentId, onOpen, onDeletedCurrent }: BuilderCha
                     </span>
                     <span className="text-xs text-muted-foreground tabular-nums">{formatTime(c.updatedAt)}</span>
                   </button>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={`Delete ${c.title || "chat"}`}
-                        onClick={() => setDeleting(c)}
-                        className="absolute right-1.5 text-muted-foreground opacity-0 group-focus-within/chat:opacity-100 group-hover/chat:opacity-100 hover:text-destructive [@media(hover:none)]:opacity-100"
-                      >
-                        <Trash2 />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="left">Delete chat</TooltipContent>
-                  </Tooltip>
+                  <IconButton
+                    label={`Delete ${c.title || "chat"}`}
+                    side="left"
+                    size="icon-xs"
+                    onClick={() => setDeleting(c)}
+                    className="absolute right-1.5 text-muted-foreground opacity-0 group-focus-within/chat:opacity-100 group-hover/chat:opacity-100 hover:text-destructive [@media(hover:none)]:opacity-100"
+                  >
+                    <Trash2 />
+                  </IconButton>
                 </li>
               ))}
             </ul>
@@ -137,20 +116,14 @@ function BuilderChats({ chats, currentId, onOpen, onDeletedCurrent }: BuilderCha
         </PopoverContent>
       </Popover>
 
-      <AlertDialog open={deleting !== null} onOpenChange={(o) => !o && setDeleting(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete this builder chat?</AlertDialogTitle>
-            <AlertDialogDescription>
-              "{deleting?.title || "Untitled chat"}" is removed. Monitors it created stay. This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={() => deleting && remove.mutate({ id: deleting.id })}>Delete</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={deleting !== null}
+        onOpenChange={(o) => !o && setDeleting(null)}
+        title="Delete this builder chat?"
+        description={`"${deleting?.title || "Untitled chat"}" is removed. Monitors it created stay. This cannot be undone.`}
+        actionLabel="Delete"
+        onConfirm={() => deleting && deleteChat(deleting.id)}
+      />
     </>
   );
 }

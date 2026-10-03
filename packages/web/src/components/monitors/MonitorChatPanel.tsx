@@ -1,14 +1,15 @@
+import { forwardRef } from "react";
 import { Loader2 } from "lucide-react";
 import { trpc } from "../../lib/trpc";
 import { useParsedMessages } from "../../lib/chat-utils";
-import { ChatCore } from "../chat/ChatCore";
+import { ChatCore, type ChatCoreRef } from "../chat/ChatCore";
 
 interface MonitorChatPanelProps {
   sessionId: string;
   initialInput?: string;
 }
 
-export function MonitorChatPanel({ sessionId, initialInput }: MonitorChatPanelProps) {
+export const MonitorChatPanel = forwardRef<ChatCoreRef, MonitorChatPanelProps>(function MonitorChatPanel({ sessionId, initialInput }, ref) {
   const utils = trpc.useUtils();
   const sessionQuery = trpc.sessions.get.useQuery({ id: sessionId }, { gcTime: 0 });
   const persistedMessages = useParsedMessages(sessionQuery.data?.messagesJson);
@@ -23,6 +24,7 @@ export function MonitorChatPanel({ sessionId, initialInput }: MonitorChatPanelPr
 
   return (
     <ChatCore
+      ref={ref}
       key={sessionId}
       chatId={sessionId}
       initialMessages={persistedMessages}
@@ -43,4 +45,4 @@ export function MonitorChatPanel({ sessionId, initialInput }: MonitorChatPanelPr
       }}
     />
   );
-}
+});

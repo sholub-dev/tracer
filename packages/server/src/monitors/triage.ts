@@ -112,7 +112,7 @@ const issueList = (issues: { issueId: string; conditionName: string; title: stri
 // In the tool result too, so later chat turns can explain what the report did in New Relic.
 export const TRIAGE_EFFECT = "Alert triage is on: after this run Tracer acts on these issues from your report_issue_status. Stopped: Tracer acks and closes the issue in New Relic, which closes its JSM alert. Ongoing or recurring: left open and followed up if you set a timer. Unknown: left open and people are pinged.";
 const REPORT_INSTRUCTION = "call report_issue_status once with the severity and, for each issue id above, its status: stopped, ongoing, recurring or unknown.";
-const FOLLOW_UP_INSTRUCTION = `If any issue is ongoing or recurring, call set_timer with ${CONFIG.timerMinMinutes} minutes: while an incident is live, checking too often is better than waiting too long. Without a timer it is left open.`;
+const FOLLOW_UP_INSTRUCTION = `If any issue is ongoing or recurring, call set_timer with ${CONFIG.timerFollowUpMinutes} minutes: while an incident is live, checking too often is better than waiting too long. Without a timer it is left open.`;
 
 export function issuesPrompt(open: AiIssue[]): string[] {
   if (open.length === 0) return [];

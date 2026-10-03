@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { trpc } from "../lib/trpc";
 import { BuilderSheet } from "../components/monitors/BuilderSheet";
 import { MonitorCard } from "../components/monitors/MonitorCard";
-import { TimeRangePicker } from "../components/ui/TimeRangePicker";
+import { TimeRangePicker } from "../components/common/TimeRangePicker";
 
 interface MonitorsProps {
   builderSessionId?: string;
@@ -20,13 +20,13 @@ type Editing = { sessionId: string; name: string };
 const newBuilderId = () => `${SESSION_PREFIX.MONITORS}${crypto.randomUUID()}`;
 const LIST_POLL_MS = 30_000;
 const RANGE_PRESETS = [
-  { label: "1h", since: "1 hour ago", long: "1 hour" },
-  { label: "3h", since: "3 hours ago", long: "3 hours" },
-  { label: "6h", since: "6 hours ago", long: "6 hours" },
-  { label: "24h", since: "24 hours ago", long: "24 hours" },
-  { label: "7d", since: "7 days ago", long: "7 days" },
-  { label: "30d", since: "30 days ago", long: "30 days" },
-  { label: "90d", since: "90 days ago", long: "90 days" },
+  { label: "1h", since: "1 hour ago" },
+  { label: "3h", since: "3 hours ago" },
+  { label: "6h", since: "6 hours ago" },
+  { label: "24h", since: "24 hours ago" },
+  { label: "7d", since: "7 days ago" },
+  { label: "30d", since: "30 days ago" },
+  { label: "90d", since: "90 days ago" },
 ] as const;
 const DEFAULT_RANGE = "24 hours ago";
 
@@ -38,8 +38,7 @@ const toWidth = (w: number | null | undefined): CardWidth => (w === 75 || w === 
 export function Monitors({ builderSessionId, onNavigate: navigate, onOpenBuilder, onCloseBuilder }: MonitorsProps) {
   const [editing, setEditing] = useState<Editing | null>(null);
   const [storedSince, setSince] = usePersistedState<string>("tracer:monitorsSince", DEFAULT_RANGE);
-  const range = RANGE_PRESETS.find((p) => p.since === storedSince) ?? RANGE_PRESETS.find((p) => p.since === DEFAULT_RANGE)!;
-  const since = range.since;
+  const since = RANGE_PRESETS.some((p) => p.since === storedSince) ? storedSince : DEFAULT_RANGE;
   const utils = trpc.useUtils();
   const listQuery = trpc.monitors.list.useQuery();
   const monitors = listQuery.data ?? [];
@@ -179,7 +178,7 @@ export function Monitors({ builderSessionId, onNavigate: navigate, onOpenBuilder
               key={m.id}
               monitor={m}
               since={since}
-              rangeLabel={range.long}
+              rangeLabel={since.replace(/ ago$/, "")}
               spanClass={SPAN_CLASS[resizing?.id === m.id ? resizing.width : toWidth(m.cardWidth)]}
               isDragging={dragId === m.id}
               isTarget={!!dragId && overId === m.id && dragId !== m.id}

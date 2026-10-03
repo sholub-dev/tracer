@@ -8,18 +8,18 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { formatShortDate } from "../../lib/format";
+import { providerLabel } from "../../lib/providers";
 import { trpc } from "../../lib/trpc";
 import { ProviderDot } from "../common/ProviderDot";
+import { SegmentedControl } from "../common/SegmentedControl";
 import { ConfirmButton, Section } from "./parts";
 
 const PAGE = 10;
 const ALL = "all";
 
 type Memory = { id: number; toolName: string; note: string; reviewNote: string | null; createdAt: number };
-
-const formatDate = (sec: number) => new Date(sec * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 
 export function MemorySettings() {
   const utils = trpc.useUtils();
@@ -40,7 +40,7 @@ export function MemorySettings() {
   const [adding, setAdding] = useState(false);
 
   const labels = useMemo(
-    () => new Map<string, string>([["unified", "Unified"], ...(types ?? []).map((t) => [t.type, t.label] as [string, string])]),
+    () => new Map<string, string>([["unified", "Unified"], ...(types ?? []).map((t) => [t.type, providerLabel(t.type, t.label)] as [string, string])]),
     [types],
   );
   const labelOf = (toolName: string) => labels.get(toolName) ?? toolName;
@@ -63,29 +63,23 @@ export function MemorySettings() {
   return (
     <Section title="Memory" description="Lessons the agents saved while querying. They read them before every question.">
       <div className="flex flex-wrap items-center gap-2">
-        <ToggleGroup
-          type="single"
-          size="sm"
-          spacing={0.5}
-          aria-label="Filter memories by source"
+        <SegmentedControl
+          label="Filter memories by source"
           value={filter}
           onValueChange={(v) => {
-            if (!v) return;
             setFilter(v);
             setPage(0);
           }}
-          className="max-w-full overflow-x-auto rounded-lg bg-muted p-0.5"
-        >
-          {[[ALL, memories?.length ?? 0] as const, ...counts].map(([key, n]) => (
-            <ToggleGroupItem
-              key={key}
-              value={key}
-              className="h-7 min-w-0 rounded-md px-2.5 text-xs font-medium text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:shadow-xs"
-            >
-              {key === ALL ? "All" : labelOf(key)} <span className="tabular-nums">{n}</span>
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
+          options={[[ALL, memories?.length ?? 0] as const, ...counts].map(([key, n]) => ({
+            value: key,
+            label: (
+              <>
+                {key === ALL ? "All" : labelOf(key)} <span className="tabular-nums">{n}</span>
+              </>
+            ),
+          }))}
+          className="max-w-full overflow-x-auto"
+        />
         <span className="flex-1" />
         <Tooltip>
           <TooltipTrigger asChild>
@@ -212,7 +206,7 @@ function MemoryRow({ memory, label }: { memory: Memory; label: string }) {
         {memory.reviewNote && <p className="mt-0.5 text-[13px]/[18px] text-muted-foreground italic">{memory.reviewNote}</p>}
         <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
           <ProviderDot provider={memory.toolName} />
-          {label} · {formatDate(memory.createdAt)}
+          {label} · {formatShortDate(memory.createdAt)}
         </p>
       </div>
       <div className="-my-0.5 flex shrink-0 gap-1 transition-opacity duration-150 group-focus-within/row:opacity-100 group-hover/row:opacity-100 [@media(hover:hover)]:opacity-0">

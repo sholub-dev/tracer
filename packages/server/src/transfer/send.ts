@@ -66,9 +66,10 @@ function failure(err: unknown): string {
 }
 
 async function measureFullCopy(db: Db): Promise<FullCopySize> {
-  const text = JSON.stringify(await exportSnapshot(db));
-  const bytes = pack(text).length;
-  return { bytes, limitBytes: limits.packed, fits: bytes <= limits.packed && text.length <= limits.unpacked };
+  // Bytes, not string length: seal applies the limits to the UTF-8 bytes.
+  const plain = new TextEncoder().encode(JSON.stringify(await exportSnapshot(db)));
+  const bytes = pack(plain).length;
+  return { bytes, limitBytes: limits.packed, fits: bytes <= limits.packed && plain.length <= limits.unpacked };
 }
 
 function lanAddress(): string | null {

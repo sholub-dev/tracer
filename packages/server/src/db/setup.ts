@@ -25,7 +25,8 @@ const UNSYNCED_COLUMNS: Record<string, string[]> = {
   chat_sessions: ["status"],
 };
 
-const NOW_MS = "CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)";
+// ROUND, not CAST: the float math lands just under the millisecond, behind the JS clock that sync marks use.
+const NOW_MS = "CAST(ROUND((julianday('now') - 2440587.5) * 86400000) AS INTEGER)";
 
 export async function runSetup(sqlite: SetupDriver): Promise<void> {
   await sqlite.exec(`

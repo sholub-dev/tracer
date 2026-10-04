@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import Database from "better-sqlite3-multiple-ciphers";
 import { createNodeDb } from "../db/node-db.js";
 import { runSetup } from "../db/setup.js";
-import { appSettings, chatSessions, monitors, monitorTriggers, providerConfigs } from "../db/schema.js";
+import { appSettings, chatSessions, monitors, monitorTriggers, providerConfigs, syncRows } from "../db/schema.js";
 import { limits, MAX_SYNC_BYTES, MAX_UNPACKED_BYTES, randomSecret, seal, TooLargeError, unseal } from "./crypto.js";
 import { exportSnapshot, FORMAT, importSnapshot } from "./snapshot.js";
 import { exportSyncPayload } from "./sync.js";
@@ -188,6 +188,16 @@ test("replace waits for approval, then copies and records the peer", async (t) =
   assert.equal(await setting(phone, "sync_peer_id"), await setting(computer, "device_id"));
   assert.ok(Number(await setting(phone, "sync_last_at")) > 0);
   assert.match((await setting(computer, "sync_peer_name")) ?? "", /^iPhone /);
+});
+
+test("a change logged after a sync mark is never older than the mark", async () => {
+  const db = await freshDb();
+  for (let i = 0; i < 500; i++) {
+    const mark = Date.now();
+    await db.insert(chatSessions).values({ id: `c${i}`, title: "T", messages: "[]", status: "done" }).run();
+    const logged = await db.select().from(syncRows).where(eq(syncRows.rowKey, `c${i}`)).get();
+    assert.ok(logged!.localAt >= mark, `logged ${logged!.localAt} before mark ${mark}`);
+  }
 });
 
 test("merge keeps rows from both devices", async (t) => {

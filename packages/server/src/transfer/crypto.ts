@@ -26,9 +26,9 @@ export function randomSecret(): string {
 
 const importKey = (key: string) => crypto.subtle.importKey("raw", decode(key), "AES-GCM", false, ["encrypt", "decrypt"]);
 
-/** Compresses the text. Does not apply the limits. */
-export function pack(text: string): Uint8Array {
-  return deflateSync(new TextEncoder().encode(text));
+/** Compresses the bytes. Does not apply the limits. */
+export function pack(plain: Uint8Array): Uint8Array {
+  return deflateSync(plain);
 }
 
 export async function seal(text: string, key: string): Promise<string> {

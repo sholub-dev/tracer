@@ -5,13 +5,15 @@ interface MessagePart {
   type: string;
   text?: string;
   input?: { query?: string };
-  output?: { parts?: Array<{ query?: string; results?: unknown }>; analysis?: string };
+  output?: { parts?: Array<{ query?: string; results?: unknown; totalRows?: number }>; analysis?: string };
 }
 
 export interface QueryRecord {
   tool: string;
   query: string;
   results: unknown;
+  /** Set when the saved session keeps only the first rows of `results`. */
+  totalRows?: number;
 }
 
 /** Cap a single result payload so large timeseries don't bloat the response. */
@@ -27,10 +29,10 @@ export function renderToolPart(p: MessagePart, queries: QueryRecord[]): string {
   const tool = p.type.replace(/^tool-/, "");
   const queryParts = (p.output?.parts ?? []).filter((x) => typeof x?.query === "string");
 
-  // Always record the FULL raw rows for programmatic consumers (the `queries`
+  // Always record the saved raw rows for programmatic consumers (the `queries`
   // array in the `--json` envelope). These never go into the prose below.
   for (const qp of queryParts) {
-    queries.push({ tool, query: qp.query ?? p.input?.query ?? "", results: qp.results });
+    queries.push({ tool, query: qp.query ?? p.input?.query ?? "", results: qp.results, ...(typeof qp.totalRows === "number" && { totalRows: qp.totalRows }) });
   }
 
   const queryText = queryParts

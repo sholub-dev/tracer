@@ -17,6 +17,11 @@ function relativeTime(at: number): string {
   return "just now";
 }
 
+function megabytes(bytes: number): string {
+  const mb = bytes / 1024 / 1024;
+  return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
+}
+
 function LastSyncRow() {
   const { data } = trpc.transfer.lastSync.useQuery();
   if (!data) return null;
@@ -64,7 +69,7 @@ function DesktopPhoneSettings() {
   }, []);
 
   const state = status?.state ?? "waiting";
-  const finished = state === "sent" || state === "expired" || state === "denied";
+  const finished = state === "sent" || state === "expired" || state === "denied" || state === "failed";
   const waiting = state === "waiting" || state === "idle";
 
   useEffect(() => {
@@ -114,6 +119,10 @@ function DesktopPhoneSettings() {
                     <Loader2 className="size-4 animate-spin" aria-hidden="true" />
                     Syncing with {status?.phoneName}.
                   </span>
+                ) : state === "failed" ? (
+                  <span role="alert" className="text-sm text-destructive">
+                    {status?.error ?? "The sync failed."}
+                  </span>
                 ) : (
                   <span role="status" className="text-sm text-muted-foreground">
                     {state === "denied" ? "You denied the request." : "The code expired."}
@@ -130,6 +139,13 @@ function DesktopPhoneSettings() {
                     <li>3. Tap the Tracer link, then confirm on the phone.</li>
                   </ol>
                   <p className="text-[13px]/[18px] text-muted-foreground">The code works once, for 2 minutes. You allow the sync on this computer after the phone asks.</p>
+                  {code.fullCopy.fits ? (
+                    <p className="text-[13px]/[18px] text-muted-foreground">A first sync sends {megabytes(code.fullCopy.bytes)}. Later syncs send only the changes.</p>
+                  ) : (
+                    <p role="alert" className="text-[13px]/[18px] text-destructive">
+                      A first sync with a new phone cannot work. The full copy is {megabytes(code.fullCopy.bytes)} and the limit is {megabytes(code.fullCopy.limitBytes)}. Delete sessions you do not need. A phone that synced before can still sync the changes.
+                    </p>
+                  )}
                 </>
               )}
               <div className="flex gap-2">

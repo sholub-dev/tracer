@@ -6,6 +6,7 @@ import type { Context } from "../../trpc/context.js";
 import { chatSessions } from "../../db/schema.js";
 import { startAgentSession } from "../../agents/start-session.js";
 import { extractAnalysis } from "../../agents/analysis.js";
+import { decodeMessages } from "../../lib/messages-codec.js";
 
 /**
  * Headless analysis API for other local agents (e.g. Claude Code). Runs the same
@@ -52,7 +53,7 @@ export function registerApiRoutes(app: Hono, context: Context): void {
 
     let finalMessages: UIMessage[] = [];
     try {
-      finalMessages = row ? (JSON.parse(row.messages) as UIMessage[]) : [];
+      finalMessages = row ? decodeMessages(row.messages) : [];
     } catch {
       // fall through to empty
     }

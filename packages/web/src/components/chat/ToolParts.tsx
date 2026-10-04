@@ -28,7 +28,7 @@ export interface ToolPart {
 
 interface SubAgentOutput {
   analysis?: string;
-  queries?: Array<{ query: string; results: unknown }>;
+  queries?: Array<{ query: string; results: unknown; totalRows?: number }>;
   parts?: ProgressPart[];
   error?: string;
 }
@@ -81,7 +81,7 @@ function isSubAgentOutput(output: unknown): output is SubAgentOutput {
 }
 
 function legacyToParts(output: SubAgentOutput): ProgressPart[] {
-  const parts: ProgressPart[] = (output.queries ?? []).map((q) => ({ type: "query", query: q.query, results: q.results }));
+  const parts: ProgressPart[] = (output.queries ?? []).map((q) => ({ type: "query", query: q.query, results: q.results, totalRows: q.totalRows }));
   if (output.analysis) parts.push({ type: "text", content: output.analysis });
   return parts;
 }
@@ -135,7 +135,7 @@ export function Narration({ content, isAnimating }: { content: string; isAnimati
 }
 
 function ProgressItems({ parts, isAnimating, resultsOnly = false }: { parts: ProgressPart[]; isAnimating: boolean; resultsOnly?: boolean }) {
-  if (resultsOnly) return <>{parts.map((p, i) => (p.type === "query" ? <ResultView key={i} data={p.results} /> : null))}</>;
+  if (resultsOnly) return <>{parts.map((p, i) => (p.type === "query" ? <ResultView key={i} data={p.results} totalRows={p.totalRows} /> : null))}</>;
   let inAnalysis = false;
   return (
     <>
@@ -148,7 +148,7 @@ function ProgressItems({ parts, isAnimating, resultsOnly = false }: { parts: Pro
           return (
             <div key={i} className="space-y-2">
               {p.query && <QueryBlock query={p.query} />}
-              <ResultView data={p.results} />
+              <ResultView data={p.results} totalRows={p.totalRows} />
             </div>
           );
         }

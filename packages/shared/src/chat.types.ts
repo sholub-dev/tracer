@@ -2,7 +2,8 @@ import { z } from "zod";
 
 /** Progress part types streamed from sub-agents to the client */
 export type ProgressPart =
-  | { type: "query"; query: string; results: unknown }
+  // totalRows: the original row count, set when the saved copy keeps only the first rows.
+  | { type: "query"; query: string; results: unknown; totalRows?: number }
   | { type: "text"; content: string }
   | { type: "tool-call"; toolName: string }
   | { type: "reasoning"; content: string }

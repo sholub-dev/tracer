@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { FEATURES, unixNow } from "@tracer-sh/shared";
 import type { Db, SetupDriver } from "./db/driver.js";
 import { runSetup } from "./db/setup.js";
+import { repairChats } from "./db/repair-chats.js";
 import { chatSessions } from "./db/schema.js";
 import { ProviderRegistry } from "./providers/registry.js";
 import { registerDefaultProviders } from "./providers/register-defaults.js";
@@ -16,6 +17,7 @@ export async function startRuntime(
   registerPlatformProviders?: (providers: ProviderRegistry) => void,
 ) {
   await runSetup(setupDriver);
+  await repairChats(db, setupDriver);
 
   // Mark stale "streaming" sessions from a previous crash as done
   await db.update(chatSessions)

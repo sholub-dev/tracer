@@ -4,19 +4,21 @@ import type { AddressInfo } from "node:net";
 import { hostname, networkInterfaces } from "node:os";
 import QRCode from "qrcode";
 import type { Db } from "../db/driver.js";
-import { randomSecret, seal, unseal } from "./crypto.js";
+import { limits, MAX_SYNC_BYTES, OldFormError, pack, randomSecret, seal, TooLargeError, unseal } from "./crypto.js";
 import { getSetting, recordSync } from "./peer.js";
-import { exportSnapshot } from "./snapshot.js";
+import { exportSnapshot, FORMAT } from "./snapshot.js";
 import { exportSyncPayload, mergeSyncPayload, type SyncPayload } from "./sync.js";
 import { APPROVAL_WINDOW_MS, COPY_LINK_PREFIX, DEVICE_ID, MAX_NAME_LENGTH, type SyncMode } from "./receive.js";
 
-const MAX_BODY_BYTES = 100 * 1024 * 1024;
-const BODY_TIMEOUT_MS = 60_000;
+// Base64 adds a third to the sealed data.
+const MAX_BODY_BYTES = Math.ceil((MAX_SYNC_BYTES * 4) / 3) + 1024;
+// A large upload on a slow Wi-Fi needs minutes.
+const BODY_TIMEOUT_MS = 300_000;
 // The phone polls once a second: after a deny or expiry the listener answers briefly so the phone learns why.
 const END_GRACE_MS = 3000;
 const RUN_ACTIVE = "An investigation is running on this computer. Stop it or wait for it to finish, then sync again.";
 
-export type SendState = "idle" | "waiting" | "approval" | "approved" | "sent" | "denied" | "expired";
+export type SendState = "idle" | "waiting" | "approval" | "approved" | "sent" | "denied" | "expired" | "failed";
 
 export interface SendStatus {
   state: SendState;
@@ -25,6 +27,15 @@ export interface SendStatus {
   /** Merge only: rows written and deleted on this computer. */
   applied?: number;
   deleted?: number;
+  /** State "failed": why the exchange failed. */
+  error?: string;
+}
+
+export interface FullCopySize {
+  /** Compressed size of a full copy: what a first sync sends. */
+  bytes: number;
+  limitBytes: number;
+  fits: boolean;
 }
 
 interface Session {
@@ -38,10 +49,26 @@ interface Session {
 let current: Session | null = null;
 let last: SendStatus = { state: "idle" };
 
+const UPDATE_PHONE = "Update Tracer on the phone to the same version as this computer, then scan the code again.";
+const UPDATE_COMPUTER = "Update Tracer on this computer to the same version as the phone, then show a new code.";
+
 class HttpError extends Error {
   constructor(readonly status: number, message = "") {
     super(message);
   }
+}
+
+function failure(err: unknown): string {
+  if (err instanceof TooLargeError) return err.message;
+  if (err instanceof HttpError && err.status === 408) return "The phone stopped sending data. Show a new code and try again.";
+  if (err instanceof HttpError && err.status === 413) return `The phone sent more data than the limit allows (${Math.round(MAX_SYNC_BYTES / 1024 / 1024)} MB). Show a new code and try again.`;
+  return "The sync failed on this computer. Show a new code and try again. If it fails again, restart Tracer.";
+}
+
+async function measureFullCopy(db: Db): Promise<FullCopySize> {
+  const text = JSON.stringify(await exportSnapshot(db));
+  const bytes = pack(text).length;
+  return { bytes, limitBytes: limits.packed, fits: bytes <= limits.packed && text.length <= limits.unpacked };
 }
 
 function lanAddress(): string | null {
@@ -89,7 +116,12 @@ function arm() {
   if (!current) return;
   const session = current;
   clearTimeout(session.timer);
-  session.timer = setTimeout(() => { if (current === session) finish("expired"); }, APPROVAL_WINDOW_MS);
+  session.timer = setTimeout(() => {
+    if (current !== session) return;
+    // A large exchange can outlast the window.
+    if (session.busy) arm();
+    else finish("expired");
+  }, APPROVAL_WINDOW_MS);
 }
 
 function finish(state: SendState, extra: Partial<SendStatus> = {}) {
@@ -103,7 +135,7 @@ function finish(state: SendState, extra: Partial<SendStatus> = {}) {
     server.close();
     server.closeAllConnections();
   };
-  if (request && (state === "denied" || state === "expired")) setTimeout(close, END_GRACE_MS).unref();
+  if (request && (state === "denied" || state === "expired" || state === "failed")) setTimeout(close, END_GRACE_MS).unref();
   else close();
 }
 
@@ -131,7 +163,9 @@ export function deny(): void {
 
 function parseRequest(text: string): NonNullable<Session["request"]> {
   const value = JSON.parse(text) as Record<string, unknown>;
-  const { deviceId, name, mode } = value;
+  const { deviceId, name, mode, format } = value;
+  if (typeof format !== "number" || format < FORMAT) throw new HttpError(409, UPDATE_PHONE);
+  if (format > FORMAT) throw new HttpError(409, UPDATE_COMPUTER);
   if (typeof deviceId !== "string" || !DEVICE_ID.test(deviceId) || typeof name !== "string" || (mode !== "merge" && mode !== "replace")) {
     throw new HttpError(400);
   }
@@ -150,7 +184,7 @@ export async function startSend(
   db: Db,
   activeRuns: () => number,
   afterMerge?: (providersChanged: boolean) => Promise<void>,
-): Promise<{ link: string; qrSvg: string; expiresAt: number }> {
+): Promise<{ link: string; qrSvg: string; expiresAt: number; fullCopy: FullCopySize }> {
   stopSend();
   const address = lanAddress();
   if (!address) throw new Error("This computer has no network connection. Connect it to the same Wi-Fi as the phone.");
@@ -158,20 +192,21 @@ export async function startSend(
   const key = randomSecret();
   const expected = Buffer.from(`/${token}`);
   const deviceId = (await getSetting(db, "device_id")) ?? "";
+  const fullCopy = await measureFullCopy(db);
 
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
     const url = req.url ?? "";
     const given = Buffer.from(url.slice(0, expected.length));
     if (given.length !== expected.length || !timingSafeEqual(given, expected)) return reply(res, 404);
     const route = `${req.method} ${url.slice(expected.length)}`;
-    if (route === "GET /status") return reply(res, 200, JSON.stringify({ state: session.state }));
+    if (route === "GET /status") return reply(res, 200, JSON.stringify({ state: session.state, format: FORMAT }));
     if (current !== session) return reply(res, 404);
 
     if (route === "POST /request") {
       if (session.state !== "waiting") return reply(res, 409, "Another phone already used this code. Show a new code and try again.");
       const body = await readBody(req);
       let text: string;
-      try { text = await unseal(body, key); } catch { return reply(res, 403); }
+      try { text = await unseal(body, key); } catch (err) { return reply(res, err instanceof OldFormError ? 409 : 403, err instanceof OldFormError ? UPDATE_PHONE : undefined); }
       const request = parseRequest(text);
       if (current !== session || session.state !== "waiting") return reply(res, 409, "Another phone already used this code. Show a new code and try again.");
       session.request = request;
@@ -191,26 +226,41 @@ export async function startSend(
         let extra: Partial<SendStatus> = {};
         if (merge) {
           const body = await readBody(req);
+          let since: number | undefined;
           let remote: SyncPayload;
-          try { remote = JSON.parse(await unseal(body, key)) as SyncPayload; } catch { return reply(res, 403); }
+          try {
+            const parsed = JSON.parse(await unseal(body, key)) as { since?: unknown; payload: SyncPayload };
+            remote = parsed.payload;
+            if (typeof parsed.since === "number") since = parsed.since;
+          } catch (err) {
+            if (err instanceof TooLargeError) throw err;
+            return reply(res, err instanceof OldFormError ? 409 : 403, err instanceof OldFormError ? UPDATE_PHONE : undefined);
+          }
           // Checked after the upload: a monitor or timer can start a run while the data arrives.
           if (activeRuns() > 0) return reply(res, 409, RUN_ACTIVE);
+          // Read before the merge: the rows the phone just sent need not go back, and a size error leaves this computer unchanged.
+          const at = Date.now();
+          sealed = await seal(JSON.stringify({ at, payload: await exportSyncPayload(db, since) }), key);
           const { applied, deleted } = await mergeSyncPayload(db, remote);
           await afterMerge?.(applied.provider_configs + deleted.provider_configs > 0);
           const total = (counts: Record<string, number>) => Object.values(counts).reduce((a, b) => a + b, 0);
           extra = { applied: total(applied), deleted: total(deleted) };
-          sealed = await seal(JSON.stringify(await exportSyncPayload(db)), key);
         } else {
           // A running investigation has not saved its answer yet, so the copy would miss it.
           if (activeRuns() > 0) return reply(res, 409, RUN_ACTIVE);
-          sealed = await seal(JSON.stringify(await exportSnapshot(db)), key);
+          const at = Date.now();
+          sealed = await seal(JSON.stringify({ at, snapshot: await exportSnapshot(db) }), key);
         }
         await recordSync(db, { name: session.request.name });
         return await new Promise<void>((resolve) => {
-          res.writeHead(200, { "content-type": "text/plain" }).end(sealed, () => {
-            if (current === session) finish("sent", extra);
+          res.once("close", () => {
+            if (current === session) {
+              if (res.writableFinished) finish("sent", extra);
+              else finish("failed", { error: "The connection to the phone broke while this computer sent the data. Show a new code and try again." });
+            }
             resolve();
           });
+          res.writeHead(200, { "content-type": "text/plain" }).end(sealed);
         });
       } finally {
         session.busy = false;
@@ -221,8 +271,11 @@ export async function startSend(
 
   const server = createServer((req, res) => {
     handle(req, res).catch((err: unknown) => {
-      if (!(err instanceof HttpError)) console.warn("[transfer] Request failed:", err);
-      if (!res.headersSent) reply(res, err instanceof HttpError ? err.status : 500);
+      if (!(err instanceof HttpError || err instanceof TooLargeError)) console.warn("[transfer] Request failed:", err);
+      const message = err instanceof TooLargeError || (err instanceof HttpError && err.message) ? err.message : "";
+      if (!res.headersSent) reply(res, err instanceof TooLargeError ? 413 : err instanceof HttpError ? err.status : 500, message);
+      // An exchange the person allowed ended badly: the screen must say why.
+      if (session.state === "approved" && current === session) finish("failed", { error: failure(err) });
     });
   });
   const session: Session = { server, state: "waiting", busy: false };
@@ -238,5 +291,5 @@ export async function startSend(
   last = { state: "waiting" };
 
   const link = `${COPY_LINK_PREFIX}?from=${encodeURIComponent(`http://${address}:${port}/${token}`)}&key=${key}&name=${encodeURIComponent(computerName())}&device=${encodeURIComponent(deviceId)}`;
-  return { link, qrSvg: await QRCode.toString(link, { type: "svg", margin: 1, errorCorrectionLevel: "L" }), expiresAt: Date.now() + APPROVAL_WINDOW_MS };
+  return { link, qrSvg: await QRCode.toString(link, { type: "svg", margin: 1, errorCorrectionLevel: "L" }), expiresAt: Date.now() + APPROVAL_WINDOW_MS, fullCopy };
 }

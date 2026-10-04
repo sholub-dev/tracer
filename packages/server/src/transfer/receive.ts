@@ -1,7 +1,7 @@
 import type { Db } from "../db/driver.js";
-import { seal, unseal } from "./crypto.js";
-import { getSetting, recordSync } from "./peer.js";
-import { importSnapshot, type Snapshot } from "./snapshot.js";
+import { OldFormError, seal, TooLargeError, unseal } from "./crypto.js";
+import { getMark, getSetting, recordSync, setMark } from "./peer.js";
+import { FORMAT, importSnapshot, type Snapshot } from "./snapshot.js";
 import { exportSyncPayload, mergeSyncPayload, type SyncPayload } from "./sync.js";
 
 export const COPY_LINK_PREFIX = "tracer://copy";
@@ -9,7 +9,8 @@ export const COPY_LINK_PREFIX = "tracer://copy";
 export const MAX_NAME_LENGTH = 64;
 export const DEVICE_ID = /^[A-Za-z0-9-]{1,64}$/;
 export const APPROVAL_WINDOW_MS = 120_000;
-const FETCH_TIMEOUT_MS = 60_000;
+// A large copy on a slow Wi-Fi needs minutes, and the computer compresses before it answers.
+const FETCH_TIMEOUT_MS = 300_000;
 const POLL_INTERVAL_MS = 1000;
 
 export type SyncMode = "merge" | "replace";
@@ -43,8 +44,11 @@ export async function inspectCopy(db: Db, link: string): Promise<{ mode: SyncMod
 
 const UNREACHABLE = "The computer does not answer. Make sure the phone and the computer use the same Wi-Fi. If iOS asks for Local Network access, allow it. Then scan the code again.";
 const EXPIRED = "This code is used or expired. Show a new code on the computer.";
+const INTERRUPTED = "The connection broke during the transfer. Stay on the same Wi-Fi, keep Tracer open, then show a new code and try again.";
+const TOO_SLOW = "The transfer took too long and stopped. Move closer to the Wi-Fi router, then show a new code and try again.";
 
-async function call(url: URL, init: RequestInit, timeoutMs = FETCH_TIMEOUT_MS): Promise<{ status: number; text: string }> {
+/** `transfer` marks a call that moves the copy: a failure there is a broken transfer, not an unreachable computer. */
+async function call(url: URL, init: RequestInit, timeoutMs = 15_000, transfer = false): Promise<{ status: number; text: string }> {
   const abort = new AbortController();
   // Covers the body too: a server that stops mid-body must not hang the import.
   const timer = setTimeout(() => abort.abort(), timeoutMs);
@@ -53,7 +57,7 @@ async function call(url: URL, init: RequestInit, timeoutMs = FETCH_TIMEOUT_MS): 
     const response = await fetch(url, { ...init, signal: abort.signal, redirect: "error" });
     return { status: response.status, text: await response.text() };
   } catch {
-    throw new Error(UNREACHABLE);
+    throw new Error(!transfer ? UNREACHABLE : abort.signal.aborted ? TOO_SLOW : INTERRUPTED);
   } finally {
     clearTimeout(timer);
   }
@@ -62,22 +66,38 @@ async function call(url: URL, init: RequestInit, timeoutMs = FETCH_TIMEOUT_MS): 
 function check({ status, text }: { status: number; text: string }): string {
   if (status === 404) throw new Error(EXPIRED);
   if (status === 409) throw new Error(text || "The computer is busy. Show a new code and try again.");
+  if (status === 413 && text) throw new Error(text);
+  if (status === 408) throw new Error("The computer stopped waiting for the data from this phone. Move closer to the Wi-Fi router, then show a new code and try again.");
+  if (status === 403) throw new Error("The computer refused the request. Show a new code on the computer and scan it again.");
+  if (status === 500) throw new Error("The computer failed while it prepared the data. Show a new code and try again. If it fails again, restart Tracer on the computer.");
   if (status !== 200) throw new Error(`The computer returned error ${status}. Show a new code and try again.`);
   return text;
 }
 
+const UPDATE_COMPUTER = "Update Tracer on the computer to the same version as the phone, then show a new code.";
+const UPDATE_PHONE = "Update Tracer on the phone to the same version as the computer, then scan the code again.";
+
 async function open<T>(text: string, key: string): Promise<T> {
   try {
     return JSON.parse(await unseal(text, key)) as T;
-  } catch {
+  } catch (err) {
+    if (err instanceof OldFormError) throw new Error(UPDATE_COMPUTER);
+    if (err instanceof TooLargeError) throw err;
     throw new Error("The copy does not decrypt. Show a new code on the computer and scan it again.");
   }
+}
+
+/** An older computer does not report its format. */
+async function checkVersion(url: URL): Promise<void> {
+  const { format } = JSON.parse(check(await call(url, {}))) as { format?: number };
+  if (format === undefined || format < FORMAT) throw new Error(UPDATE_COMPUTER);
+  if (format > FORMAT) throw new Error(UPDATE_PHONE);
 }
 
 async function awaitApproval(url: URL): Promise<void> {
   const deadline = Date.now() + APPROVAL_WINDOW_MS + 5000;
   for (;;) {
-    const { state } = JSON.parse(check(await call(url, {}, 10_000))) as { state: string };
+    const { state } = JSON.parse(check(await call(url, {}))) as { state: string };
     if (state === "approved") return;
     if (state === "denied") throw new Error("The computer denied the request.");
     if (state === "expired" || Date.now() > deadline) throw new Error("Nobody approved the request on the computer in time. Show a new code and try again.");
@@ -94,22 +114,29 @@ export async function receiveCopy(db: Db, link: string, beforeImport?: () => voi
   const { mode } = await inspectCopy(db, link);
   const at = (suffix: string) => new URL(from.pathname + suffix, from);
 
+  await checkVersion(at("/status"));
   const deviceId = (await getSetting(db, "device_id")) ?? "";
-  const request = await seal(JSON.stringify({ deviceId, name: `iPhone ${deviceId.slice(-4)}`, mode }), key);
-  check(await call(at("/request"), { method: "POST", body: request }, 15_000));
+  const request = await seal(JSON.stringify({ deviceId, name: `iPhone ${deviceId.slice(-4)}`, mode, format: FORMAT }), key);
+  check(await call(at("/request"), { method: "POST", body: request }));
   await awaitApproval(at("/status"));
 
   let counts: Record<string, number>;
   if (mode === "replace") {
-    const snapshot = await open<Snapshot>(check(await call(at(""), {})), key);
+    const { at: theirs, snapshot } = await open<{ at: number; snapshot: Snapshot }>(check(await call(at(""), {}, FETCH_TIMEOUT_MS, true)), key);
     beforeImport?.();
     // The computer keeps running its monitors; the same alerts must not reach Slack twice.
     counts = await importSnapshot(db, snapshot, { pauseMonitors: true });
+    // The import wrote the whole change log just now; the next merge needs to send none of it back.
+    if (device) await setMark(db, device, { mine: Date.now(), theirs });
   } else {
-    const sent = await seal(JSON.stringify(await exportSyncPayload(db)), key);
-    const remote = await open<SyncPayload>(check(await call(at("/merge"), { method: "POST", body: sent })), key);
+    const mark = device ? await getMark(db, device) : undefined;
+    // Taken before the export: a change made while the exchange runs is sent next time.
+    const startedAt = Date.now();
+    const sent = await seal(JSON.stringify({ since: mark?.theirs, payload: await exportSyncPayload(db, mark?.mine) }), key);
+    const { at: theirs, payload } = await open<{ at: number; payload: SyncPayload }>(check(await call(at("/merge"), { method: "POST", body: sent }, FETCH_TIMEOUT_MS, true)), key);
     beforeImport?.();
-    counts = (await mergeSyncPayload(db, remote)).applied;
+    counts = (await mergeSyncPayload(db, payload)).applied;
+    if (device) await setMark(db, device, { mine: startedAt, theirs });
   }
   await recordSync(db, { id: device, name: name ?? "" });
   return { mode, counts };

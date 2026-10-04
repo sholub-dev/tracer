@@ -4,11 +4,12 @@ import Database from "better-sqlite3-multiple-ciphers";
 import { createNodeDb } from "../db/node-db.js";
 import { runSetup } from "../db/setup.js";
 import { appSettings, chatSessions, monitors, monitorTriggers, providerConfigs } from "../db/schema.js";
-import { randomSecret, seal, unseal } from "./crypto.js";
-import { exportSnapshot, importSnapshot } from "./snapshot.js";
+import { limits, MAX_SYNC_BYTES, MAX_UNPACKED_BYTES, randomSecret, seal, TooLargeError, unseal } from "./crypto.js";
+import { exportSnapshot, FORMAT, importSnapshot } from "./snapshot.js";
+import { exportSyncPayload } from "./sync.js";
 import { inspectCopy, parseCopyLink, receiveCopy } from "./receive.js";
 import { approve, deny, sendStatus, startSend, stopSend } from "./send.js";
-import { getSetting } from "./peer.js";
+import { getMark, getSetting } from "./peer.js";
 import { eq } from "drizzle-orm";
 
 async function freshDb() {
@@ -53,6 +54,63 @@ test("seal and unseal round-trip; a wrong key fails", async () => {
   const sealed = await seal("hello", key);
   assert.equal(await unseal(sealed, key), "hello");
   await assert.rejects(unseal(sealed, randomSecret()));
+});
+
+test("sealed data is compressed", async () => {
+  const key = randomSecret();
+  const text = JSON.stringify(Array.from({ length: 2000 }, (_, i) => ({ id: i, name: "checkout-service", status: "error" })));
+  const sealed = await seal(text, key);
+  assert.ok(sealed.length < text.length / 5);
+  assert.equal(await unseal(sealed, key), text);
+  assert.equal(await unseal(await seal("zażółć 🙂", key), key), "zażółć 🙂");
+});
+
+test("the limits apply to compressed and to unpacked data", async (t) => {
+  const saved = { ...limits };
+  t.after(() => Object.assign(limits, saved));
+  assert.equal(limits.packed, MAX_SYNC_BYTES);
+  assert.equal(limits.unpacked, MAX_UNPACKED_BYTES);
+  const key = randomSecret();
+
+  // Compresses to almost nothing, so only the unpacked limit can refuse it.
+  limits.unpacked = 1000;
+  await assert.rejects(seal("x".repeat(1001), key), /before compression/);
+  limits.unpacked = saved.unpacked;
+  const sealed = await seal("x".repeat(5000), key);
+  limits.unpacked = 1000;
+  await assert.rejects(unseal(sealed, key), (err: Error) => err instanceof TooLargeError && /when unpacked/.test(err.message));
+  limits.unpacked = saved.unpacked;
+
+  limits.packed = 1000;
+  const noise = Array.from(crypto.getRandomValues(new Uint8Array(3000)), (b) => b.toString(16)).join("");
+  await assert.rejects(seal(noise, key), (err: Error) => err instanceof TooLargeError && /after compression/.test(err.message));
+});
+
+test("replace of too much data fails on the phone with the size; the computer shows why", async (t) => {
+  const saved = { ...limits };
+  t.after(() => { Object.assign(limits, saved); stopSend(); });
+  const computer = await seededDb();
+  const phone = await freshDb();
+  const noise = Array.from(crypto.getRandomValues(new Uint8Array(4000)), (b) => b.toString(16)).join("");
+  await computer.insert(chatSessions).values({ id: "big", title: "Big", messages: noise, status: "done" }).run();
+  limits.packed = 2000;
+  const { link, fullCopy } = await startSend(computer, () => 0);
+  assert.equal(fullCopy.fits, false);
+  assert.equal(fullCopy.limitBytes, 2000);
+  assert.ok(fullCopy.bytes > 2000);
+  await assert.rejects(receiveWithApproval(phone, link), /data to sync is [\d.]+ MB after compression/);
+  assert.equal((await phone.select().from(chatSessions).all()).length, 0);
+  assert.equal(sendStatus().state, "failed");
+  assert.match(sendStatus().error ?? "", /after compression/);
+});
+
+test("startSend returns the compressed size of a full copy", async (t) => {
+  t.after(stopSend);
+  const computer = await seededDb();
+  const { fullCopy } = await startSend(computer, () => 0);
+  assert.equal(fullCopy.fits, true);
+  assert.equal(fullCopy.limitBytes, MAX_SYNC_BYTES);
+  assert.ok(fullCopy.bytes > 0 && fullCopy.bytes < JSON.stringify(await exportSnapshot(computer)).length);
 });
 
 test("importSnapshot replaces every row with the snapshot rows", async () => {
@@ -189,7 +247,7 @@ test("nothing is exchanged before approval; a second request gets 409", async (t
   const { link } = await startSend(computer, () => 0);
   const key = keyOf(link);
   const from = new URL(new URLSearchParams(link.slice(link.indexOf("?") + 1)).get("from")!);
-  const request = await seal(JSON.stringify({ deviceId: "p-1", name: "iPhone 0001", mode: "merge" }), key);
+  const request = await seal(JSON.stringify({ deviceId: "p-1", name: "iPhone 0001", mode: "merge", format: FORMAT }), key);
 
   assert.equal((await post(link, "/request", await seal("{}", randomSecret()))).status, 403);
   assert.equal(sendStatus().state, "waiting");
@@ -228,4 +286,163 @@ test("merge refuses while an investigation runs", async (t) => {
   await until(() => sendStatus().state === "approval");
   approve();
   await outcome;
+});
+
+// Syncs the phone with the computer once and returns the sealed request and response sizes.
+async function syncOnce(computer: Awaited<ReturnType<typeof freshDb>>, phone: Awaited<ReturnType<typeof freshDb>>) {
+  const { link } = await startSend(computer, () => 0);
+  const realFetch = globalThis.fetch;
+  const sizes: Record<string, number> = {};
+  globalThis.fetch = (async (url: URL, init?: RequestInit) => {
+    const response = await realFetch(url, init);
+    const last = new URL(url).pathname.split("/").pop();
+    const path = last === "merge" ? "merge" : last === "status" || last === "request" ? last : "copy";
+    const text = await response.clone().text();
+    if (path === "merge" || path === "copy") sizes[path] = text.length;
+    if (path === "merge") sizes.sent = String(init?.body).length;
+    return response;
+  }) as typeof fetch;
+  try {
+    const result = await receiveWithApproval(phone, link);
+    return { result, sizes };
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+async function pairedDevices() {
+  const computer = await seededDb();
+  const phone = await freshDb();
+  for (let i = 0; i < 20; i++) {
+    const messages = JSON.stringify(Array.from({ length: 50 }, (_, j) => ({ q: j, rows: Array.from({ length: 20 }, (_, k) => ({ app: `svc-${k}`, count: i * j * k, message: `Error ${k} in checkout` })) })));
+    await computer.insert(chatSessions).values({ id: `c${i}`, title: `Chat ${i}`, messages, status: "done" }).run();
+  }
+  const replace = await syncOnce(computer, phone);
+  return { computer, phone, replace: replace.sizes.copy };
+}
+
+test("a second merge sends only the rows changed since the first", async (t) => {
+  t.after(stopSend);
+  const { computer, phone, replace } = await pairedDevices();
+  const peer = (await setting(computer, "device_id"))!;
+  assert.ok(await getMark(phone, peer));
+  const first = await syncOnce(computer, phone);
+  assert.equal(first.result.mode, "merge");
+
+  await new Promise((r) => setTimeout(r, 5));
+  await phone.update(chatSessions).set({ title: "Renamed" }).where(eq(chatSessions.id, "c3")).run();
+  const mark = (await getMark(phone, peer))!;
+  assert.deepEqual((await exportSyncPayload(phone, mark.mine)).rows.map((r) => r.row_key), ["c3"]);
+
+  const second = await syncOnce(computer, phone);
+  assert.ok(second.sizes.sent < replace / 5);
+  assert.ok(second.sizes.merge < replace / 5);
+  assert.equal((await computer.select().from(chatSessions).where(eq(chatSessions.id, "c3")).get())?.title, "Renamed");
+});
+
+test("a delete after the watermark carries over", async (t) => {
+  t.after(stopSend);
+  const { computer, phone } = await pairedDevices();
+  await new Promise((r) => setTimeout(r, 5));
+  await phone.delete(chatSessions).where(eq(chatSessions.id, "c1")).run();
+  await syncOnce(computer, phone);
+  assert.equal((await computer.select().from(chatSessions).where(eq(chatSessions.id, "c1")).all()).length, 0);
+  await new Promise((r) => setTimeout(r, 5));
+  await computer.delete(chatSessions).where(eq(chatSessions.id, "c2")).run();
+  await syncOnce(computer, phone);
+  assert.equal((await phone.select().from(chatSessions).where(eq(chatSessions.id, "c2")).all()).length, 0);
+});
+
+test("a second phone with the same computer still gets everything", async (t) => {
+  t.after(stopSend);
+  const { computer, phone } = await pairedDevices();
+  const second = await freshDb();
+  await syncOnce(computer, second);
+  assert.equal((await second.select().from(chatSessions).all()).length, 21);
+  await new Promise((r) => setTimeout(r, 5));
+  await phone.insert(chatSessions).values({ id: "from-first", title: "F", messages: "[]", status: "done" }).run();
+  await syncOnce(computer, phone);
+  await syncOnce(computer, second);
+  assert.equal((await second.select().from(chatSessions).where(eq(chatSessions.id, "from-first")).all()).length, 1);
+});
+
+test("the watermark does not advance on a failed exchange", async (t) => {
+  t.after(stopSend);
+  const { computer, phone } = await pairedDevices();
+  const peer = (await setting(computer, "device_id"))!;
+  const before = await getMark(phone, peer);
+  await phone.insert(chatSessions).values({ id: "late", title: "L", messages: "[]", status: "done" }).run();
+  const { link } = await startSend(computer, () => 1);
+  await assert.rejects(receiveWithApproval(phone, link), /investigation is running/);
+  assert.deepEqual(await getMark(phone, peer), before);
+  await syncOnce(computer, phone);
+  assert.equal((await computer.select().from(chatSessions).where(eq(chatSessions.id, "late")).all()).length, 1);
+});
+
+test("a change made on the computer during an exchange is sent next time", async (t) => {
+  t.after(stopSend);
+  const { computer, phone } = await pairedDevices();
+  await new Promise((r) => setTimeout(r, 5));
+  const { link } = await startSend(computer, () => 0, async () => {
+    // Runs inside the exchange, after the computer read its changes.
+    await computer.insert(chatSessions).values({ id: "during", title: "D", messages: "[]", status: "done" }).run();
+  });
+  await phone.insert(chatSessions).values({ id: "p", title: "P", messages: "[]", status: "done" }).run();
+  await receiveWithApproval(phone, link);
+  assert.equal((await phone.select().from(chatSessions).where(eq(chatSessions.id, "during")).all()).length, 0);
+  await syncOnce(computer, phone);
+  assert.equal((await phone.select().from(chatSessions).where(eq(chatSessions.id, "during")).all()).length, 1);
+});
+
+test("a changed child merges although its parent did not change", async (t) => {
+  t.after(stopSend);
+  const { computer, phone } = await pairedDevices();
+  await computer.insert(monitors).values({ id: "m9", name: "M", query: "q", condition: "{}" }).run();
+  await syncOnce(computer, phone);
+  await new Promise((r) => setTimeout(r, 5));
+  await phone.insert(monitorTriggers).values({ id: "t9", monitorId: "m9", triggeredAt: 1, value: 1, windowStart: 1, windowEnd: 2, status: "open", groups: "[]", sessionId: null }).run();
+  await syncOnce(computer, phone);
+  assert.equal((await computer.select().from(monitorTriggers).where(eq(monitorTriggers.id, "t9")).all()).length, 1);
+});
+
+test("an old phone gets a 409 with the update message", async (t) => {
+  t.after(stopSend);
+  const computer = await seededDb();
+  const { link } = await startSend(computer, () => 0);
+  const key = keyOf(link);
+  // The old form: "iv.data", no compression, no format field.
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const k = await crypto.subtle.importKey("raw", Buffer.from(key, "base64url"), "AES-GCM", false, ["encrypt"]);
+  const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, k, new TextEncoder().encode(JSON.stringify({ deviceId: "p-1", name: "iPhone", mode: "replace" })));
+  const old = `${Buffer.from(iv).toString("base64url")}.${Buffer.from(data).toString("base64url")}`;
+  const response = await post(link, "/request", old);
+  assert.equal(response.status, 409);
+  assert.match(await response.text(), /Update Tracer on the phone/);
+  const noFormat = await post(link, "/request", await seal(JSON.stringify({ deviceId: "p-1", name: "iPhone", mode: "replace" }), key));
+  assert.equal(noFormat.status, 409);
+  assert.equal(sendStatus().state, "waiting");
+});
+
+test("a phone asks an old computer and is told to update it", async (t) => {
+  const phone = await freshDb();
+  const { createServer } = await import("node:http");
+  const server = createServer((req, res) => res.end(JSON.stringify({ state: "waiting" })));
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  t.after(() => server.close());
+  const { port } = server.address() as { port: number };
+  // 127.0.0.1 is not a private LAN address for the phone: use the check through a local alias.
+  const link = `tracer://copy?from=${encodeURIComponent(`http://192.168.1.5:${port}/t`)}&key=k`;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = ((url: URL, init?: RequestInit) => realFetch(new URL(url.pathname, `http://127.0.0.1:${port}`), init)) as typeof fetch;
+  t.after(() => { globalThis.fetch = realFetch; });
+  await assert.rejects(receiveCopy(phone, link), /Update Tracer on the computer/);
+});
+
+test("an old-form reply to the phone gives the update message", async () => {
+  const key = randomSecret();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const k = await crypto.subtle.importKey("raw", Buffer.from(key, "base64url"), "AES-GCM", false, ["encrypt"]);
+  const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, k, new TextEncoder().encode("{}"));
+  await assert.rejects(unseal(`${Buffer.from(iv).toString("base64url")}.${Buffer.from(data).toString("base64url")}`, key), (err: Error) => err.constructor.name === "OldFormError");
+  assert.equal(FORMAT, 3);
 });

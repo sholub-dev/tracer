@@ -8,6 +8,7 @@ import type { ToolSet, UIMessage, UIMessageChunk } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { readUIMessageStream, streamText, tool } from "ai";
 import { z } from "zod";
+import { decodeMessages } from "../lib/messages-codec.js";
 import type { StreamBroadcaster } from "../lib/stream-broadcaster.js";
 import * as schema from "../db/schema.js";
 import type { Db } from "../db/driver.js";
@@ -174,7 +175,7 @@ test("Anthropic chat request: date-only system prompt with cache breakpoint, tim
     assert.equal(JSON.stringify(body.messages[0]).includes("Current date and time"), false);
 
     const saved = await db.select().from(schema.chatSessions).get();
-    const savedLastUser = (JSON.parse(saved!.messages) as UIMessage[]).filter((m) => m.role === "user").at(-1)!;
+    const savedLastUser = decodeMessages(saved!.messages).filter((m) => m.role === "user").at(-1)!;
     assert.deepEqual(savedLastUser.parts, [{ type: "text", text: "why is checkout slow?" }], "time is not a visible part");
     assert.equal((savedLastUser.metadata as { sentTime: string }).sentTime, last.content[1].text, "time is kept for later turns");
     assert.equal(saved?.status, "done");
@@ -208,7 +209,7 @@ async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string 
     await whileRunning?.(context);
     await draining;
     const row = await db.select().from(schema.chatSessions).get();
-    const saved = JSON.parse(row!.messages) as UIMessage[];
+    const saved = decodeMessages(row!.messages);
     return { bodies, completed, failed, parts, saved, status: row?.status };
   } finally {
     delete process.env.ANTHROPIC_BASE_URL;

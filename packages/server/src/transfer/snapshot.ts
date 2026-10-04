@@ -1,4 +1,4 @@
-import { notInArray } from "drizzle-orm";
+import { gte, notInArray } from "drizzle-orm";
 import type { SQLiteTable } from "drizzle-orm/sqlite-core";
 import { runInTransaction, type Db } from "../db/driver.js";
 import * as schema from "../db/schema.js";
@@ -20,7 +20,7 @@ export const TABLES: [string, SQLiteTable][] = [
   ["agent_runs", schema.agentRuns],
 ];
 
-export const FORMAT = 2;
+export const FORMAT = 3;
 
 export interface Snapshot {
   format: number;
@@ -41,8 +41,10 @@ export function readTable(tx: Db, name: string, table: SQLiteTable): Promise<Rec
   return (name === "app_settings" ? query.where(notInArray(schema.appSettings.key, LOCAL_SETTING_KEYS)) : query).all() as Promise<Record<string, unknown>[]>;
 }
 
-export async function readSyncRows(tx: Db): Promise<SyncRow[]> {
-  const rows = await tx.select().from(schema.syncRows).all();
+/** With `since`, only the entries this device changed at or after that local time. */
+export async function readSyncRows(tx: Db, since?: number): Promise<SyncRow[]> {
+  const query = tx.select().from(schema.syncRows);
+  const rows = await (since === undefined ? query : query.where(gte(schema.syncRows.localAt, since))).all();
   return rows.map((r) => ({ tbl: r.tbl, row_key: r.rowKey, changed_at: r.changedAt, deleted: r.deleted }));
 }
 
@@ -81,6 +83,7 @@ export function* batches<T>(rows: T[]) {
 export async function importSnapshot(db: Db, snapshot: Snapshot, options: { pauseMonitors?: boolean } = {}): Promise<Record<string, number>> {
   if (snapshot.format !== FORMAT) throw new Error("The copy comes from a different Tracer version. Update both apps to the same version.");
   const counts: Record<string, number> = {};
+  const localAt = Date.now();
   await runInTransaction(db, async (tx) => {
     for (const [name, table] of [...TABLES].reverse()) {
       await (name === "app_settings" ? tx.delete(table).where(notInArray(schema.appSettings.key, LOCAL_SETTING_KEYS)) : tx.delete(table)).run();
@@ -93,7 +96,7 @@ export async function importSnapshot(db: Db, snapshot: Snapshot, options: { paus
     // The triggers logged the import itself; the receiver takes the sender's log, so the next merge finds no difference.
     await tx.delete(schema.syncRows).run();
     for (const batch of batches(snapshot.rows ?? [])) {
-      await tx.insert(schema.syncRows).values(batch.map((r) => ({ tbl: r.tbl, rowKey: r.row_key, changedAt: r.changed_at, deleted: r.deleted }))).run();
+      await tx.insert(schema.syncRows).values(batch.map((r) => ({ tbl: r.tbl, rowKey: r.row_key, changedAt: r.changed_at, localAt, deleted: r.deleted }))).run();
     }
     if (options.pauseMonitors) {
       await tx.update(schema.monitors).set({ enabled: 0 }).run();

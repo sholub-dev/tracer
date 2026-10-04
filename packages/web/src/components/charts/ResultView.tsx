@@ -73,7 +73,7 @@ function CellValue({ value, colKey }: { value: unknown; colKey: string }) {
 /** Cap rendered rows — a multi-thousand-row result stalls the frame and janks scrolling. */
 const ROW_CAP = 100;
 
-function CappedRows<T>({ items, colSpan, render }: { items: readonly T[]; colSpan: number; render: (item: T, i: number) => ReactNode }) {
+function CappedRows<T>({ items, colSpan, render, totalRows }: { items: readonly T[]; colSpan: number; render: (item: T, i: number) => ReactNode; totalRows?: number }) {
   // Track which items were expanded, so new data in the same slot re-caps.
   const [expandedFor, setExpandedFor] = useState<readonly T[] | null>(null);
   const showAll = expandedFor === items;
@@ -87,6 +87,13 @@ function CappedRows<T>({ items, colSpan, render }: { items: readonly T[]; colSpa
             <Button variant="link" size="xs" className="px-0" onClick={() => setExpandedFor(items)}>
               Show all {items.length} rows
             </Button>
+          </TableCell>
+        </TableRow>
+      )}
+      {totalRows != null && totalRows > items.length && (
+        <TableRow className="hover:bg-transparent">
+          <TableCell colSpan={colSpan} className="py-1 text-xs text-muted-foreground">
+            First {items.length} of {totalRows} rows saved
           </TableCell>
         </TableRow>
       )}
@@ -118,13 +125,14 @@ function Td({ children, numeric }: { children: ReactNode; numeric?: boolean }) {
 
 const isNumeric = (value: unknown) => coerceNumeric(value) !== null;
 
-function DataTable({ columns, rows }: { columns: Column[]; rows: Record<string, unknown>[] }) {
+function DataTable({ columns, rows, totalRows }: { columns: Column[]; rows: Record<string, unknown>[]; totalRows?: number }) {
   const numeric = columns.map((col) => isNumeric(col.get(rows[0])));
   return (
     <ResultTable head={columns.map((col, c) => <Th key={col.key} numeric={numeric[c]}>{col.label}</Th>)}>
       <CappedRows
         items={rows}
         colSpan={columns.length}
+        totalRows={totalRows}
         render={(row, i) => (
           <TableRow key={i} className="hover:bg-muted/40">
             {columns.map((col, c) => (
@@ -139,12 +147,13 @@ function DataTable({ columns, rows }: { columns: Column[]; rows: Record<string, 
   );
 }
 
-function ValueList({ label, items }: { label: string; items: readonly unknown[] }) {
+function ValueList({ label, items, totalRows }: { label: string; items: readonly unknown[]; totalRows?: number }) {
   return (
     <ResultTable head={<Th>{label}</Th>}>
       <CappedRows
         items={items}
         colSpan={1}
+        totalRows={totalRows}
         render={(item, i) => (
           <TableRow key={i} className="hover:bg-muted/40">
             <Td><CellText value={formatValue(item)} /></Td>
@@ -155,7 +164,7 @@ function ValueList({ label, items }: { label: string; items: readonly unknown[] 
   );
 }
 
-export default memo(function ResultView({ data, containerSize, threshold, chartType }: { data: unknown; containerSize?: ContainerSize; threshold?: Threshold; chartType?: string }) {
+export default memo(function ResultView({ data, containerSize, threshold, chartType, totalRows }: { data: unknown; containerSize?: ContainerSize; threshold?: Threshold; chartType?: string; totalRows?: number }) {
   // Markdown summary from LLM summarizer
   if (typeof data === "string") {
     return (
@@ -181,7 +190,7 @@ export default memo(function ResultView({ data, containerSize, threshold, chartT
   }
 
   if (data.every((v: unknown) => typeof v !== "object" || v === null)) {
-    return <ValueList label="Value" items={data} />;
+    return <ValueList label="Value" items={data} totalRows={totalRows} />;
   }
 
   const rows = data as Record<string, unknown>[];
@@ -194,7 +203,7 @@ export default memo(function ResultView({ data, containerSize, threshold, chartT
       const columns = buildColumns([rows[0]]);
       return <KeyFigures columns={columns.filter((c) => !c.key.startsWith("facet"))} row={rows[0]} />;
     }
-    if (chartType === "table") return <DataTable columns={buildColumns(rows)} rows={rows} />;
+    if (chartType === "table") return <DataTable columns={buildColumns(rows)} rows={rows} totalRows={totalRows} />;
   }
 
   const hasTimeKeys = "beginTimeSeconds" in rows[0];
@@ -273,5 +282,5 @@ export default memo(function ResultView({ data, containerSize, threshold, chartT
 
   if (isScalar) return <KeyFigures columns={metricKeys} row={rows[0]} />;
 
-  return <DataTable columns={columns} rows={rows} />;
+  return <DataTable columns={columns} rows={rows} totalRows={totalRows} />;
 });

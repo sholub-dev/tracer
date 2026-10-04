@@ -1,7 +1,7 @@
 import type { SetupDriver } from "./driver.js";
 
 /** Settings that belong to one device: they never leave it and a copy or merge never touches them. */
-export const LOCAL_SETTING_KEYS = ["device_id", "sync_peer_id", "sync_peer_name", "sync_last_at"];
+export const LOCAL_SETTING_KEYS = ["device_id", "sync_peer_id", "sync_peer_name", "sync_last_at", "sync_marks"];
 
 // Synced table -> key column that identifies a row on every device, and the column that dates existing rows.
 export const SYNC_KEYS: Record<string, { key: string; time?: string }> = {
@@ -248,6 +248,7 @@ async function setupSync(sqlite: SetupDriver): Promise<void> {
       tbl TEXT NOT NULL,
       row_key TEXT NOT NULL,
       changed_at INTEGER NOT NULL,
+      local_at INTEGER NOT NULL DEFAULT 0,
       deleted INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (tbl, row_key)
     );
@@ -262,6 +263,13 @@ async function setupSync(sqlite: SetupDriver): Promise<void> {
     INSERT OR IGNORE INTO app_settings (key, value) VALUES ('device_id', '${crypto.randomUUID()}');
   `);
 
+  // local_at is this device's own clock for the change; changed_at can carry another device's time after a merge.
+  const logColumns = (await sqlite.all(`PRAGMA table_info(sync_rows)`) as { name: string }[]).map((c) => c.name);
+  if (!logColumns.includes("local_at")) {
+    await sqlite.exec(`ALTER TABLE sync_rows ADD COLUMN local_at INTEGER NOT NULL DEFAULT 0`);
+    await sqlite.exec(`UPDATE sync_rows SET local_at = changed_at`);
+  }
+
   const local = LOCAL_SETTING_KEYS.map((k) => `'${k}'`).join(", ");
   const columns = new Map<string, string[]>();
   for (const table of Object.keys(SYNC_KEYS)) {
@@ -272,8 +280,8 @@ async function setupSync(sqlite: SetupDriver): Promise<void> {
   for (const [table, { key, time }] of Object.entries(SYNC_KEYS)) {
     const isSettings = table === "app_settings";
     const upsert = (row: "NEW" | "OLD", deleted: 0 | 1) =>
-      `INSERT INTO sync_rows (tbl, row_key, changed_at, deleted) VALUES ('${table}', ${row}.${key}, ${NOW_MS}, ${deleted})
-        ON CONFLICT (tbl, row_key) DO UPDATE SET changed_at = excluded.changed_at, deleted = excluded.deleted;`;
+      `INSERT INTO sync_rows (tbl, row_key, changed_at, local_at, deleted) VALUES ('${table}', ${row}.${key}, ${NOW_MS}, ${NOW_MS}, ${deleted})
+        ON CONFLICT (tbl, row_key) DO UPDATE SET changed_at = excluded.changed_at, local_at = excluded.local_at, deleted = excluded.deleted;`;
     const when = (row: "NEW" | "OLD") => {
       const conditions = [`${row}.${key} IS NOT NULL`];
       if (isSettings) conditions.push(`${row}.key NOT IN (${local})`);
@@ -290,8 +298,8 @@ async function setupSync(sqlite: SetupDriver): Promise<void> {
       `CREATE TRIGGER sync_${table}_ins AFTER INSERT ON ${table} ${when("NEW")} BEGIN ${upsert("NEW", 0)} END;`,
       `CREATE TRIGGER sync_${table}_upd AFTER UPDATE${updateOf} ON ${table} ${when("NEW")} BEGIN ${upsert("NEW", 0)} END;`,
       `CREATE TRIGGER sync_${table}_del AFTER DELETE ON ${table} ${when("OLD")} BEGIN ${upsert("OLD", 1)} END;`,
-      `INSERT OR IGNORE INTO sync_rows (tbl, row_key, changed_at, deleted)
-        SELECT '${table}', ${key}, ${time ? `${time} * 1000` : "0"}, 0 FROM ${table}${isSettings ? ` WHERE key NOT IN (${local})` : ""};`,
+      `INSERT OR IGNORE INTO sync_rows (tbl, row_key, changed_at, local_at, deleted)
+        SELECT '${table}', ${key}, ${time ? `${time} * 1000` : "0"}, ${time ? `${time} * 1000` : "0"}, 0 FROM ${table}${isSettings ? ` WHERE key NOT IN (${local})` : ""};`,
     );
   }
   await sqlite.exec(statements.join("\n"));

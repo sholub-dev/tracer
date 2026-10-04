@@ -17,6 +17,7 @@ import { publicProcedure, router } from "../trpc.js";
 import { chatSessions, agentRuns, monitorTriggers, sessionTimers } from "../../db/schema.js";
 import { generateSessionSummary } from "../../agents/utility/summary.js";
 import { sessionChanged, sessionChanges } from "../../lib/session-events.js";
+import { decodeMessages, decodeMessagesJson, encodeMessages } from "../../lib/messages-codec.js";
 
 const AGENT_TYPE_LABELS: Record<string, string> = {
   chat: "Chat",
@@ -71,7 +72,7 @@ export const sessionsRouter = router({
       if (!row) return null;
       // Raw JSON string: superjson-walking a large message tree blocks the event loop; the client parses it.
       return {
-        id: row.id, title: row.title, status: row.status, kind: row.kind, messagesJson: row.messages, updatedAt: row.updatedAt,
+        id: row.id, title: row.title, status: row.status, kind: row.kind, messagesJson: decodeMessagesJson(row.messages), updatedAt: row.updatedAt,
         summary: row.summary, summaryUpTo: row.summaryUpTo, summaryCreatedAt: row.summaryCreatedAt,
       };
     }),
@@ -152,7 +153,7 @@ export const sessionsRouter = router({
       await ctx.db
         .update(chatSessions)
         .set({
-          messages: JSON.stringify(input.messages),
+          messages: encodeMessages(input.messages),
           updatedAt: unixNow(),
         })
         .where(eq(chatSessions.id, input.id))
@@ -191,7 +192,7 @@ export const sessionsRouter = router({
           title,
           status: "idle",
           kind: SESSION_KIND.IMPORTED,
-          messages: JSON.stringify([assistantMessage]),
+          messages: encodeMessages([assistantMessage as UIMessage]),
         })
         .run();
       sessionChanged(id);
@@ -209,7 +210,7 @@ export const sessionsRouter = router({
       if (!row) return { success: false, summaryCleared: false };
       let messages: unknown[] = [];
       try {
-        messages = JSON.parse(row.messages);
+        messages = decodeMessages(row.messages);
       } catch {
         return { success: false, summaryCleared: false };
       }
@@ -229,7 +230,7 @@ export const sessionsRouter = router({
       await ctx.db
         .update(chatSessions)
         .set({
-          messages: JSON.stringify(truncated),
+          messages: encodeMessages(truncated as UIMessage[]),
           updatedAt: unixNow(),
           ...(summaryStale ? { summary: null, summaryUpTo: null, summaryCreatedAt: null } : {}),
         })
@@ -254,7 +255,7 @@ export const sessionsRouter = router({
 
       let messages: UIMessage[];
       try {
-        messages = JSON.parse(row.messages);
+        messages = decodeMessages(row.messages);
       } catch {
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Session messages are corrupted" });
       }
@@ -327,7 +328,7 @@ export const sessionsRouter = router({
       let prefixUnchanged = false;
       if (fresh && fresh.status !== "streaming" && !ctx.activeStreams.has(input.id)) {
         try {
-          const freshMessages: UIMessage[] = JSON.parse(fresh.messages);
+          const freshMessages: UIMessage[] = decodeMessages(fresh.messages);
           prefixUnchanged =
             JSON.stringify(freshMessages.slice(0, sourceUpTo)) ===
             JSON.stringify(messages.slice(0, sourceUpTo));

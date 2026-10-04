@@ -37,14 +37,33 @@ function keyOf(name: string): { prop: string; column: any } {
   return { prop, column };
 }
 
-export async function exportSyncPayload(db: Db): Promise<SyncPayload> {
+/** With `since`, only the rows this device changed at or after that local time, deletes included. */
+export async function exportSyncPayload(db: Db, since?: number): Promise<SyncPayload> {
   const tables: SyncPayload["tables"] = {};
   let rows: SyncRow[] = [];
   await runInTransaction(db, async (tx) => {
     for (const [name, table] of SYNCED) tables[name] = await readTable(tx, name, table);
-    rows = await readSyncRows(tx);
+    rows = await readSyncRows(tx, since);
   });
-  return { format: FORMAT, tables, rows };
+  if (since === undefined) return { format: FORMAT, tables, rows };
+
+  const changed = new Map<string, Set<string>>();
+  for (const r of rows) {
+    if (!changed.has(r.tbl)) changed.set(r.tbl, new Set());
+    changed.get(r.tbl)!.add(r.row_key);
+  }
+  const all = tables;
+  const only: SyncPayload["tables"] = {};
+  for (const [name] of SYNCED) {
+    const { prop } = keyOf(name);
+    only[name] = all[name].filter((row) => changed.get(name)?.has(String(row[prop])));
+  }
+  // The receiver maps a memory operation to its memory through the memory's uid, even when the memory did not change.
+  const wanted = new Set(only.memory_operations.map((o) => o.memoryId));
+  for (const memory of all.tool_memories) {
+    if (wanted.has(memory.id) && !only.tool_memories.includes(memory)) only.tool_memories.push(memory);
+  }
+  return { format: FORMAT, tables: only, rows };
 }
 
 function omit(row: Row, keys: string[]): Row {
@@ -77,8 +96,8 @@ export async function mergeSyncPayload(db: Db, remote: SyncPayload): Promise<{ a
     }
     // Overrides the time the triggers just wrote, so both devices end with the same log.
     const log = (entry: SyncRow) => tx.insert(schema.syncRows)
-      .values({ tbl: entry.tbl, rowKey: entry.row_key, changedAt: entry.changed_at, deleted: entry.deleted })
-      .onConflictDoUpdate({ target: [schema.syncRows.tbl, schema.syncRows.rowKey], set: { changedAt: entry.changed_at, deleted: entry.deleted } }).run();
+      .values({ tbl: entry.tbl, rowKey: entry.row_key, changedAt: entry.changed_at, localAt: Date.now(), deleted: entry.deleted })
+      .onConflictDoUpdate({ target: [schema.syncRows.tbl, schema.syncRows.rowKey], set: { changedAt: entry.changed_at, localAt: Date.now(), deleted: entry.deleted } }).run();
 
     for (const [name, table] of [...SYNCED].reverse()) {
       for (const entry of (newer.get(name) ?? []).filter((e) => e.deleted)) {

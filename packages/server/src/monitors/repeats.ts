@@ -6,6 +6,7 @@ import type { Db } from "../db/driver.js";
 import { chatSessions, monitorTriggers } from "../db/schema.js";
 import { extractAnalysis } from "../agents/analysis.js";
 import { CONFIG } from "../config.js";
+import { decodeMessages } from "../lib/messages-codec.js";
 import { redact } from "../integrations/slack.js";
 import { firstSentence, summaryFromMessages, type AlertSummary } from "./alert-summary.js";
 import type { Group } from "./condition.js";
@@ -70,7 +71,7 @@ export function byRelevance<T extends { keys: string[] }>(newestFirst: T[], curr
 export async function readOutcome(db: Db, sessionId: string): Promise<{ analysis: string; report: AlertSummary | null }> {
   const row = await db.select({ messages: chatSessions.messages }).from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
   try {
-    const messages = JSON.parse(row?.messages ?? "[]") as UIMessage[];
+    const messages = row ? decodeMessages(row.messages) : [];
     return { analysis: extractAnalysis(messages).analysis, report: summaryFromMessages(messages) };
   } catch {
     return { analysis: "", report: null };

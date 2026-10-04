@@ -200,6 +200,7 @@ export const syncRows = sqliteTable("sync_rows", {
   tbl: text("tbl").notNull(),
   rowKey: text("row_key").notNull(),
   changedAt: integer("changed_at").notNull(),
+  localAt: integer("local_at").notNull().default(0),
   deleted: integer("deleted").notNull().default(0),
 }, (t) => [
   primaryKey({ columns: [t.tbl, t.rowKey] }),

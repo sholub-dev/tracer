@@ -3,6 +3,7 @@ import { eq, sql } from "drizzle-orm";
 import { DEFAULT_SESSION_TITLE, unixNow, splitAtAnalysis, type AfterCompleteParams } from "@tracer-sh/shared";
 import { chatSessions } from "../db/schema.js";
 import { sessionChanged } from "../lib/session-events.js";
+import { decodeMessages, encodeMessages } from "../lib/messages-codec.js";
 import { resolveModel, type ProviderOptions } from "../llm/resolve.js";
 import { extractUsage, recordAgentRun } from "../llm/usage.js";
 import { StreamBroadcaster } from "../lib/stream-broadcaster.js";
@@ -55,7 +56,7 @@ export async function loadSessionMessages(
   let previous: UIMessage[] = [];
   if (existing) {
     try {
-      previous = JSON.parse(existing.messages);
+      previous = decodeMessages(existing.messages);
     } catch {
       console.warn(`[chat] Corrupted session ${sessionId}, starting fresh`);
     }
@@ -275,7 +276,7 @@ When the user's question spans multiple providers, query each relevant provider 
 
           const title = sessionTitle(enrichedMessages);
           const now = unixNow();
-          const messagesJson = JSON.stringify(enrichedMessages);
+          const packed = encodeMessages(enrichedMessages);
 
           await recordAgentRun(context.db, {
             sessionId,
@@ -289,7 +290,7 @@ When the user's question spans multiple providers, query each relevant provider 
             .values({
               id: sessionId,
               title,
-              messages: messagesJson,
+              messages: packed,
               status: "done",
               createdAt: now,
               updatedAt: now,
@@ -298,7 +299,7 @@ When the user's question spans multiple providers, query each relevant provider 
               target: chatSessions.id,
               set: {
                 title: sql`CASE WHEN ${chatSessions.title} = ${DEFAULT_SESSION_TITLE} THEN ${title} ELSE ${chatSessions.title} END`,
-                messages: messagesJson,
+                messages: packed,
                 status: sql`CASE WHEN ${chatSessions.status} = 'idle' THEN 'idle' ELSE 'done' END`,
                 updatedAt: now,
               },
@@ -398,20 +399,20 @@ export async function runChatAgent({
   context.activeStreams.set(sessionId, { broadcaster, controller: serverAbort });
 
   const now = unixNow();
-  const messagesJson = JSON.stringify(messages);
+  const packed = encodeMessages(messages);
   await context.db
     .insert(chatSessions)
     .values({
       id: sessionId,
       title: DEFAULT_SESSION_TITLE,
-      messages: messagesJson,
+      messages: packed,
       status: "streaming",
       createdAt: now,
       updatedAt: now,
     })
     .onConflictDoUpdate({
       target: chatSessions.id,
-      set: { messages: messagesJson, status: "streaming", updatedAt: now },
+      set: { messages: packed, status: "streaming", updatedAt: now },
     })
     .run();
   sessionChanged(sessionId);

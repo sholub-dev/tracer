@@ -4,6 +4,8 @@ const config: CapacitorConfig = {
   appId: "sh.tracer.app",
   appName: "Tracer",
   webDir: "../web/dist-ios",
+  // The app scrolls inside its own panels. A scrolling outer page lets iOS push the screen up when the keyboard opens.
+  ios: { scrollEnabled: false },
   plugins: {
     // Global fetch goes native, which skips CORS for data-source APIs; LLM calls keep the streaming WebView fetch.
     CapacitorHttp: { enabled: true },

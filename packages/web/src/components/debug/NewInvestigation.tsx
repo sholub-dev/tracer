@@ -29,8 +29,9 @@ function SourcesLine() {
 }
 
 export function NewInvestigation({ composer }: { composer: ReactNode }) {
+  // Fixed top padding on phones: a height-based one shrinks when the keyboard opens and moves the input.
   return (
-    <div className="mx-auto w-full max-w-[712px] px-4 pt-[10vh] pb-16 sm:px-6 lg:pt-[14vh]">
+    <div className="mx-auto w-full max-w-[712px] px-4 pt-20 pb-16 sm:px-6 sm:pt-[10vh] lg:pt-[14vh]">
       <h1 className="text-center text-2xl font-semibold tracking-tight text-balance">What are you investigating?</h1>
       <SourcesLine />
       <div className="mt-8">{composer}</div>

@@ -101,6 +101,7 @@ export async function validateMonitor(
   }
   if (!opts.runQuery) return { condition };
 
+  await providers.whenLoaded();
   const provider = providers.getProvider(providerName);
   if (!provider?.connected) return { error: `${PROVIDER_LABELS[providerName]} is not connected.` };
 

@@ -189,9 +189,10 @@ async function latestSessionRunning(context: Context, monitorId: string): Promis
 }
 
 async function checkMonitor(context: Context, monitor: Monitor, window: { start: number; end: number }): Promise<void> {
+  await context.providers.whenLoaded();
   const provider = context.providers.getProvider(monitor.provider);
   if (!provider?.connected) {
-    // No backoff: cheap, and providers connect a few seconds after startup.
+    // No backoff: cheap, and the provider can connect on a later check.
     await setStatus(context, monitor.id, { lastStatus: "error", lastError: `Provider ${monitor.provider} is not connected` });
     return;
   }

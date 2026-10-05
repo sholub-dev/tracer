@@ -6,6 +6,8 @@ export const WEB_CONFIG = {
   sessionEventCoalesceMs: 100,
   subscriptionRetryMaxMs: 10_000,
   monitorPollingMs: 60_000,
+  /** How often a failed data-source check repeats. */
+  providerRetryMs: 15_000,
   updateCheckStaleTimeMs: 5 * 60 * 1000,
   gcpProjectsStaleTimeMs: 5 * 60 * 1000,
   /** Grace period before probing a self-updating server, so the old one exits first. */

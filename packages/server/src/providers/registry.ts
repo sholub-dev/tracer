@@ -1,6 +1,7 @@
 import type { IProvider, ProviderStatus } from "@tracer-sh/shared";
 import type { Db } from "../db/driver.js";
 import { providerConfigs } from "../db/schema.js";
+import { CONFIG } from "../config.js";
 
 export type ProviderFactory = (config: Record<string, string>) => IProvider;
 
@@ -73,16 +74,46 @@ export class ProviderRegistry {
   }
 
   /** Replaces every configured provider with a fresh one from the stored settings, e.g. after a sync changed them. */
-  async reloadFromDb(db: Db): Promise<void> {
-    for (const provider of this.getAllProviders()) {
-      if (this.factories.has(provider.type)) await this.unregister(provider.name);
-    }
-    await this.initializeFromDb(db);
+  reloadFromDb(db: Db): Promise<void> {
+    return this.load(db, true);
   }
 
-  async initializeFromDb(db: Db): Promise<void> {
-    const rows = await db.select().from(providerConfigs).all();
+  initializeFromDb(db: Db): Promise<void> {
+    return this.load(db, false);
+  }
 
+  /**
+   * Resolves when the stored providers are registered and their first connection checks ended.
+   * A status read before that reports a provider that is still loading as not connected.
+   * The wait has a limit, so a check that does not end cannot block the readers.
+   */
+  whenLoaded(): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const limit = new Promise<void>((resolve) => { timer = setTimeout(resolve, CONFIG.providerLoadWaitMs); });
+    return Promise.race([this.loading, limit]).finally(() => clearTimeout(timer));
+  }
+
+  private loading: Promise<void> = Promise.resolve();
+
+  private load(db: Db, replace: boolean): Promise<void> {
+    const done = this.registerFromDb(db, replace).then(async (providers) => {
+      // In parallel: a slow source does not delay the others.
+      await Promise.all(providers.map((provider) => provider.initialize().catch(() => {
+        console.warn(`DB provider "${provider.type}" failed to initialize, but was registered.`);
+      })));
+    });
+    this.loading = done.catch(() => {});
+    return done;
+  }
+
+  private async registerFromDb(db: Db, replace: boolean): Promise<IProvider[]> {
+    if (replace) {
+      for (const provider of this.getAllProviders()) {
+        if (this.factories.has(provider.type)) await this.unregister(provider.name);
+      }
+    }
+    const rows = await db.select().from(providerConfigs).all();
+    const added: IProvider[] = [];
     for (const row of rows) {
       if (this.providers.has(row.type)) continue;
 
@@ -99,12 +130,8 @@ export class ProviderRegistry {
 
       const provider = entry.factory(config);
       this.register(provider);
-
-      try {
-        await provider.initialize();
-      } catch {
-        console.warn(`DB provider "${row.type}" failed to initialize, but was registered.`);
-      }
+      added.push(provider);
     }
+    return added;
   }
 }

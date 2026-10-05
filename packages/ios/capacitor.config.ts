@@ -7,7 +7,8 @@ const config: CapacitorConfig = {
   plugins: {
     // Global fetch goes native, which skips CORS for data-source APIs; LLM calls keep the streaming WebView fetch.
     CapacitorHttp: { enabled: true },
-    Keyboard: { resize: "native", resizeOnFullScreen: true },
+    // The WebView shrinks above the keyboard; the window behind it takes the page color, not black.
+    Keyboard: { resize: "native", resizeOnFullScreen: true, autoBackdropColor: "dom" },
     CapacitorSQLite: {
       iosDatabaseLocation: "Library/CapacitorDatabase",
       iosIsEncryption: true,

@@ -1,6 +1,6 @@
 import { Skeleton } from "@/components/ui/skeleton";
 import { trpc } from "../../lib/trpc";
-import { useGcpAuthStatus } from "../../lib/hooks";
+import { useGcpAuthStatus, useProviderPings } from "../../lib/hooks";
 import { ConnectionRow, Group, Section } from "./parts";
 import { PROVIDER_NOTES } from "./notes";
 import { GcloudHint, GcpProjectField } from "./GcpProjectField";
@@ -16,7 +16,7 @@ export function DataSourcesSettings() {
   const { data: statuses, isLoading: statusLoading } = trpc.provider.list.useQuery();
   const { data: configs, isLoading: configsLoading } = trpc.provider.getConfigs.useQuery();
   const { data: types, isLoading: typesLoading } = trpc.provider.getRegisteredTypes.useQuery();
-  const { data: pings } = trpc.provider.ping.useQuery(undefined, { refetchOnMount: "always" });
+  const { data: pings } = useProviderPings({ fresh: true });
   const auth = useGcpAuthStatus();
 
   const invalidate = () => {

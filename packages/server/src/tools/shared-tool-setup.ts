@@ -30,6 +30,7 @@ export async function collectBaseTools(
   const systemPrompts: string[] = [];
   let maxSteps: number | undefined;
   const afterCompleteCallbacks: Array<(params: AfterCompleteParams) => void> = [];
+  await registry.whenLoaded();
   let connectedProviders = registry.getAllProviders().filter((p) => p.connected);
 
   // Filter to active provider if specified (exclusive toggle)

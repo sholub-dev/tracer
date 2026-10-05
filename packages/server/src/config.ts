@@ -58,6 +58,9 @@ export const CONFIG = {
   /** Waits before re-running a background agent run (monitor, timer, API) that failed with an LLM/API error. */
   agentRetryDelaysMs: [5_000, 15_000, 45_000],
 
+  /** Upper limit on how long a status read waits for the startup connection checks (the API clients time out at 35 s). */
+  providerLoadWaitMs: 40_000,
+
   // ── Monitor scheduler ──
 
   monitorTickIntervalMs: 10_000,

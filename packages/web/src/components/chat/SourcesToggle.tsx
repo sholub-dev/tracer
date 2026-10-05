@@ -5,10 +5,11 @@ import { trpc } from "../../lib/trpc";
 import { WEB_CONFIG } from "../../lib/config";
 import { providerLabel, sortProviders } from "../../lib/providers";
 import { SegmentedControl } from "../common/SegmentedControl";
+import { useProviderPings } from "../../lib/hooks";
 
 /** Connected providers from the live ping; null while the first ping is in flight. */
 export function useConnectedProviders() {
-  const { data } = trpc.provider.ping.useQuery();
+  const { data } = useProviderPings();
   return data ? sortProviders(data.filter((p) => p.ok)) : null;
 }
 

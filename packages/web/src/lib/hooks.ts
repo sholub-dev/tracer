@@ -284,3 +284,16 @@ export function usePersistedState<T>(key: string, initial: T): [T, (value: T) =>
   return [value, setValue];
 }
 
+
+/**
+ * Data-source status for every screen, from one shared query, so two screens never disagree.
+ * A failed check repeats until it passes; `fresh` checks again on each mount.
+ */
+export function useProviderPings({ fresh = false } = {}) {
+  const failed = (data: { ok: boolean }[] | undefined) => !!data?.some((p) => !p.ok);
+  return trpc.provider.ping.useQuery(undefined, {
+    refetchOnMount: (query) => (fresh || failed(query.state.data) ? "always" : true),
+    refetchOnWindowFocus: true,
+    refetchInterval: (query) => (failed(query.state.data) ? WEB_CONFIG.providerRetryMs : false),
+  });
+}

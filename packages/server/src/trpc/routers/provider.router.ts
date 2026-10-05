@@ -11,11 +11,13 @@ import { toChartRows } from "../../providers/posthog/posthog-formatter.js";
 const getGcpAuth = async () => (await import("../../providers/gcp/gcp-auth.js")).getGcpAuth();
 
 export const providerRouter = router({
-  list: publicProcedure.query(({ ctx }) => {
+  list: publicProcedure.query(async ({ ctx }) => {
+    await ctx.providers.whenLoaded();
     return ctx.providers.getStatus();
   }),
 
   ping: publicProcedure.query(async ({ ctx }) => {
+    await ctx.providers.whenLoaded();
     const providers = ctx.providers.getAllProviders();
     const results = await Promise.allSettled(
       providers.map(async (p) => {

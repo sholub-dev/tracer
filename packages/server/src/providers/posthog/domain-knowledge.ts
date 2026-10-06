@@ -71,7 +71,7 @@ export const POSTHOG_INSIDE_OUT_DEBUGGING = `## Investigation Methodology
 1. Find it — for errors, \`SELECT ... FROM events WHERE event = '$exception' AND properties.$exception_list[1].value ILIKE '%value%'\`. For a user, filter by \`distinct_id\` or \`person.properties.email\`.
 2. Extract context — \`properties.$exception_list[1].type\`, \`properties.$exception_list[1].value\`, \`$current_url\`, \`distinct_id\`, \`timestamp\`.
 3. Expand ONLY if needed — pull that \`distinct_id\`'s surrounding events ordered by \`timestamp\` to see what the user did before/after, but only if the error context doesn't already answer the question.
-4. If multiple matches surface, investigate 1-2 representative samples. If they show the same pattern, STOP — that IS the pattern.
+4. If multiple matches surface, investigate 1-2 representative samples. Then count how many of all matches share their pattern (\`GROUP BY\` the shared property). Only a count makes it THE pattern.
 
 **Without a specific identifier** (vague symptoms):
 1. Golden signals — get multiple signals in ONE query: \`SELECT count() AS total, uniq(distinct_id) AS users, countIf(event = '$exception') AS errors FROM events WHERE timestamp >= now() - interval 1 hour\`. Don't run separate single-metric counts.

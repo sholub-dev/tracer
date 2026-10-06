@@ -59,3 +59,15 @@ test("prompts allow batching only independent reads and keep writes alone", () =
     assert.ok(!prompt.includes("ONE tool call per step"), `${name}: stale one-call rule`);
   }
 });
+
+test("prompts require competing explanations and a challenge check, and never forbid a disproving query", () => {
+  for (const [name, prompt] of allPrompts) {
+    assert.equal(prompt.split("### Challenge check").length - 1, 1, `${name}: expected one Challenge check`);
+    for (const phrase of ["Hold at least two explanations", "Check the base rate", "Check coverage", "Count before you generalize", "Never drop a result that does not fit", "Treat every prior as a hypothesis", "Economy limits breadth, never verification"]) {
+      assert.ok(prompt.includes(phrase), `${name}: missing "${phrase}"`);
+    }
+    for (const stale of ["never run extra investigation queries for it", "they cost thought, not extra steps", "or \"to confirm\""]) {
+      assert.ok(!prompt.includes(stale), `${name}: stale rule "${stale}"`);
+    }
+  }
+});

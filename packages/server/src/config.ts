@@ -46,6 +46,12 @@ export const CONFIG = {
   /** Upper limit on one title or memory LLM call. */
   utilityCallTimeoutMs: 5 * 60_000,
 
+  /** Upper limit on one conclusion review call; a slow review must not hold the run. */
+  reviewTimeoutMs: 90_000,
+
+  /** Cap on the run transcript sent to the conclusion reviewer. */
+  reviewTranscriptMaxChars: 60_000,
+
   /**
    * Code-level cap on the reasoning ("thinking") text a model may stream within a
    * single step. Enforced in the stream loops (not just via the provider

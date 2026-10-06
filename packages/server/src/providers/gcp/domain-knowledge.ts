@@ -158,7 +158,7 @@ export const GCP_INSIDE_OUT_DEBUGGING = `## Inside-Out Debugging
 1. Search directly — \`list_log_entries\` with a filter targeting that identifier. Do NOT start with broad overviews.
 2. Extract context — resource type, service name, trace ID, severity pattern, timestamps.
 3. Expand ONLY if needed — \`get_trace\` for the request chain, \`list_time_series\` for trends. But only if the log context doesn't already answer the question.
-4. If multiple trace IDs surface, investigate 1-2 representative samples. If they show the same pattern, stop — that IS the pattern.
+4. If multiple trace IDs surface, investigate 1-2 representative samples. Then count how many of all matching entries share their pattern (a filtered log count or Error Reporting group counts). Only a count makes it THE pattern.
 
 **Without a specific identifier** (vague symptoms):
 1. Start broad — \`list_log_entries\` with \`severity>=ERROR\` and pageSize=5 to discover what's happening.

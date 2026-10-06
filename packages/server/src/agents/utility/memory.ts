@@ -9,6 +9,7 @@ import { createUpdateMemoryTool, createDeleteMemoryTool } from "../../tools/memo
 import { memoryOperations } from "../../db/schema.js";
 import type { SubAgentQuery } from "../chat/sub-agent.js";
 import { getDomainKnowledge } from "./memory-domain-knowledge.js";
+import { timeoutSignal } from "../../lib/timeout-signal.js";
 
 interface MemoryAgentOptions {
   providerType: string;
@@ -159,7 +160,7 @@ ${tailInstruction}`;
       prompt,
       tools,
       stopWhen: isStepCount(10),
-      abortSignal: AbortSignal.timeout(CONFIG.utilityCallTimeoutMs),
+      abortSignal: timeoutSignal(CONFIG.utilityCallTimeoutMs),
       onLanguageModelCallEnd: sessionId ? recordEachCall(db, sessionId, "memory", resolved.modelId) : undefined,
     });
   } catch (err) {

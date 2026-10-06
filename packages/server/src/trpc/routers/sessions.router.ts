@@ -28,6 +28,7 @@ const AGENT_TYPE_LABELS: Record<string, string> = {
   title: "Title gen",
   memory: "Memory",
   summary: "Compaction",
+  review: "Conclusion review",
 };
 
 export const sessionsRouter = router({

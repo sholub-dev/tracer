@@ -15,6 +15,8 @@ import { EVIDENCE_GROUNDING, PLAIN_LANGUAGE } from "../lib/shared-prompts.js";
 import { CONFIG } from "../config.js";
 import { isTransientError } from "../lib/transient.js";
 import { createToolGate } from "../tools/tool-gate.js";
+import { ANALYSIS_TOOL_NAME, createBeginAnalysisTool } from "../tools/analysis-tool.js";
+import { reviewConclusion } from "./utility/review.js";
 
 /** Appended to the system prompt only when an attachment is present. */
 const IMAGE_ANALYSIS_GUIDANCE = `## Working with attached images and files
@@ -208,7 +210,12 @@ async function processLLMStream(
   };
   const collected = await collectTools(writer);
   // One gate per attempt: it holds the tool calls of a step to the read limit and runs writes alone.
-  const tools = collected.tools && createToolGate()(collected.tools);
+  // The run's own model reviews the conclusion; swap the tool before gating so it stays a gated write.
+  const tools = collected.tools && createToolGate()(
+    ANALYSIS_TOOL_NAME in collected.tools
+      ? { ...collected.tools, [ANALYSIS_TOOL_NAME]: createBeginAnalysisTool((ledger, msgs, signal) => reviewConclusion(context.db, sessionId, model, modelId, ledger, msgs, signal)) }
+      : collected.tools,
+  );
 
   // Compaction: when the session has a summary, the model sees only
   // [summary in system prompt + messages after the boundary]. The full
@@ -274,7 +281,7 @@ When the user's question spans multiple providers, query each relevant provider 
   }
 
   if (summaryForPrompt) {
-    systemPrompt += `\n\n## Earlier conversation summary\nThe earlier part of this conversation was compacted to save context. The summary below replaces those messages and is authoritative: the work it describes is already done — do NOT redo it. Reuse its recorded results, identifiers, queries, and conclusions.\n\n<conversation_summary>\n${summaryForPrompt}\n</conversation_summary>`;
+    systemPrompt += `\n\n## Earlier conversation summary\nThe earlier part of this conversation was compacted to save context. The summary below replaces those messages: the work it describes is already done — do NOT redo it. Reuse its recorded results, identifiers and queries as facts. Its conclusions are earlier claims: keep them while the data agrees, and test them again when a new result contradicts them.\n\n<conversation_summary>\n${summaryForPrompt}\n</conversation_summary>`;
   }
 
   const cached = withPromptCaching(provider, systemPrompt, providerOptions);

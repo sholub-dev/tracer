@@ -7,7 +7,7 @@ const alertSummarySchema = z.object({
   severity: z.enum(SEVERITIES)
     .describe("high: outage, users blocked or a key flow degraded; medium: limited impact; low: noise or no user impact"),
   tldr: z.string().describe("One sentence: what broke and its impact, with the key number. Not a restatement of the monitor."),
-  rootCause: z.string().describe("Two or three sentences: why it happened, the chain from cause to errors, proven by query results. Say \"cause not confirmed\" when it is not."),
+  rootCause: z.string().describe("Two or three sentences: why it happened, the chain from cause to errors, proven by query results. Start with the confidence label: confirmed (a result eliminates the strongest alternative), likely or unverified."),
   policy: z.string().describe("The alert policy or condition that fired"),
   started: z.string().describe("The first bad minute in the data, with time zone"),
   status: z.string().describe("One of: stopped (last error at <time>); ongoing (errors in the latest minutes up to now); recurring (the repeat pattern, e.g. every hour since 06:00). Check the data up to now."),
@@ -18,7 +18,7 @@ const alertSummarySchema = z.object({
     userImpact: z.string().describe("What the user sees"),
     journeyStep: z.string().describe("User journey step, or \"none (background)\""),
   })).max(5).describe("One per endpoint, largest first"),
-  seenBefore: z.string().describe("yes or no; when it happened before and whether the cause was the same"),
+  seenBefore: z.string().describe("yes or no; when it happened before and whether this run's data shows the same cause"),
 });
 
 export type AlertSummary = z.infer<typeof alertSummarySchema>;

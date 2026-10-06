@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { timeoutSignal } from "../../lib/timeout-signal.js";
 
 export type GcpAuthResult =
   | { ok: true; token: string }
@@ -63,7 +64,7 @@ async function refreshGcpAuth(): Promise<GcpAuthResult> {
         refresh_token: creds.refresh_token,
         grant_type: "refresh_token",
       }),
-      signal: AbortSignal.timeout(10_000),
+      signal: timeoutSignal(10_000),
     });
   } catch (err) {
     return {

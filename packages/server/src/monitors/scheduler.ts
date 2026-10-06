@@ -84,7 +84,7 @@ function buildMessage(
   lines.push(...triageLines);
   lines.push(
     "",
-    "If this looks like a past issue, read the most relevant past session, confirm with the fewest queries possible and say which one; otherwise investigate fully.",
+    "If this looks like a past issue, its past cause is only a hypothesis. Read the most relevant past session, then check in this window that the same cause appears, starts before this firing and explains its groups and size. If it does, say which session; if any part differs, investigate fully.",
     "Find the root cause. When done, call report_alert_summary once; it is what gets posted to Slack. Do not repeat its fields as labeled lines in your answer.",
   );
   return lines.join("\n");

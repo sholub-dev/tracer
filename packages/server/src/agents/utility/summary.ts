@@ -2,6 +2,7 @@ import { generateText, type UIMessage } from "ai";
 import { resolveModel } from "../../llm/resolve.js";
 import { recordEachCall } from "../../llm/usage.js";
 import type { Db } from "../../db/driver.js";
+import { timeoutSignal } from "../../lib/timeout-signal.js";
 
 const SUMMARY_SYSTEM_PROMPT = `You are compacting an AI debugging-assistant conversation into a detailed summary. Your summary will permanently REPLACE the original messages as the assistant's only memory of them, so anything you omit is lost forever. The assistant must be able to continue the investigation from your summary alone without redoing any completed work.
 
@@ -57,7 +58,7 @@ const TOOL_OUTPUT_CHAR_LIMIT = 6000;
 // A hung provider request must not pin the client's "summarizing" state forever.
 const GENERATION_TIMEOUT_MS = 5 * 60_000;
 
-function truncate(value: unknown, limit: number): string {
+export function truncate(value: unknown, limit: number): string {
   if (value === undefined) return "(none)";
   let text: string;
   try {
@@ -147,7 +148,7 @@ export async function generateSessionSummary(
       instructions: SUMMARY_SYSTEM_PROMPT,
       messages: [{ role: "user", content: userContent }],
       providerOptions: resolved.providerOptions,
-      abortSignal: AbortSignal.timeout(GENERATION_TIMEOUT_MS),
+      abortSignal: timeoutSignal(GENERATION_TIMEOUT_MS),
       onLanguageModelCallEnd: recordEachCall(db, opts.sessionId, "summary", resolved.modelId),
     });
     const summary = text.trim();

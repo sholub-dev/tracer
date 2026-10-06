@@ -63,7 +63,7 @@ export const NR_INSIDE_OUT_DEBUGGING = `## Inside-Out Debugging
 1. Find it — TransactionError first (\`\\\`error.message\\\` LIKE '%value%'\`, \`request.uri LIKE '%value%'\`). No match → Transaction → Log.
 2. Extract context — traceId, appName, transactionName, error.class, timestamp.
 3. Expand ONLY if needed — \`FROM Transaction WHERE traceId = '...'\` for the request chain, but only if the error context doesn't already answer the question.
-4. If multiple identifiers surface, investigate 1-2 representative samples. If they show the same pattern, stop — that IS the pattern.
+4. If multiple identifiers surface, investigate 1-2 representative samples. Then count how many of all matches share their pattern (FACET by the shared attribute). Only a count makes it THE pattern.
 
 **Without a specific identifier** (vague symptoms):
 1. Golden Signals — \`SELECT count(*), average(duration), percentage(count(*), WHERE error IS TRUE) FROM Transaction WHERE appName = '...' SINCE 1 hour ago\` — get multiple signals in ONE query.

@@ -6,6 +6,7 @@ import { publicProcedure, router } from "../trpc.js";
 import { providerConfigs } from "../../db/schema.js";
 import { readProviderConfig } from "../../db/config-reader.js";
 import { toChartRows } from "../../providers/posthog/posthog-formatter.js";
+import { timeoutSignal } from "../../lib/timeout-signal.js";
 
 // Loaded on demand: it reads gcloud credentials from disk, which only the desktop server can do.
 const getGcpAuth = async () => (await import("../../providers/gcp/gcp-auth.js")).getGcpAuth();
@@ -167,7 +168,7 @@ export const providerRouter = router({
 
         const res = await fetch(url, {
           headers: { Authorization: `Bearer ${accessToken}` },
-          signal: AbortSignal.timeout(15_000),
+          signal: timeoutSignal(15_000),
         });
         if (!res.ok) {
           console.warn(`[gcp] Failed to list projects: ${res.status} ${res.statusText}`);
@@ -232,7 +233,7 @@ export const providerRouter = router({
             Authorization: `Bearer ${auth.token}`,
             "X-Goog-User-Project": projectId,
           },
-          signal: AbortSignal.timeout(15_000),
+          signal: timeoutSignal(15_000),
         });
         if (!res.ok) {
           console.warn(`[vertex] Failed to list models: ${res.status} ${res.statusText}`);

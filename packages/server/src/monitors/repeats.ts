@@ -8,7 +8,7 @@ import { extractAnalysis } from "../agents/analysis.js";
 import { CONFIG } from "../config.js";
 import { decodeMessages } from "../lib/messages-codec.js";
 import { redact } from "../integrations/slack.js";
-import { firstSentence, summaryFromMessages, type AlertSummary } from "./alert-summary.js";
+import { dismissalFromMessages, firstSentence, summaryFromMessages, type AlertSummary } from "./alert-summary.js";
 import type { Group } from "./condition.js";
 
 export interface TriggerGroup extends Group {
@@ -68,13 +68,13 @@ export function byRelevance<T extends { keys: string[] }>(newestFirst: T[], curr
 }
 
 /** A session's analysis and the summary it reported. */
-export async function readOutcome(db: Db, sessionId: string): Promise<{ analysis: string; report: AlertSummary | null }> {
+export async function readOutcome(db: Db, sessionId: string): Promise<{ analysis: string; report: AlertSummary | null; dismissed: string | null }> {
   const row = await db.select({ messages: chatSessions.messages }).from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
   try {
     const messages = row ? decodeMessages(row.messages) : [];
-    return { analysis: extractAnalysis(messages).analysis, report: summaryFromMessages(messages) };
+    return { analysis: extractAnalysis(messages).analysis, report: summaryFromMessages(messages), dismissed: dismissalFromMessages(messages) };
   } catch {
-    return { analysis: "", report: null };
+    return { analysis: "", report: null, dismissed: null };
   }
 }
 
@@ -96,8 +96,8 @@ export async function pastSessions(db: Db, monitorId: string, currentKeys: strin
   const picked: PastSession[] = [];
   for (const t of byRelevance(triggers, currentKeys)) {
     if (picked.length === PAST_SESSIONS_LIMIT) break;
-    const { analysis, report } = await readOutcome(db, t.sessionId);
-    if (analysis || report) picked.push({ ...t, report, analysis: analysis.length > ANALYSIS_MAX_CHARS ? `${analysis.slice(0, ANALYSIS_MAX_CHARS)} …[truncated]` : analysis });
+    const { analysis, report, dismissed } = await readOutcome(db, t.sessionId);
+    if (dismissed === null && (analysis || report)) picked.push({ ...t, report, analysis: analysis.length > ANALYSIS_MAX_CHARS ? `${analysis.slice(0, ANALYSIS_MAX_CHARS)} …[truncated]` : analysis });
   }
   return picked.sort((a, b) => b.triggeredAt - a.triggeredAt);
 }

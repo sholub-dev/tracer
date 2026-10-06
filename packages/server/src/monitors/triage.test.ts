@@ -9,7 +9,7 @@ import type { ProviderRegistry } from "../providers/registry.js";
 import { CONFIG } from "../config.js";
 import { NewRelicProvider } from "../providers/newrelic/newrelic.provider.js";
 import type { AiIssue } from "../providers/newrelic/nerdgraph.client.js";
-import { applyTriage, checkWatches, decide, incidentQuery, incidentRefs, reportIssueStatusTool, TRIAGE_EFFECT, wakeupExtras, type DecideInput } from "./triage.js";
+import { applyTriage, checkWatches, closedCheckPrompt, decide, incidentQuery, incidentRefs, reportIssueStatusTool, TRIAGE_EFFECT, wakeupExtras, type DecideInput } from "./triage.js";
 import { firingRerun } from "./scheduler.js";
 import { writeSlackConfig } from "../integrations/slack.js";
 
@@ -243,6 +243,30 @@ test("a retried firing gets report_issue_status for its pending issues, triages 
     assert.equal(await reported(context.db), "done");
     assert.equal((await firingRerun(context, "s1")), null, "a reported firing is a plain chat");
   });
+});
+
+test("a retried incident firing with no open issue can be dismissed, and a dismissed run posts nothing", async () => {
+  const { context } = fakeNewRelic({});
+  await context.db.update(schema.monitors).set({ query: MONITOR_QUERY }).run();
+  const dismissal = { type: "tool-dismiss_alert", toolCallId: "d", state: "output-available", input: { reason: "incident 1 closed at 13:58" }, output: { recorded: true } };
+  await context.db.update(schema.chatSessions).set({ messages: JSON.stringify([{ id: "", role: "assistant", parts: [dismissal] }]) }).run();
+  await withSlack(context.db, async (posts) => {
+    const rerun = (await firingRerun(context, "s1"))!;
+    assert.ok(rerun.tools.dismiss_alert);
+    assert.equal(rerun.tools.report_issue_status, undefined);
+    rerun.onComplete({});
+    await settle(() => false);
+    assert.equal(posts.length, 0);
+    assert.equal(await reported(context.db), "done");
+  });
+});
+
+test("closedCheckPrompt asks to check the incident state and states what Tracer already found", () => {
+  const text = closedCheckPrompt({ open: [], closed: [{ issueId: "a" } as AiIssue], tracked: 2 }).join("\n");
+  assert.match(text, /First check that this alert is still open/);
+  assert.match(text, /1 already closed, 2 handled by an earlier alert/);
+  assert.match(text, /call dismiss_alert alone/);
+  assert.doesNotMatch(closedCheckPrompt(null).join("\n"), /Tracer found/);
 });
 
 test("a firing whose every attempt failed posts once and keeps its issues for a Retry, which acks and closes", async () => {

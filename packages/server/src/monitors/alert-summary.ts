@@ -35,6 +35,31 @@ export function reportAlertSummaryTool(): Tool<AlertSummary, { recorded: true }>
   });
 }
 
+export function dismissAlertTool(): Tool<{ reason: string }, { recorded: true }> {
+  return tool({
+    description: "End a firing whose New Relic incidents are all closed already. Nothing is posted to Slack and no issue is acked or closed. "
+      + "Call it only when a query result shows that every incident of this firing is closed.",
+    inputSchema: z.object({
+      reason: z.string().describe("The result that shows it, e.g. \"incident 4821 closed at 13:58\""),
+    }),
+    execute: async () => ({ recorded: true }),
+  });
+}
+
+/** The reason of the last successful dismiss_alert call; null when none came after the last successful report_alert_summary. */
+export function dismissalFromMessages(messages: UIMessage[]): string | null {
+  for (const m of [...messages].reverse()) {
+    for (const p of [...m.parts].reverse()) {
+      if (!("state" in p) || p.state !== "output-available") continue;
+      if (p.type === "tool-report_alert_summary") return null;
+      if (p.type !== "tool-dismiss_alert") continue;
+      const reason = (p.input as { reason?: unknown } | undefined)?.reason;
+      return typeof reason === "string" ? reason : "";
+    }
+  }
+  return null;
+}
+
 /** The input of the last successful report_alert_summary call whose input is valid. */
 export function summaryFromMessages(messages: UIMessage[]): AlertSummary | null {
   for (const m of [...messages].reverse()) {

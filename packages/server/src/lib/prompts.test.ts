@@ -55,7 +55,7 @@ test("unified prompt sections appear in the intended order", () => {
 test("prompts allow batching only independent reads and keep writes alone", () => {
   for (const [name, prompt] of allPrompts) {
     assert.ok(prompt.includes("**Batch only independent reads.** You may make up to 4 tool calls in one step"), `${name}: missing batch rule`);
-    assert.ok(prompt.includes("Never batch begin_analysis, report_issue_status, report_alert_summary, set_timer, add_jira_comment"), `${name}: missing write rule`);
+    assert.ok(prompt.includes("Never batch begin_analysis, report_issue_status, report_alert_summary, dismiss_alert, set_timer, add_jira_comment"), `${name}: missing write rule`);
     assert.ok(!prompt.includes("ONE tool call per step"), `${name}: stale one-call rule`);
   }
 });

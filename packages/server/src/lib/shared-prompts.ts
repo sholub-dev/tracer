@@ -43,7 +43,7 @@ export function buildRules(opts: {
   extraRules?: string[];
 }): string {
   const rules = [
-    `1. **Batch only independent reads.** You may make up to 4 tool calls in one step when each is a read and none needs another's result (for example the same query for two services, or logs and metrics for one window). Make a call that depends on a result in a later step. Never batch begin_analysis, report_issue_status, report_alert_summary, set_timer, add_jira_comment, or any save, update or delete tool — make them alone in their step. After the results arrive, write one brief summary that covers all of them.`,
+    `1. **Batch only independent reads.** You may make up to 4 tool calls in one step when each is a read and none needs another's result (for example the same query for two services, or logs and metrics for one window). Make a call that depends on a result in a later step. Never batch begin_analysis, report_issue_status, report_alert_summary, dismiss_alert, set_timer, add_jira_comment, or any save, update or delete tool — make them alone in their step. After the results arrive, write one brief summary that covers all of them.`,
     `2. **Empty results: suspect the query first, then prove absence.** Check field name, case, quoting, and time range; fix and retry differently. If a deliberately broadened probe (wider window, fewer filters) is also empty, the absence IS the finding — report it. Never keep reshaping the same query hoping data appears.`,
     `3. **NEVER repeat a failed query.** Read the error, fix the cause. Same error twice → completely different approach.`,
     `4. **Use discovered identifiers exactly.** If the actual name differs from the task, use the exact discovered value.`,

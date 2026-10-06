@@ -40,7 +40,8 @@
     ],
     "overrides": {
       "postcss": "^8.5.28",
-      "shell-quote": "^1.10.0",
+      "shell-quote": "^1.11.0",
+      "source-map-js": "^1.2.2",
       "esbuild": "^0.28.2"
     }
   },

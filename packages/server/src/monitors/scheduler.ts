@@ -11,10 +11,10 @@ import { classifyGroups, pastSessions, pastSummary, readOutcome, readPastSession
 import { withTimeout } from "./validate.js";
 import { getTimezone } from "../lib/current-context.js";
 import { monitorAlert, postSlack, readSlackConfig } from "../integrations/slack.js";
-import { reportAlertSummaryTool } from "./alert-summary.js";
+import { dismissAlertTool, reportAlertSummaryTool } from "./alert-summary.js";
 import { fireDueTimers } from "./timers.js";
 import {
-  checkWatches, findIssues, forgetReports, incidentQuery, ingestLagSeconds, triageEnabled, issuesPrompt, pendingIssueIds, recordIssues,
+  checkWatches, closedCheckPrompt, findIssues, forgetReports, incidentQuery, ingestLagSeconds, triageEnabled, issuesPrompt, pendingIssueIds, recordIssues,
   reportIssueStatusTool, triageAfterRun, type FoundIssues, type Triage,
 } from "./triage.js";
 
@@ -61,6 +61,7 @@ function buildMessage(
   classified: TriggerGroup[],
   past: PastSession[],
   triageLines: string[] = [],
+  dismissible = false,
 ): string {
   const lines = [
     `Monitor "${monitor.name}" triggered.`,
@@ -85,18 +86,20 @@ function buildMessage(
   lines.push(
     "",
     "If this looks like a past issue, its past cause is only a hypothesis. Read the most relevant past session, then check in this window that the same cause appears, starts before this firing and explains its groups and size. If it does, say which session; if any part differs, investigate fully.",
-    "Find the root cause. When done, call report_alert_summary once; it is what gets posted to Slack. Do not repeat its fields as labeled lines in your answer.",
+    `${dismissible ? "Unless you dismissed the alert, find" : "Find"} the root cause. When done, call report_alert_summary once; it is what gets posted to Slack. Do not repeat its fields as labeled lines in your answer.`,
   );
   return lines.join("\n");
 }
 
 /** Never throws: a Slack failure is only logged. */
-async function notifySlack(context: Context, monitor: Monitor, triggeredAt: number, sessionId: string, triage?: Triage): Promise<void> {
+async function notifySlack(
+  context: Context, monitor: Monitor, triggeredAt: number, sessionId: string, triage?: Triage, outcome?: Awaited<ReturnType<typeof readOutcome>>,
+): Promise<void> {
   let error: string;
   try {
     const slack = await readSlackConfig(context.db);
     if (!slack) return;
-    const { analysis, report } = await readOutcome(context.db, sessionId);
+    const { analysis, report } = outcome ?? await readOutcome(context.db, sessionId);
     const result = await postSlack(slack.webhookUrl, monitorAlert({
       name: monitor.name,
       triggeredAt,
@@ -140,7 +143,12 @@ async function completeFiring(
       });
       return;
     }
-    await notifySlack(context, monitor, triggeredAt, sessionId, await triageAfterRun(context, sessionId, found));
+    const outcome = await readOutcome(context.db, sessionId);
+    if (outcome.dismissed !== null) {
+      console.log(`[monitor] "${monitor.name}" alert already closed, not posted: ${outcome.dismissed}`);
+      return;
+    }
+    await notifySlack(context, monitor, triggeredAt, sessionId, await triageAfterRun(context, sessionId, found), outcome);
   } catch (err) {
     console.error(`[monitor] "${monitor.name}" completion failed:`, err instanceof Error ? err.message : err);
   }
@@ -158,7 +166,8 @@ export async function firingRerun(context: Context, sessionId: string): Promise<
   return {
     tools: {
       report_alert_summary: reportAlertSummaryTool(),
-      ...(pending.length > 0 ? { report_issue_status: reportIssueStatusTool(db, pending) } : {}),
+      ...(pending.length > 0 ? { report_issue_status: reportIssueStatusTool(db, pending) }
+        : incidentQuery(monitor.query) ? { dismiss_alert: dismissAlertTool() } : {}),
     },
     onComplete: (outcome) => void completeFiring(context, monitor, trigger.triggeredAt, sessionId, undefined, outcome),
   };
@@ -242,9 +251,13 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
   const sessionId = alerting ? crypto.randomUUID() : null;
   const triggerId = crypto.randomUUID();
   const past = alerting ? await pastSessions(context.db, monitor.id, classified.map((g) => g.key)) : [];
-  const found: FoundIssues | null = alerting && await triageEnabled(context.db) && incidentQuery(monitor.query) ? await findIssues(context, monitor, window) : null;
+  const onIncidents = incidentQuery(monitor.query) !== null;
+  const found: FoundIssues | null = alerting && await triageEnabled(context.db) && onIncidents ? await findIssues(context, monitor, window) : null;
   const openIssues = found && !("error" in found) ? found.open : [];
-  const message = alerting ? buildMessage(monitor, value, window, classified, past, issuesPrompt(openIssues)) : "";
+  const checkClosed = alerting && onIncidents && openIssues.length === 0;
+  const message = alerting
+    ? buildMessage(monitor, value, window, classified, past, checkClosed ? closedCheckPrompt(found) : issuesPrompt(openIssues), checkClosed)
+    : "";
   try {
     // Insert first: the monitor_id FK fails if the monitor was deleted mid-check.
     await context.db.insert(monitorTriggers).values({
@@ -274,6 +287,7 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
         read_past_session: readPastSessionTool(() => past),
         report_alert_summary: reportAlertSummaryTool(),
         ...(openIssues.length > 0 ? { report_issue_status: reportIssueStatusTool(context.db, openIssues.map((i) => i.issueId)) } : {}),
+        ...(checkClosed ? { dismiss_alert: dismissAlertTool() } : {}),
       },
       onComplete: (outcome) => void completeFiring(context, monitor, now, sessionId, found, outcome),
     });

@@ -7,6 +7,7 @@ export const WRITE_TOOLS: ReadonlySet<string> = new Set([
   ...Object.values(TOOL_NAMES),
   "report_issue_status",
   "report_alert_summary",
+  "dismiss_alert",
   "set_timer",
   "add_jira_comment",
   "create_memory",

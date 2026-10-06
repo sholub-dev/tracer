@@ -40,6 +40,7 @@ const SMALL_TOOLS: Record<string, { done: string; loading: string; errorLabel: s
   "tool-read_past_session": { done: "Read a past investigation", loading: "Reading a past investigation", errorLabel: "Past investigation not available", icon: History },
   "tool-report_issue_status": { done: "Reported alert status", loading: "Reporting alert status", errorLabel: "Alert status not recorded", icon: ClipboardCheck },
   "tool-report_alert_summary": { done: "Reported alert summary", loading: "Reporting alert summary", errorLabel: "Alert summary not recorded", icon: ClipboardCheck },
+  "tool-dismiss_alert": { done: "Alert already closed, not posted", loading: "Dismissing alert", errorLabel: "Alert not dismissed", icon: ClipboardCheck },
   "tool-set_timer": { done: "Follow-up timer set", loading: "Setting follow-up timer", errorLabel: "Follow-up timer not set", icon: Timer },
 };
 

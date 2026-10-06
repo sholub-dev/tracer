@@ -125,6 +125,22 @@ export function issuesPrompt(open: AiIssue[]): string[] {
   ];
 }
 
+/**
+ * For an NrAiIncident monitor with no issue known to be open: the agent first checks that the alert is still open.
+ * Another device or a person can resolve it before this one checks the window.
+ */
+export function closedCheckPrompt(found: FoundIssues | null): string[] {
+  const known = found && !("error" in found) && found.closed.length + found.tracked > 0
+    ? [`Tracer found no open New Relic issue for this firing: ${found.closed.length} already closed, ${found.tracked} handled by an earlier alert.`]
+    : [];
+  return [
+    "",
+    "First check that this alert is still open. Query NrAiIncident for this firing's incidents up to now, with latest(event) FACET incidentId and the monitor query's filters. An incident whose latest event is 'close' is closed: a person resolved it, or another Tracer device handled it.",
+    ...known,
+    "If every incident of this firing is closed, call dismiss_alert alone with the result that shows it, then stop: no investigation, no report_alert_summary, nothing goes to Slack. If any incident is still open, or the data does not show its state, investigate.",
+  ];
+}
+
 type IssueReport = { severity: (typeof SEVERITIES)[number]; issues: { issueId: string; status: IssueStatus; reason: string }[] };
 
 export function reportIssueStatusTool(db: Db, allowedIds: string[]): Tool<IssueReport, { error: string } | { recorded: number; next: string }> {

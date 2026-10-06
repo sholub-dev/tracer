@@ -7,7 +7,8 @@ export const POSTHOG_AUTH_STOP_RULE = `## Authentication Failure — STOP IMMEDI
 If any query returns an authentication or permission error (e.g. "Invalid personal API key", "401", "403", "Unauthorized", "Forbidden"), **STOP ALL FURTHER TOOL CALLS** and report:
 1. The exact error message received.
 2. That the PostHog personal API key (and its scopes) and Project ID need to be checked in Settings.
-Do NOT retry — auth errors cannot be resolved by the sub-agent.`;
+Do NOT retry — auth errors cannot be resolved by the sub-agent.
+Sibling calls in the same step may return the same auth error; treat them as one failure.`;
 
 const HOGQL_QUICK_REFERENCE = `## HogQL Reference
 

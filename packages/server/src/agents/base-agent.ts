@@ -1,6 +1,6 @@
 import { streamText, convertToModelMessages, isStepCount, createUIMessageStream, toUIMessageStream, type UIMessage, type ToolSet } from "ai";
 import { eq, sql } from "drizzle-orm";
-import { DEFAULT_SESSION_TITLE, unixNow, splitAtAnalysis, mergeProgressPart, type AfterCompleteParams, type ProgressPart, type TokenUsage } from "@tracer-sh/shared";
+import { CLIENT_TOOL_NAMES, DEFAULT_SESSION_TITLE, unixNow, splitAtAnalysis, mergeProgressPart, type AfterCompleteParams, type ProgressPart, type TokenUsage } from "@tracer-sh/shared";
 import { chatSessions } from "../db/schema.js";
 import { sessionChanged } from "../lib/session-events.js";
 import { decodeMessages, encodeMessages } from "../lib/messages-codec.js";
@@ -14,6 +14,7 @@ import { stampSentTime, withPromptCaching, withSentTimes } from "../llm/prompt-c
 import { EVIDENCE_GROUNDING, PLAIN_LANGUAGE } from "../lib/shared-prompts.js";
 import { CONFIG } from "../config.js";
 import { isTransientError } from "../lib/transient.js";
+import { createToolGate } from "../tools/tool-gate.js";
 
 /** Appended to the system prompt only when an attachment is present. */
 const IMAGE_ANALYSIS_GUIDANCE = `## Working with attached images and files
@@ -30,6 +31,24 @@ export function firstUserMessageTitle(messages: UIMessage[]): string {
 }
 
 /**
+ * Move begin_analysis behind the other tool parts of its step: the analysis
+ * section is everything after the marker, so queries that ran in the same step
+ * as the marker belong before it. The marker step is rarely the last one, and
+ * the final save sanitizes the whole reply again, so this looks at the marker's
+ * own step, not the last step.
+ */
+function markAnalysisAfterStepTools(parts: UIMessage["parts"]): UIMessage["parts"] {
+  const marker = parts.findIndex((p) => p.type === CLIENT_TOOL_NAMES.BEGIN_ANALYSIS);
+  if (marker === -1) return parts;
+  let lastTool = -1;
+  for (let i = marker + 1; i < parts.length && parts[i].type !== "step-start"; i++) {
+    if (typeof (parts[i] as { toolCallId?: unknown }).toolCallId === "string") lastTool = i;
+  }
+  if (lastTool === -1) return parts;
+  return [...parts.slice(0, marker), ...parts.slice(marker + 1, lastTool + 1), parts[marker], ...parts.slice(lastTool + 1)];
+}
+
+/**
  * Sanitize messages loaded from the DB so incomplete tool parts (from aborted
  * runs) and stale streaming parts don't break `convertToModelMessages`.
  */
@@ -39,12 +58,13 @@ export function sanitizeMessages(messages: UIMessage[]): UIMessage[] {
     const parts = msg.parts
       .map((part) => {
         const p = part as Record<string, unknown>;
-        if (p.toolCallId && p.state !== "output-available") {
+        // output-error parts are settled: convertToModelMessages turns them into error results.
+        if (p.toolCallId && p.state !== "output-available" && p.state !== "output-error") {
           return { ...p, state: "output-available", output: p.output ?? { error: "Aborted" } };
         }
         return part;
       });
-    return { ...msg, parts } as UIMessage;
+    return { ...msg, parts: markAnalysisAfterStepTools(parts as UIMessage["parts"]) } as UIMessage;
   });
 }
 
@@ -98,14 +118,19 @@ export interface ChatAgentConfig {
  */
 async function finalizeSession(sessionId: string, context: Context, broadcaster: StreamBroadcaster): Promise<void> {
   if (!context.activeStreams.has(sessionId)) return;
-  await context.db
-    .update(chatSessions)
-    .set({ status: "done", updatedAt: unixNow() })
-    .where(eq(chatSessions.id, sessionId))
-    .run();
-  sessionChanged(sessionId);
-  broadcaster.finish();
-  context.activeStreams.delete(sessionId);
+  try {
+    await context.db
+      .update(chatSessions)
+      .set({ status: "done", updatedAt: unixNow() })
+      .where(eq(chatSessions.id, sessionId))
+      .run();
+  } catch (err) {
+    console.warn(`[chat] Failed to mark ${sessionId} done:`, err);
+  } finally {
+    sessionChanged(sessionId);
+    broadcaster.finish();
+    context.activeStreams.delete(sessionId);
+  }
 }
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -182,7 +207,8 @@ async function processLLMStream(
     sessionId,
   };
   const collected = await collectTools(writer);
-  const tools = collected.tools;
+  // One gate per attempt: it holds the tool calls of a step to the read limit and runs writes alone.
+  const tools = collected.tools && createToolGate()(collected.tools);
 
   // Compaction: when the session has a summary, the model sees only
   // [summary in system prompt + messages after the boundary]. The full
@@ -500,23 +526,29 @@ export async function runChatAgent({
   const broadcaster = new StreamBroadcaster();
   context.activeStreams.set(sessionId, { broadcaster, controller: serverAbort });
 
-  const now = unixNow();
-  const packed = encodeMessages(messages);
-  await context.db
-    .insert(chatSessions)
-    .values({
-      id: sessionId,
-      title: DEFAULT_SESSION_TITLE,
-      messages: packed,
-      status: "streaming",
-      createdAt: now,
-      updatedAt: now,
-    })
-    .onConflictDoUpdate({
-      target: chatSessions.id,
-      set: { messages: packed, status: "streaming", updatedAt: now },
-    })
-    .run();
+  try {
+    const now = unixNow();
+    const packed = encodeMessages(messages);
+    await context.db
+      .insert(chatSessions)
+      .values({
+        id: sessionId,
+        title: DEFAULT_SESSION_TITLE,
+        messages: packed,
+        status: "streaming",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: chatSessions.id,
+        set: { messages: packed, status: "streaming", updatedAt: now },
+      })
+      .run();
+  } catch (err) {
+    broadcaster.finish();
+    context.activeStreams.delete(sessionId);
+    throw err;
+  }
   sessionChanged(sessionId);
 
   // Start LLM processing in background — completely decoupled from HTTP lifecycle.
@@ -558,7 +590,9 @@ export async function runChatAgent({
     console.error(`[chat] Unhandled error in LLM processing for ${sessionId}:`, err);
   }).finally(() => {
     // After the DB write so clients reloading on "done" read the final messages.
-    finalizeSession(sessionId, context, broadcaster);
+    finalizeSession(sessionId, context, broadcaster).catch((err) => {
+      console.error(`[chat] Failed to finalize ${sessionId}:`, err);
+    });
   });
 
   // HTTP response stream: subscribes to the broadcaster and forwards events.

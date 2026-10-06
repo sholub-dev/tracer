@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { publicProcedure, router } from "../trpc.js";
 import { providerConfigs } from "../../db/schema.js";
 import { readProviderConfig, readAppSetting, readAppSettings, writeAppSetting } from "../../db/config-reader.js";
+import { isValidTimezone } from "../../lib/current-context.js";
 import { CONFIG, DEFAULTS, SETTINGS_KEYS, type ModelConfig } from "../../config.js";
 
 export const settingsRouter = router({
@@ -135,7 +136,7 @@ export const settingsRouter = router({
 
   saveAgentConfig: publicProcedure
     .input(z.object({
-      timezone: z.string().optional(),
+      timezone: z.string().refine(isValidTimezone, "Invalid time zone").optional(),
       directModeMaxSteps: z.number().min(1).max(500).optional(),
       subAgentMaxSteps: z.number().min(1).max(500).optional(),
       thinkingBudgetGoogle: z.number().min(0).max(100_000).optional(),

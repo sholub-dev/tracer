@@ -109,7 +109,6 @@ async function keepAwakeWhileRunning(activeRuns: () => number) {
     const running = activeRuns() > 0;
     if (running === awake) continue;
     awake = running;
-    console.log(`KeepAwake ${running ? "on" : "off"}`);
     await (running ? KeepAwake.keepAwake() : KeepAwake.allowSleep()).catch((err: unknown) => console.warn("KeepAwake:", err));
   }
 }

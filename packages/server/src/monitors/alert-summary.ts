@@ -35,13 +35,13 @@ export function reportAlertSummaryTool(): Tool<AlertSummary, { recorded: true }>
   });
 }
 
-/** The input of the last successful report_alert_summary call. */
+/** The input of the last successful report_alert_summary call whose input is valid. */
 export function summaryFromMessages(messages: UIMessage[]): AlertSummary | null {
   for (const m of [...messages].reverse()) {
     for (const p of [...m.parts].reverse()) {
       if (p.type !== "tool-report_alert_summary" || !("state" in p) || p.state !== "output-available") continue;
       const parsed = alertSummarySchema.safeParse(p.input);
-      return parsed.success ? parsed.data : null;
+      if (parsed.success) return parsed.data;
     }
   }
   return null;

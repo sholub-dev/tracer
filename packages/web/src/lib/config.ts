@@ -5,7 +5,7 @@ export const WEB_CONFIG = {
   /** Coalesces bursts of live session change events into one refetch. */
   sessionEventCoalesceMs: 100,
   subscriptionRetryMaxMs: 10_000,
-  monitorPollingMs: 60_000,
+  sourcesStaleMs: 60_000,
   /** How often a failed data-source check repeats. */
   providerRetryMs: 15_000,
   updateCheckStaleTimeMs: 5 * 60 * 1000,

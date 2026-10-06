@@ -114,9 +114,7 @@ export const monitors = sqliteTable("monitors", {
   updatedAt: integer("updated_at")
     .notNull()
     .$defaultFn(() => unixNow()),
-}, (t) => [
-  index("idx_monitors_enabled").on(t.enabled),
-]);
+});
 
 export const monitorTriggers = sqliteTable("monitor_triggers", {
   id: text("id").primaryKey(),
@@ -133,7 +131,6 @@ export const monitorTriggers = sqliteTable("monitor_triggers", {
 }, (t) => [
   index("idx_triggers_monitor").on(t.monitorId, t.triggeredAt),
   index("idx_triggers_session").on(t.sessionId),
-  index("idx_triggers_recent_session").on(t.triggeredAt).where(sql`session_id IS NOT NULL`),
 ]);
 
 export const alertIssues = sqliteTable("alert_issues", {
@@ -153,6 +150,9 @@ export const alertIssues = sqliteTable("alert_issues", {
   updatedAt: integer("updated_at").notNull(),
 }, (t) => [
   index("idx_alert_issues_state").on(t.state),
+  index("idx_alert_issues_session").on(t.sessionId),
+  index("idx_alert_issues_condition").on(t.monitorId, t.conditionName),
+  index("idx_alert_issues_trigger").on(t.triggerId),
 ]);
 
 export const sessionTimers = sqliteTable("session_timers", {

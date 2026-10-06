@@ -1,4 +1,4 @@
-import { eq, getTableColumns } from "drizzle-orm";
+import { eq, getTableColumns, inArray } from "drizzle-orm";
 import { runInTransaction, type Db } from "../db/driver.js";
 import * as schema from "../db/schema.js";
 import { LOCAL_SETTING_KEYS, SYNC_KEYS } from "../db/setup.js";
@@ -37,33 +37,40 @@ function keyOf(name: string): { prop: string; column: any } {
   return { prop, column };
 }
 
+const CHUNK = 500;
+
+/** The rows of one table whose column value is in `values`, read in chunks that stay under the SQL variable limit. */
+async function readWhere(tx: Db, name: string, column: any, values: unknown[]): Promise<Row[]> {
+  const found: Row[] = [];
+  for (let i = 0; i < values.length; i += CHUNK) {
+    found.push(...(await readTable(tx, name, tableOf.get(name)!, inArray(column, values.slice(i, i + CHUNK) as never[]))));
+  }
+  return found;
+}
+
 /** With `since`, only the rows this device changed at or after that local time, deletes included. */
 export async function exportSyncPayload(db: Db, since?: number): Promise<SyncPayload> {
   const tables: SyncPayload["tables"] = {};
   let rows: SyncRow[] = [];
   await runInTransaction(db, async (tx) => {
-    for (const [name, table] of SYNCED) tables[name] = await readTable(tx, name, table);
     rows = await readSyncRows(tx, since);
+    if (since === undefined) {
+      for (const [name, table] of SYNCED) tables[name] = await readTable(tx, name, table);
+      return;
+    }
+    const changed = new Map<string, string[]>();
+    for (const r of rows) {
+      const keys = changed.get(r.tbl);
+      if (keys) keys.push(r.row_key);
+      else changed.set(r.tbl, [r.row_key]);
+    }
+    for (const [name] of SYNCED) tables[name] = await readWhere(tx, name, keyOf(name).column, changed.get(name) ?? []);
+    // The receiver maps a memory operation to its memory through the memory's uid, even when the memory did not change.
+    const have = new Set(tables.tool_memories.map((m) => m.id));
+    const wanted = [...new Set(tables.memory_operations.map((o) => o.memoryId as number | null))].filter((id): id is number => id != null && !have.has(id));
+    tables.tool_memories.push(...(await readWhere(tx, "tool_memories", schema.toolMemories.id, wanted)));
   });
-  if (since === undefined) return { format: FORMAT, tables, rows };
-
-  const changed = new Map<string, Set<string>>();
-  for (const r of rows) {
-    if (!changed.has(r.tbl)) changed.set(r.tbl, new Set());
-    changed.get(r.tbl)!.add(r.row_key);
-  }
-  const all = tables;
-  const only: SyncPayload["tables"] = {};
-  for (const [name] of SYNCED) {
-    const { prop } = keyOf(name);
-    only[name] = all[name].filter((row) => changed.get(name)?.has(String(row[prop])));
-  }
-  // The receiver maps a memory operation to its memory through the memory's uid, even when the memory did not change.
-  const wanted = new Set(only.memory_operations.map((o) => o.memoryId));
-  for (const memory of all.tool_memories) {
-    if (wanted.has(memory.id) && !only.tool_memories.includes(memory)) only.tool_memories.push(memory);
-  }
-  return { format: FORMAT, tables: only, rows };
+  return { format: FORMAT, tables, rows };
 }
 
 function omit(row: Row, keys: string[]): Row {
@@ -113,7 +120,8 @@ export async function mergeSyncPayload(db: Db, remote: SyncPayload): Promise<{ a
       let found = foundParents.get(parent);
       if (!found) foundParents.set(parent, (found = new Set()));
       if (found.has(key)) return true;
-      if (!(await tx.select().from(tableOf.get(parent)!).where(eq(keyOf(parent).column, key)).get())) return false;
+      const { column } = keyOf(parent);
+      if (!(await tx.select({ key: column }).from(tableOf.get(parent)!).where(eq(column, key)).get())) return false;
       found.add(key);
       return true;
     };

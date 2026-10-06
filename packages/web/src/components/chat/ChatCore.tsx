@@ -24,6 +24,7 @@ import { IS_IOS } from "../../lib/platform";
 import { preloadResultChunks } from "../charts/ResultView";
 import { AlertSummaryPanel, alertSummaryOf } from "./AlertSummaryPanel";
 import { WorkingIndicator } from "./ChatIndicators";
+import { ErrorBoundary } from "../ErrorBoundary";
 import { Composer, type Attachment } from "./Composer";
 import { FollowUpTimerBar } from "./FollowUpTimerBar";
 import { MessageView, textOf, type MessageViewOptions } from "./MessageView";
@@ -121,7 +122,7 @@ const MessageRow = memo(function MessageRow({
   // Off-screen replies skip layout/paint. The last row stays live for streaming; user rows stay unclipped for their floating actions.
   return (
     <div className={isLast || msg.role === "user" ? undefined : "[content-visibility:auto] [contain-intrinsic-size:auto_600px]"}>
-      {renderMessage ? renderMessage(msg, msgIndex, view) : view()}
+      <ErrorBoundary resetKey={msg}>{renderMessage ? renderMessage(msg, msgIndex, view) : view()}</ErrorBoundary>
     </div>
   );
 });
@@ -225,7 +226,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   extraBodyRef.current = extraBody;
 
   // Chat instance: stable per mount (the component is keyed externally).
-  const chat = useMemo(
+  const [chat] = useState(
     () =>
       new Chat({
         id: chatId,
@@ -244,7 +245,6 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
           onDataRef.current?.(part as { type: string; data: unknown });
         },
       }),
-    [], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   const { messages, setMessages, status, sendMessage, stop, error } = useChat({ chat, throttle: WEB_CONFIG.chatThrottleMs });
@@ -287,8 +287,11 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   const savedErrorText = typeof savedError === "string" ? savedError : null;
   const needsContinue = !isLoading && !error && !savedErrorText && messages.length > collapse && lastMessage?.role === "assistant" && lastPart?.type.startsWith("tool-");
 
-  const lastPartState = (lastPart as { state?: string } | undefined)?.state;
-  const isSubAgentRunning = lastPart?.type.startsWith("tool-") && lastPartState !== "output-available";
+  // A step can run several tools at once, so any unsettled tool part of the reply counts, not only the last part.
+  const isSubAgentRunning = lastMessage?.role === "assistant" && lastMessage.parts.some((p) => {
+    const state = (p as { state?: string }).state;
+    return p.type.startsWith("tool-") && state !== "output-available" && state !== "output-error";
+  });
   const isContentStreaming = lastPart?.type === "text" || lastPart?.type === "reasoning";
   const showWorking = status === "submitted" || (status === "streaming" && !isContentStreaming && !isSubAgentRunning);
 

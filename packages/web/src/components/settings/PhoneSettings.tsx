@@ -7,6 +7,8 @@ import { IS_IOS } from "../../lib/platform";
 import { trpc } from "../../lib/trpc";
 import { Group, Row, Section } from "./parts";
 
+const FINAL_SEND_STATES = new Set(["sent", "denied", "expired", "failed"]);
+
 const relative = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
 
 function relativeTime(at: number): string {
@@ -58,7 +60,7 @@ function DesktopPhoneSettings() {
   const code = send.data;
   const { data: status } = trpc.transfer.sendStatus.useQuery(undefined, {
     enabled: !!code,
-    refetchInterval: 1000,
+    refetchInterval: (q) => (FINAL_SEND_STATES.has(q.state.data?.state ?? "") ? false : 1000),
   });
 
   const shown = useRef(false);
@@ -140,10 +142,10 @@ function DesktopPhoneSettings() {
                   </ol>
                   <p className="text-[13px]/[18px] text-muted-foreground">The code works once, for 2 minutes. You allow the sync on this computer after the phone asks.</p>
                   {code.fullCopy.fits ? (
-                    <p className="text-[13px]/[18px] text-muted-foreground">A first sync sends {megabytes(code.fullCopy.bytes)}. Later syncs send only the changes.</p>
+                    <p className="text-[13px]/[18px] text-muted-foreground">A first sync sends about {megabytes(code.fullCopy.bytes)}. Later syncs send only the changes.</p>
                   ) : (
                     <p role="alert" className="text-[13px]/[18px] text-destructive">
-                      A first sync with a new phone cannot work. The full copy is {megabytes(code.fullCopy.bytes)} and the limit is {megabytes(code.fullCopy.limitBytes)}. Delete sessions you do not need. A phone that synced before can still sync the changes.
+                      A first sync with a new phone will likely fail. The full copy is about {megabytes(code.fullCopy.bytes)} and the limit is {megabytes(code.fullCopy.limitBytes)}. Delete sessions you do not need. A phone that synced before can still sync the changes.
                     </p>
                   )}
                 </>

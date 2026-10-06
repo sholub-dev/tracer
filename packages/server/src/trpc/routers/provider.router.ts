@@ -38,6 +38,7 @@ export const providerRouter = router({
 
   getConfigs: publicProcedure.query(async ({ ctx }) => {
     const rows = await ctx.db.select().from(providerConfigs).all();
+    const registered = ctx.providers.getRegisteredTypes();
     const configs: Array<{ type: string; config: Record<string, string> }> = [];
     for (const row of rows) {
       let config: Record<string, string>;
@@ -49,8 +50,11 @@ export const providerRouter = router({
       }
       // Mask sensitive fields
       const masked: Record<string, string> = {};
+      const fields = registered.find((t) => t.type === row.type)?.configFields;
       for (const [key, value] of Object.entries(config)) {
-        if (key.toLowerCase().includes("key") || key.toLowerCase().includes("secret")) {
+        const declared = fields?.find((f) => f.key === key);
+        const secret = declared ? declared.type === "password" : /key|secret/i.test(key);
+        if (secret) {
           masked[key] = value.length <= 4 ? "••••" : "••••••••" + value.slice(-4);
         } else {
           masked[key] = value;

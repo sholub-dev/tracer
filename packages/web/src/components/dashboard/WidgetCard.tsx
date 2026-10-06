@@ -1,29 +1,11 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { RotateCw, Trash2 } from "lucide-react";
 import { substituteTimeRange } from "@tracer-sh/shared";
 import { QueryChart } from "../charts/QueryChart";
 import { ConfirmDialog } from "../common/ConfirmDialog";
 import { IconButton } from "../common/IconButton";
 import { trpc } from "../../lib/trpc";
-
-class WidgetErrorBoundary extends React.Component<
-  { children: React.ReactNode },
-  { error: string | null }
-> {
-  state = { error: null as string | null };
-  static getDerivedStateFromError(err: Error) {
-    return { error: err.message };
-  }
-  render() {
-    if (this.state.error)
-      return (
-        <div role="alert" className="flex h-full items-center justify-center p-4 text-[13px]/[18px] text-destructive">
-          Widget error: {this.state.error}
-        </div>
-      );
-    return this.props.children;
-  }
-}
+import { ErrorBoundary } from "../ErrorBoundary";
 
 interface Widget {
   id: string;
@@ -59,7 +41,7 @@ export function WidgetCard({ widget, since, until }: { widget: Widget; since: st
           </IconButton>
         </div>
       </div>
-      <WidgetErrorBoundary>
+      <ErrorBoundary fallback={(e) => <div role="alert" className="flex h-full items-center justify-center p-4 text-[13px]/[18px] text-destructive">Widget error: {e.message}</div>}>
         <QueryChart
           provider={widget.provider}
           query={substituteTimeRange(widget.query, since, until)}
@@ -67,7 +49,7 @@ export function WidgetCard({ widget, since, until }: { widget: Widget; since: st
           className="min-h-0 flex-1 overflow-auto p-3"
           chartType={widget.chartType}
         />
-      </WidgetErrorBoundary>
+      </ErrorBoundary>
 
       <ConfirmDialog
         open={confirmDelete}

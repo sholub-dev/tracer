@@ -16,7 +16,7 @@ const POLL_INTERVAL_MS = 1000;
 export type SyncMode = "merge" | "replace";
 
 // Only addresses on the local network: a link from elsewhere must not pull data from the internet.
-const PRIVATE_IPV4 = /^(10\.\d+|172\.(1[6-9]|2\d|3[01])|192\.168|169\.254)\.\d+\.\d+$/;
+const PRIVATE_IPV4 = /^(10\.\d+|172\.(1[6-9]|2\d|3[01])|192\.168)\.\d+\.\d+$/;
 
 /** Reads a copy link from a QR code. Throws when it is not one. */
 export function parseCopyLink(link: string): { from: URL; key: string; name?: string; device?: string } {

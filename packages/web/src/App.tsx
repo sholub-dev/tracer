@@ -1,6 +1,7 @@
 import { type ComponentType, type CSSProperties, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
 import { FEATURES } from "@tracer-sh/shared";
 import { Loader2 } from "lucide-react";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Shell } from "./components/layout/Shell";
 import { AppSidebar, type Page } from "./components/layout/Sidebar";
 import { Toaster } from "@/components/ui/sonner";
@@ -23,7 +24,7 @@ function lazyPage<P extends object>(load: () => Promise<ComponentType<P>>) {
 
 const Debug = lazyPage(() => import("./pages/Debug").then((m) => m.Debug));
 const Settings = lazyPage(() => import("./pages/Settings").then((m) => m.Settings));
-const Dashboard = FEATURES.dashboards ? lazyPage(() => import("./pages/Dashboard").then((m) => m.Dashboard)) : null;
+const Dashboard = __DASHBOARDS__ ? lazyPage(() => import("./pages/Dashboard").then((m) => m.Dashboard)) : null;
 const Monitors = FEATURES.monitors ? lazyPage(() => import("./pages/Monitors").then((m) => m.Monitors)) : null;
 
 function preloadPages() {
@@ -35,7 +36,7 @@ function preloadPages() {
 const validPages = new Set<string>([
   "debug",
   "settings",
-  ...(FEATURES.dashboards ? ["dashboard"] : []),
+  ...(__DASHBOARDS__ ? ["dashboard"] : []),
   ...(FEATURES.monitors ? ["monitors"] : []),
 ]);
 
@@ -154,6 +155,7 @@ export function App() {
           />
         }
       >
+        <ErrorBoundary resetKey={window.location.pathname}>
         <Suspense fallback={<PageFallback />}>
           {Dashboard && currentPage === "dashboard" && (
             <Dashboard
@@ -175,6 +177,7 @@ export function App() {
           )}
           {currentPage === "settings" && <Settings />}
         </Suspense>
+        </ErrorBoundary>
       </Shell>
       {IS_IOS && <CopyFromComputerDialog />}
       <Toaster

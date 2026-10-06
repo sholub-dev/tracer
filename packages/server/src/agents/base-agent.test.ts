@@ -16,7 +16,7 @@ import { writeAppSetting } from "../db/config-reader.js";
 import { SETTINGS_KEYS } from "../config.js";
 import type { Context } from "../trpc/context.js";
 import type { ProviderRegistry } from "../providers/registry.js";
-import { runChatAgent } from "./base-agent.js";
+import { runChatAgent, sanitizeMessages } from "./base-agent.js";
 import { getCurrentDateBlock, getCurrentTimeText } from "../lib/current-context.js";
 import { stampSentTime, withPromptCaching, withSentTimes } from "../llm/prompt-cache.js";
 
@@ -57,6 +57,17 @@ const TOOL_CALL_SSE = sse([
   ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_1", name: "lookup", input: {} } }],
   ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "{}" } }],
   ...end("tool_use"),
+]);
+const TWO_TOOL_CALLS_SSE = sse([
+  MESSAGE_START,
+  ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_1", name: "lookup", input: {} } }],
+  ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "{}" } }],
+  ["content_block_stop", { type: "content_block_stop", index: 0 }],
+  ["content_block_start", { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_2", name: "slow", input: {} } }],
+  ["content_block_delta", { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: "{}" } }],
+  ["content_block_stop", { type: "content_block_stop", index: 1 }],
+  ["message_delta", { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 2 } }],
+  ["message_stop", { type: "message_stop" }],
 ]);
 const MID_STREAM_ERROR_SSE = sse([
   MESSAGE_START,
@@ -412,4 +423,64 @@ test("a connection dropped mid-stream on the last attempt fails the run and show
   assert.equal(r.parts.filter((p) => p.type === "error").length, 1);
   assert.deepEqual(r.saved.map((m) => m.role), ["user", "assistant"]);
   assert.equal(r.status, "done");
+});
+
+test("sanitizeMessages settles unfinished tool parts, keeps errors, and puts begin_analysis after its step's tools", () => {
+  const part = (type: string, state: string, extra: object = {}) => ({ type, toolCallId: type + state, state, input: {}, ...extra });
+  const [msg] = sanitizeMessages([{ id: "", role: "assistant", parts: [
+    { type: "step-start" },
+    part("tool-a", "output-error", { errorText: "bad" }),
+    part("tool-b", "input-available"),
+    part("tool-c", "input-streaming"),
+    part("tool-d", "output-available", { output: "ok" }),
+  ] as UIMessage["parts"] }]);
+  const [, a, b, c, d] = msg.parts as unknown as Record<string, unknown>[];
+  assert.equal(a.state, "output-error");
+  assert.equal(a.errorText, "bad");
+  assert.deepEqual([b.state, b.output], ["output-available", { error: "Aborted" }]);
+  assert.deepEqual([c.state, c.output], ["output-available", { error: "Aborted" }]);
+  assert.equal(d.output, "ok");
+
+  const [moved] = sanitizeMessages([{ id: "", role: "assistant", parts: [
+    { type: "step-start" }, part("tool-x", "output-available"),
+    { type: "step-start" }, part("tool-begin_analysis", "output-available"), part("tool-q1", "output-available"), part("tool-q2", "output-available"), { type: "text", text: "done" },
+  ] as UIMessage["parts"] }]);
+  assert.deepEqual(moved.parts.map((p) => p.type), ["step-start", "tool-x", "step-start", "tool-q1", "tool-q2", "tool-begin_analysis", "text"]);
+
+  const [later] = sanitizeMessages([{ id: "", role: "assistant", parts: [
+    { type: "step-start" }, part("tool-begin_analysis", "output-available"), part("tool-q1", "output-available"),
+    { type: "step-start" }, part("tool-q2", "output-available"), { type: "text", text: "done" },
+  ] as UIMessage["parts"] }]);
+  assert.deepEqual(later.parts.map((p) => p.type), ["step-start", "tool-q1", "tool-begin_analysis", "step-start", "tool-q2", "text"]);
+});
+
+test("two tool calls in one step run together, are saved in one step, and a stop settles only the unfinished one", async () => {
+  const done = await retryRun(
+    { script: [TWO_TOOL_CALLS_SSE, SSE] }, [],
+    undefined,
+    { lookup: tool({ inputSchema: z.object({}), execute: async () => "a" }), slow: tool({ inputSchema: z.object({}), execute: async () => "b" }) },
+  );
+  const toolParts = done.saved.at(-1)!.parts.filter((p) => p.type.startsWith("tool-")) as { type: string; state: string; output: unknown }[];
+  assert.deepEqual(toolParts.map((p) => [p.type, p.state, p.output]), [["tool-lookup", "output-available", "a"], ["tool-slow", "output-available", "b"]]);
+  assert.equal(done.bodies.length, 2);
+  const results = ((done.bodies[1].messages as { content: { type: string }[] }[]).at(-1)!.content).filter((c) => c.type === "tool_result");
+  assert.equal(results.length, 2, "both results go back in one turn");
+
+  let midRun: { type: string; state: string }[] = [];
+  const stopped = await retryRun(
+    { script: [TWO_TOOL_CALLS_SSE] }, [],
+    async (ctx) => {
+      await new Promise((res) => setTimeout(res, 400));
+      const row = await ctx.db.select().from(schema.chatSessions).get();
+      midRun = decodeMessages(row!.messages).at(-1)!.parts.filter((p) => p.type.startsWith("tool-")) as typeof midRun;
+      ctx.activeStreams.get("s1")!.controller.abort();
+    },
+    {
+      lookup: tool({ inputSchema: z.object({}), execute: async () => "a" }),
+      slow: tool({ inputSchema: z.object({}), execute: (_i, { abortSignal }) => new Promise((res) => abortSignal?.addEventListener("abort", () => res("late"))) }),
+    },
+  );
+  assert.deepEqual(midRun, [], "an unfinished step is not saved mid-run");
+  const parts = stopped.saved.at(-1)!.parts.filter((p) => p.type.startsWith("tool-")) as { type: string; state: string; output: unknown }[];
+  assert.deepEqual(parts.map((p) => [p.type, p.output]), [["tool-lookup", "a"], ["tool-slow", { error: "Aborted" }]]);
 });

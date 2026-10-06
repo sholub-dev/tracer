@@ -43,7 +43,7 @@ export function buildRules(opts: {
   extraRules?: string[];
 }): string {
   const rules = [
-    `1. **ONE tool call per step.** After each tool result, write a brief summary, then make the next call.`,
+    `1. **Batch only independent reads.** You may make up to 4 tool calls in one step when each is a read and none needs another's result (for example the same query for two services, or logs and metrics for one window). Make a call that depends on a result in a later step. Never batch begin_analysis, report_issue_status, report_alert_summary, set_timer, add_jira_comment, or any save, update or delete tool — make them alone in their step. After the results arrive, write one brief summary that covers all of them.`,
     `2. **Empty results: suspect the query first, then prove absence.** Check field name, case, quoting, and time range; fix and retry differently. If a deliberately broadened probe (wider window, fewer filters) is also empty, the absence IS the finding — report it. Never keep reshaping the same query hoping data appears.`,
     `3. **NEVER repeat a failed query.** Read the error, fix the cause. Same error twice → completely different approach.`,
     `4. **Use discovered identifiers exactly.** If the actual name differs from the task, use the exact discovered value.`,
@@ -176,7 +176,7 @@ export const EXECUTION_DISCIPLINE = `## Execution Discipline
 
 For multi-step investigations:
 1. **Step N: [Goal]** — state the hypothesis this tests or the gap it fills
-2. **Tool call** → ONE query
+2. **Tool call(s)** → one query each; independent queries may share a step
 3. **→ Found:** [data] **→ So what:** [only what this data supports — if it needs an assumption, it's a gap, not a finding]
 4. **→ Can I answer now?** — If YES: respond. If NO: state what's missing.
 
@@ -229,7 +229,7 @@ ${PLAIN_LANGUAGE}
 
 ## Step Budget
 
-You have a maximum of ${maxSteps} steps, covering investigation AND analysis visuals together. Most investigations need 3-8 investigation steps; past 10 investigation steps you're likely going in circles — stop, report what you have, and let the user guide next steps. Analysis-section visuals are expected additional calls, never "going in circles."
+You have a maximum of ${maxSteps} steps, covering investigation AND analysis visuals together. Most investigations need 3-8 investigation steps or about 15 queries; past 10 investigation steps or 25 queries you're likely going in circles — stop, report what you have, and let the user guide next steps. Analysis-section visuals are expected additional calls, never "going in circles."
 
 ## Final Reminders
 - **Tool calls are the evidence.** Every substantive claim in your response needs a visual — even if the same query already ran during investigation, re-run it here. The analysis section must be self-contained.

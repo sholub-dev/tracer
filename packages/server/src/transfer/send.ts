@@ -2,11 +2,12 @@ import { timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { hostname, networkInterfaces } from "node:os";
+import { getTableColumns, sql } from "drizzle-orm";
 import QRCode from "qrcode";
 import type { Db } from "../db/driver.js";
-import { limits, MAX_SYNC_BYTES, OldFormError, pack, randomSecret, seal, TooLargeError, unseal } from "./crypto.js";
+import { limits, MAX_SYNC_BYTES, OldFormError, randomSecret, seal, TooLargeError, unseal } from "./crypto.js";
 import { getSetting, recordSync } from "./peer.js";
-import { exportSnapshot, FORMAT } from "./snapshot.js";
+import { exportSnapshot, FORMAT, TABLES } from "./snapshot.js";
 import { exportSyncPayload, mergeSyncPayload, type SyncPayload } from "./sync.js";
 import { APPROVAL_WINDOW_MS, COPY_LINK_PREFIX, DEVICE_ID, MAX_NAME_LENGTH, type SyncMode } from "./receive.js";
 
@@ -32,7 +33,7 @@ export interface SendStatus {
 }
 
 export interface FullCopySize {
-  /** Compressed size of a full copy: what a first sync sends. */
+  /** Estimated compressed size of a full copy: about what a first sync sends. */
   bytes: number;
   limitBytes: number;
   fits: boolean;
@@ -65,11 +66,24 @@ function failure(err: unknown): string {
   return "The sync failed on this computer. Show a new code and try again. If it fails again, restart Tracer.";
 }
 
+// JSON keys, quotes and separators around the values of one row.
+const ROW_OVERHEAD_BYTES = 100;
+// Text such as tool output compresses at least this well; the limits use the same ratio (unpacked 400 MB, packed 100 MB).
+const COMPRESSION_RATIO = 4;
+
+/**
+ * An estimate from the size of every column, with no export and no compression. The real limits are checked
+ * on the real data when it is sealed, so a wrong estimate never lets too much data through.
+ */
 async function measureFullCopy(db: Db): Promise<FullCopySize> {
-  // Bytes, not string length: seal applies the limits to the UTF-8 bytes.
-  const plain = new TextEncoder().encode(JSON.stringify(await exportSnapshot(db)));
-  const bytes = pack(plain).length;
-  return { bytes, limitBytes: limits.packed, fits: bytes <= limits.packed && plain.length <= limits.unpacked };
+  let raw = 0;
+  for (const [, table] of TABLES) {
+    const sizes = Object.values(getTableColumns(table)).map((c) => sql`coalesce(length(${c}), 0)`);
+    const row = await db.select({ bytes: sql<number>`coalesce(sum(${sql.join(sizes, sql` + `)}), 0)`, rows: sql<number>`count(*)` }).from(table).get();
+    raw += (row?.bytes ?? 0) + (row?.rows ?? 0) * ROW_OVERHEAD_BYTES;
+  }
+  const bytes = Math.ceil(raw / COMPRESSION_RATIO);
+  return { bytes, limitBytes: limits.packed, fits: bytes <= limits.packed && raw <= limits.unpacked };
 }
 
 function lanAddress(): string | null {

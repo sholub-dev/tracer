@@ -77,7 +77,7 @@ export function renderToolPart(p: MessagePart, queries: QueryRecord[]): string {
  * Extract the final analysis from a completed session's messages.
  *
  * The agent marks its conclusion by calling the `begin_analysis` tool, persisted
- * as a part of type `tool-begin_analysis`. Everything after the last such marker
+ * as a part of type `tool-begin_analysis`. Everything after the marker of the last message that has one
  * is the final Analysis: text interleaved with provider query tool parts. We
  * serialize both, in order, so the analysis includes the queries and their
  * results (not just the prose). If the agent answered without the marker, fall
@@ -91,12 +91,14 @@ export function extractAnalysis(messages: UIMessage[]): { analysis: string; quer
     for (const p of m.parts as MessagePart[]) assistantParts.push(p);
   }
 
+  // The first marker of the last message that has one, as findAnalysisMarker picks it for compaction.
   let markerIdx = -1;
-  for (let i = assistantParts.length - 1; i >= 0; i--) {
-    if (assistantParts[i].type === CLIENT_TOOL_NAMES.BEGIN_ANALYSIS) {
-      markerIdx = i;
-      break;
-    }
+  let offset = 0;
+  for (const m of messages) {
+    if (m.role !== "assistant") continue;
+    const idx = m.parts.findIndex((p) => p.type === CLIENT_TOOL_NAMES.BEGIN_ANALYSIS);
+    if (idx >= 0) markerIdx = offset + idx;
+    offset += m.parts.length;
   }
 
   const queries: QueryRecord[] = [];

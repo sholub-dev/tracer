@@ -189,7 +189,8 @@ function jiraIssueOf(o: unknown): JiraIssueView | null {
 
 function jiraCommentUrl(o: unknown): string | null {
   const r = (o ?? {}) as { posted?: unknown; url?: unknown };
-  return r.posted === true && typeof r.url === "string" ? r.url : null;
+  if (r.posted !== true || typeof r.url !== "string") return null;
+  try { return new URL(r.url).protocol === "https:" ? r.url : null; } catch { return null; }
 }
 
 const jiraDate = (s: string | null) => (s ? s.slice(0, 10) : null);

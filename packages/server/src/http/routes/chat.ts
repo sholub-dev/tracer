@@ -1,7 +1,7 @@
 import type { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { createUIMessageStreamResponse, type UIMessage } from "ai";
-import { dashboardSessionId, SESSION_PREFIX, UNIFIED_SCOPE, type ChatMode } from "@tracer-sh/shared";
+import { dashboardSessionId, FEATURES, SESSION_PREFIX, UNIFIED_SCOPE, type ChatMode } from "@tracer-sh/shared";
 import type { Context } from "../../trpc/context.js";
 import { firstUserMessageTitle, loadSessionMessages, runChatAgent } from "../../agents/base-agent.js";
 import { collectChatTools } from "../../tools/chat-tools.js";
@@ -63,7 +63,7 @@ export function registerChatRoutes(app: Hono, context: Context): void {
     return createUIMessageStreamResponse({ stream: result.stream });
   });
 
-  app.post("/api/dashboard-chat", async (c) => {
+  if (FEATURES.dashboards) app.post("/api/dashboard-chat", async (c) => {
     const { id, message, dashboardId } = await c.req.json<{ id: string; message: UIMessage; dashboardId: string }>();
     const sessionId = dashboardSessionId(dashboardId);
     const { messages, summary, summaryUpTo } = await loadSessionMessages(context.db, sessionId, message);

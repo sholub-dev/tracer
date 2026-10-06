@@ -147,10 +147,13 @@ export async function runSetup(sqlite: SetupDriver): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_widgets_dashboard ON dashboard_widgets(dashboard_id);
     CREATE INDEX IF NOT EXISTS idx_memories_tool ON tool_memories(tool_name);
     CREATE INDEX IF NOT EXISTS idx_dashboards_updated ON dashboards(updated_at);
-    CREATE INDEX IF NOT EXISTS idx_monitors_enabled ON monitors(enabled);
+    DROP INDEX IF EXISTS idx_monitors_enabled;
     CREATE INDEX IF NOT EXISTS idx_triggers_monitor ON monitor_triggers(monitor_id, triggered_at);
     CREATE INDEX IF NOT EXISTS idx_triggers_session ON monitor_triggers(session_id);
-    CREATE INDEX IF NOT EXISTS idx_triggers_recent_session ON monitor_triggers(triggered_at) WHERE session_id IS NOT NULL;
+    DROP INDEX IF EXISTS idx_triggers_recent_session;
+    CREATE INDEX IF NOT EXISTS idx_alert_issues_session ON alert_issues(session_id);
+    CREATE INDEX IF NOT EXISTS idx_alert_issues_condition ON alert_issues(monitor_id, condition_name);
+    CREATE INDEX IF NOT EXISTS idx_alert_issues_trigger ON alert_issues(trigger_id);
     CREATE TABLE IF NOT EXISTS memory_operations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
@@ -375,6 +378,7 @@ async function migrateForeignKeys(sqlite: SetupDriver): Promise<void> {
     await sqlite.exec("COMMIT");
   } catch (err) {
     await sqlite.exec("ROLLBACK");
+    await sqlite.exec("PRAGMA foreign_keys = ON");
     throw err;
   }
 

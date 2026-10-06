@@ -20,7 +20,7 @@ interface SourcesToggleProps {
 
 export function SourcesToggle({ activeProvider, onToggle }: SourcesToggleProps) {
   const connected = useConnectedProviders();
-  const { data: configs } = trpc.provider.getConfigs.useQuery(undefined, { staleTime: WEB_CONFIG.monitorPollingMs });
+  const { data: configs } = trpc.provider.getConfigs.useQuery(undefined, { staleTime: WEB_CONFIG.sourcesStaleMs });
   const connectedTypes = connected?.map((p) => p.type).join(",");
   const gcpConfig = configs?.find((c) => c.type === "gcp")?.config ?? null;
 

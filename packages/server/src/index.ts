@@ -18,7 +18,10 @@ async function main() {
   // Last: it answers every remaining GET with the web app.
   mountStaticFiles(app);
 
-  const fetch = guardLocalRequests(app.fetch, CONFIG.host);
+  // The Vite dev proxy keeps the browser's Origin; the built app serves the web app from this server (same origin).
+  const allowedOrigins = [CONFIG.corsOrigin, ...(import.meta.url.endsWith(".ts") ? ["http://localhost:5173", "http://127.0.0.1:5173"] : [])]
+    .filter((o): o is string => !!o);
+  const fetch = guardLocalRequests(app.fetch, CONFIG.host, allowedOrigins);
   const server = serve({ fetch, port: CONFIG.port, hostname: CONFIG.host }, (info) => {
     console.log(`Tracer server running on http://localhost:${info.port}`);
   });
@@ -29,7 +32,11 @@ async function main() {
     process.exit(1);
   });
 
+  // The launcher forwards a signal the terminal already sent to this process, so the second one is ignored.
+  let shuttingDown = false;
   const shutdown = async (code = 0) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     // If graceful teardown stalls, force-exit — but preserve a non-zero restart
     // code so the launcher still respawns rather than treating it as a crash.
     const timeout = setTimeout(() => process.exit(code === 0 ? 1 : code), CONFIG.shutdownGracePeriodMs);

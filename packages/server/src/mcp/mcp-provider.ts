@@ -22,6 +22,7 @@ export class McpProvider extends BaseProvider {
   private clients: McpClient[] = [];
   protected cachedTools: Record<string, any> | null = null;
   private lastReconnectAttempt = 0;
+  private starting: Promise<void> | null = null;
 
   constructor(
     private readonly definition: McpServerDefinition,
@@ -84,12 +85,13 @@ export class McpProvider extends BaseProvider {
         return { ok: false, error: "No MCP clients connected" };
       }
     }
+    let pingTimer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
         Promise.all(this.clients.map((c) => c.tools())),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Ping timed out")), CONFIG.mcpPingTimeoutMs),
-        ),
+        new Promise<never>((_, reject) => {
+          pingTimer = setTimeout(() => reject(new Error("Ping timed out")), CONFIG.mcpPingTimeoutMs);
+        }),
       ]);
       this.connected = true;
       this.lastChecked = new Date().toISOString();
@@ -98,6 +100,8 @@ export class McpProvider extends BaseProvider {
       this.connected = false;
       this.lastChecked = new Date().toISOString();
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    } finally {
+      clearTimeout(pingTimer);
     }
   }
 
@@ -115,7 +119,7 @@ export class McpProvider extends BaseProvider {
   /** Invalidate cached tools and clients — forces reconnection on next getMcpTools() call. */
   invalidateTools(): void {
     this.cachedTools = null;
-    // Close existing clients in the background (best-effort)
+    // Reset state first: a concurrent init may create new clients while the old ones close.
     this.closeAllClients().catch(() => {});
   }
 
@@ -155,9 +159,20 @@ export class McpProvider extends BaseProvider {
   // ── Private ──
 
   /** Spawn MCP clients for all servers in parallel. */
-  private async createClients(): Promise<void> {
-    const entries = this.definition.servers;
-    this.clients = await Promise.all(entries.map((entry) => this.spawnClient(entry)));
+  private createClients(): Promise<void> {
+    this.starting ??= this.spawnAllClients().finally(() => { this.starting = null; });
+    return this.starting;
+  }
+
+  private async spawnAllClients(): Promise<void> {
+    const results = await Promise.allSettled(this.definition.servers.map((entry) => this.spawnClient(entry)));
+    const started = results.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+    const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failed) {
+      await Promise.all(started.map((c) => c.close().catch(() => {})));
+      throw failed.reason;
+    }
+    this.clients = started;
   }
 
   /** Spawn a single MCP client for one server entry with timeout. */
@@ -194,14 +209,24 @@ export class McpProvider extends BaseProvider {
     });
 
     const clientPromise = createMCPClient({ transport });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
     const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(
-        () => reject(new Error(`MCP server ${entry.package} timed out after ${CONFIG.mcpInitTimeoutMs / 1000}s`)),
-        CONFIG.mcpInitTimeoutMs,
-      );
+      timer = setTimeout(() => {
+        timedOut = true;
+        reject(new Error(`MCP server ${entry.package} timed out after ${CONFIG.mcpInitTimeoutMs / 1000}s`));
+      }, CONFIG.mcpInitTimeoutMs);
     });
 
-    return Promise.race([clientPromise, timeoutPromise]);
+    try {
+      return await Promise.race([clientPromise, timeoutPromise]);
+    } catch (err) {
+      // The client may still come up after the timeout; close it so its process does not leak.
+      if (timedOut) clientPromise.then((c) => c.close()).catch(() => {});
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** Discover tools from all connected clients and merge into a single record. */
@@ -216,10 +241,9 @@ export class McpProvider extends BaseProvider {
 
   /** Close all clients, ignoring errors (processes may already be dead). */
   private async closeAllClients(): Promise<void> {
-    await Promise.all(
-      this.clients.map((c) => c.close().catch(() => {})),
-    );
+    const old = this.clients;
     this.clients = [];
+    await Promise.all(old.map((c) => c.close().catch(() => {})));
   }
 }
 

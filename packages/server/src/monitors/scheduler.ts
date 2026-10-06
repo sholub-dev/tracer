@@ -1,7 +1,8 @@
-import { and, desc, eq, isNotNull, isNull, or } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, lt, notInArray, or } from "drizzle-orm";
 import { SESSION_KIND, substituteWindow, unixNow } from "@tracer-sh/shared";
 import type { Context } from "../trpc/context.js";
-import { chatSessions, monitors, monitorTriggers } from "../db/schema.js";
+import { alertIssues, chatSessions, monitors, monitorTriggers } from "../db/schema.js";
+import type { Db } from "../db/driver.js";
 import { startAgentSession } from "../agents/start-session.js";
 import { sessionChanged } from "../lib/session-events.js";
 import { CONFIG } from "../config.js";
@@ -292,7 +293,8 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
 export async function runDueMonitors(context: Context): Promise<void> {
   const enabled = await context.db.select().from(monitors).where(eq(monitors.enabled, 1)).all();
   const now = unixNow();
-  await Promise.all(enabled.map(async (monitor) => {
+  const queue = [...enabled];
+  const runOne = async (monitor: Monitor) => {
     const window = nextWindow(monitor.lastCheckedAt, monitor.frequencySeconds, now, ingestLagSeconds(monitor.query));
     if (!window || isFailedWindow(failedWindowEnds, monitor.id, window.end)) return;
     try {
@@ -301,7 +303,38 @@ export async function runDueMonitors(context: Context): Promise<void> {
       console.error(`[monitor] "${monitor.name}" check failed:`, err);
       await fail(context, monitor.id, window.end, err instanceof Error ? err.message : String(err));
     }
-  }));
+  };
+  // A few workers share the queue, so many due monitors do not hit the data sources at once.
+  const worker = async () => {
+    for (let monitor = queue.shift(); monitor; monitor = queue.shift()) await runOne(monitor);
+  };
+  await Promise.all(Array.from({ length: CONFIG.monitorMaxConcurrentChecks }, worker));
+}
+
+/**
+ * Deletes firings older than the retention time that no session or issue points to. Session, run and memory rows stay:
+ * the session pages show them. Sync delete markers stay too: this computer keeps no record of what each phone received.
+ */
+export async function pruneOldData(db: Db, now = unixNow()): Promise<void> {
+  const cutoff = now - CONFIG.dataRetentionSeconds;
+  await db.delete(monitorTriggers).where(and(
+    lt(monitorTriggers.triggeredAt, cutoff),
+    or(isNull(monitorTriggers.sessionId), notInArray(monitorTriggers.sessionId, db.select({ id: chatSessions.id }).from(chatSessions))),
+    notInArray(monitorTriggers.id, db.select({ id: alertIssues.triggerId }).from(alertIssues)),
+  )).run();
+
+}
+
+let lastPrune = 0;
+
+async function pruneWhenDue(db: Db): Promise<void> {
+  if (Date.now() - lastPrune < CONFIG.retentionSweepIntervalMs) return;
+  lastPrune = Date.now();
+  try {
+    await pruneOldData(db);
+  } catch (err) {
+    console.error("[retention] Pruning failed:", err);
+  }
 }
 
 export class MonitorScheduler {
@@ -326,6 +359,7 @@ export class MonitorScheduler {
     this.tickPromise = runDueMonitors(this.context)
       .then(() => checkWatches(this.context))
       .then(() => fireDueTimers(this.context))
+      .then(() => pruneWhenDue(this.context.db))
       .catch((err) => console.error("MonitorScheduler tick error:", err))
       .finally(() => { this.tickPromise = null; });
   }

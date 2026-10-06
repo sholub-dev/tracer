@@ -91,7 +91,7 @@ test("replace of too much data fails on the phone with the size; the computer sh
   t.after(() => { Object.assign(limits, saved); stopSend(); });
   const computer = await seededDb();
   const phone = await freshDb();
-  const noise = Array.from(crypto.getRandomValues(new Uint8Array(4000)), (b) => b.toString(16)).join("");
+  const noise = Array.from(crypto.getRandomValues(new Uint8Array(40000)), (b) => b.toString(16)).join("");
   await computer.insert(chatSessions).values({ id: "big", title: "Big", messages: noise, status: "done" }).run();
   limits.packed = 2000;
   const { link, fullCopy } = await startSend(computer, () => 0);
@@ -104,7 +104,7 @@ test("replace of too much data fails on the phone with the size; the computer sh
   assert.match(sendStatus().error ?? "", /after compression/);
 });
 
-test("startSend returns the compressed size of a full copy", async (t) => {
+test("startSend returns an estimate of the compressed size of a full copy", async (t) => {
   t.after(stopSend);
   const computer = await seededDb();
   const { fullCopy } = await startSend(computer, () => 0);

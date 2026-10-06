@@ -285,13 +285,15 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   // The server saves the reason a run ended on its last reply; a returning viewer sees it here.
   const savedError = !isLoading && lastMessage?.role === "assistant" ? (lastMessage.metadata as { error?: unknown } | undefined)?.error : undefined;
   const savedErrorText = typeof savedError === "string" ? savedError : null;
-  const needsContinue = !isLoading && !savedErrorText && messages.length > collapse && lastMessage?.role === "assistant" && lastPart?.type.startsWith("tool-");
+  const needsContinue = !isLoading && !error && !savedErrorText && messages.length > collapse && lastMessage?.role === "assistant" && lastPart?.type.startsWith("tool-");
 
   const lastPartState = (lastPart as { state?: string } | undefined)?.state;
   const isSubAgentRunning = lastPart?.type.startsWith("tool-") && lastPartState !== "output-available";
   const isContentStreaming = lastPart?.type === "text" || lastPart?.type === "reasoning";
   const showWorking = status === "submitted" || (status === "streaming" && !isContentStreaming && !isSubAgentRunning);
 
+  // A failed reply keeps its saved tool work, so the run continues from it instead of starting over.
+  const hasPartialReply = lastMessage?.role === "assistant" && lastMessage.parts.some((p) => p.type !== "step-start");
   const lastId = status === "streaming" ? lastMessage?.id : null;
   const canRetry = !readOnly && !inputDisabled && !isLoading;
 
@@ -357,6 +359,14 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
     scrollToBottom({ animation: "instant" });
     sendMessageRef.current({ text, files });
   }, [setMessages, scrollToBottom]);
+
+  // Retry stays for an error that Continue cannot get past, such as a prompt that is too long.
+  const recoverAction = hasPartialReply ? (
+    <div className="flex shrink-0 gap-2">
+      <Button variant="outline" size="sm" onClick={handleContinue}>Continue</Button>
+      <Button variant="ghost" size="sm" onClick={handleRetry}>Retry</Button>
+    </div>
+  ) : <Button variant="outline" size="sm" onClick={handleRetry}>Retry</Button>;
 
   useImperativeHandle(
     ref,
@@ -456,14 +466,9 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
             No reply to this message.
           </NoticeRow>
         )}
-        {canRetry && !error && savedErrorText && (
-          <NoticeRow tone="error" action={<Button variant="outline" size="sm" onClick={handleRetry}>Retry</Button>}>
-            {savedErrorText}
-          </NoticeRow>
-        )}
-        {canRetry && error && (
-          <NoticeRow tone="error" action={<Button variant="outline" size="sm" onClick={handleRetry}>Retry</Button>}>
-            {error.message}
+        {canRetry && (error || savedErrorText) && (
+          <NoticeRow tone="error" action={recoverAction}>
+            {error ? error.message : savedErrorText}
           </NoticeRow>
         )}
       </Transcript>

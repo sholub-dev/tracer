@@ -65,6 +65,9 @@ const MID_STREAM_ERROR_SSE = sse([
   ["error", { type: "error", error: { type: "overloaded_error", message: "Overloaded" } }],
 ]);
 
+/** A mid-stream error of a type the provider does not know. */
+const UNKNOWN_ERROR_SSE = MID_STREAM_ERROR_SSE.replace("overloaded_error", "unexpected_error").replace("Overloaded", "odd failure");
+
 /** A script entry that sends part of an answer, then drops the connection. */
 const DROPPED = "dropped";
 /** A script entry that sends part of an answer, then never finishes. */
@@ -216,7 +219,8 @@ async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string 
     await draining;
     const row = await db.select().from(schema.chatSessions).get();
     const saved = decodeMessages(row!.messages);
-    return { bodies, completed, failed, parts, saved, status: row?.status };
+    const runs = await db.select().from(schema.agentRuns).all();
+    return { bodies, completed, failed, parts, saved, status: row?.status, runs };
   } finally {
     delete process.env.ANTHROPIC_BASE_URL;
     server.close();
@@ -232,6 +236,14 @@ test("a transient failure is re-run on the same history and completes once", asy
   assert.equal(r.parts.filter((p) => p.type === "error").length, 0, "retried errors are not shown");
   assert.deepEqual(r.saved.map((m) => m.role), ["user", "assistant"]);
   assert.equal(r.status, "done");
+});
+
+test("a failure of an unknown kind is re-run", async () => {
+  const r = await retryRun({ script: [UNKNOWN_ERROR_SSE, SSE] }, [0]);
+  assert.equal(r.bodies.length, 2);
+  assert.equal(r.completed, 1);
+  assert.deepEqual(r.failed, []);
+  assert.deepEqual(r.saved.map((m) => m.role), ["user", "assistant"]);
 });
 
 test("a non-transient failure is not re-run: one failure, one error, nothing to save", async () => {
@@ -273,7 +285,7 @@ test("a stop is never retried", async () => {
   assert.ok(Date.now() - started < 10_000);
 });
 
-test("a retried attempt's streamed steps are dropped for live and late viewers", async () => {
+test("a re-run continues after the last saved tool step; only the failed step is dropped for viewers", async () => {
   let broadcaster!: StreamBroadcaster;
   const r = await retryRun(
     { script: [TOOL_CALL_SSE, TOOL_CALL_SSE, DROPPED, TOOL_CALL_SSE] }, [0],
@@ -281,6 +293,7 @@ test("a retried attempt's streamed steps are dropped for live and late viewers",
     { lookup: tool({ inputSchema: z.object({}), execute: async () => "ok" }) },
   );
   assert.equal(r.bodies.length, 5);
+  assert.equal((r.bodies[3].messages as unknown[]).length, (r.bodies[2].messages as unknown[]).length, "the re-run sends the saved tool steps");
   assert.equal(r.parts.filter((p) => p.type === "reset-step").length, 1);
 
   const render = async (chunks: UIMessageChunk[]) => {
@@ -288,13 +301,46 @@ test("a retried attempt's streamed steps are dropped for live and late viewers",
     for await (const m of readUIMessageStream({ stream: new ReadableStream({ start(c) { chunks.forEach((x) => c.enqueue(x)); c.close(); } }) })) last = m;
     return last!.parts.filter((p) => p.type !== "step-start").map((p) => p.type === "text" ? p.text : p.type);
   };
-  const expected = ["tool-lookup", "Hi there"];
+  const expected = ["tool-lookup", "tool-lookup", "tool-lookup", "Hi there"];
   assert.deepEqual(await render(r.parts), expected, "live viewer");
   const replay: UIMessageChunk[] = [];
   broadcaster.subscribe((p) => replay.push(p as UIMessageChunk));
   assert.equal(replay.some((p) => p.type === "reset-step"), false);
   assert.deepEqual(await render(replay), expected, "late viewer");
   assert.deepEqual(r.saved.map((m) => m.role), ["user", "assistant"]);
+});
+
+test("each tool step is saved while the run goes on, and a stop keeps it", async () => {
+  let midRun: string[] = [];
+  let midRunId: string | undefined;
+  const r = await retryRun(
+    { script: [TOOL_CALL_SSE, STALLED] }, [],
+    async (ctx) => {
+      await new Promise((res) => setTimeout(res, 300));
+      const row = await ctx.db.select().from(schema.chatSessions).get();
+      const reply = decodeMessages(row!.messages).at(-1)!;
+      midRun = reply.parts.map((p) => p.type);
+      midRunId = reply.id;
+      ctx.activeStreams.get("s1")!.controller.abort();
+    },
+    { lookup: tool({ inputSchema: z.object({}), execute: async () => "ok" }) },
+  );
+  assert.ok(midRun.includes("tool-lookup"), "the tool step is saved while the run goes on");
+  assert.equal(midRunId, r.saved.at(-1)!.id, "the step save and the final save give the reply one id");
+  assert.equal(r.bodies.length, 2);
+  assert.ok(r.saved.at(-1)!.parts.some((p) => p.type === "tool-lookup"));
+});
+
+test("token use is recorded for each finished model call, also in failed and retried attempts", async () => {
+  const lookup = { lookup: tool({ inputSchema: z.object({}), execute: async () => "ok" }) };
+  const retried = await retryRun({ script: [TOOL_CALL_SSE, DROPPED, SSE] }, [0], undefined, lookup);
+  assert.equal(retried.bodies.length, 3);
+  assert.equal(retried.runs.length, 2, "the dropped call reports no usage; the other two do");
+  assert.ok(retried.runs.every((r) => r.agentType === "chat" && r.inputTokens === 10 && r.outputTokens === 2));
+
+  const failed = await retryRun({ script: [TOOL_CALL_SSE, DROPPED] }, [], undefined, lookup);
+  assert.equal(failed.failed.length, 1);
+  assert.equal(failed.runs.length, 1, "a failed run still counts the call that finished");
 });
 
 test("a mid-stream model error is a failed attempt: retried, not saved", async () => {
@@ -318,7 +364,7 @@ test("when every attempt ends in a mid-stream model error the run fails once and
   assert.equal(r.parts.filter((p) => p.type === "error").length, 1);
   const reply = r.saved.at(-1)!;
   assert.equal(reply.role, "assistant", "the partial reply of the last attempt is kept");
-  assert.equal((reply.metadata as { error: string }).error, "The model connection failed. Retry to run it again.");
+  assert.equal((reply.metadata as { error: string }).error, "The run failed after retries: Overloaded");
   assert.deepEqual(reply.parts.filter((p) => p.type === "text").map((p) => p.type === "text" && p.text), ["half an answer"]);
 });
 

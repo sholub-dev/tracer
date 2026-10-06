@@ -15,6 +15,14 @@ export function extractUsage(usage: LanguageModelUsage, model: string): TokenUsa
   };
 }
 
+/**
+ * Handler for `onLanguageModelCallEnd`: records each model call when it ends.
+ * A run that fails, stops or is re-run later still counts the calls it made.
+ */
+export function recordEachCall(db: Db, sessionId: string, agentType: string, model: string) {
+  return (event: { usage: LanguageModelUsage }) => recordAgentRun(db, { sessionId, agentType, model, usage: extractUsage(event.usage, model) });
+}
+
 /** Record a single LLM call's token usage in the agent_runs table. Best-effort. */
 export async function recordAgentRun(db: Db, opts: {
   sessionId: string;

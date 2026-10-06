@@ -14,10 +14,18 @@ test("network failures, timeouts and server errors are transient", () => {
   assert.equal(isTransientError(new RetryError({ message: "Failed after 3 attempts. Last error: Internal Server Error", reason: "maxRetriesExceeded", errors: [] })), true);
 });
 
+test("an error of an unknown shape is transient", () => {
+  assert.equal(isTransientError(new Error("The model stream failed")), true);
+  assert.equal(isTransientError(new TypeError("Software caused connection abort")), true);
+  assert.equal(isTransientError(new Error("boom")), true);
+  assert.equal(isTransientError("cancelled"), true);
+});
+
 test("aborts and client errors are not transient", () => {
   assert.equal(isTransientError(Object.assign(new Error("stop"), { name: "AbortError" })), false);
   assert.equal(isTransientError({ statusCode: 400 }), false);
   assert.equal(isTransientError(new APICallError({ message: "bad key", url: "u", requestBodyValues: {}, statusCode: 401 })), false);
-  assert.equal(isTransientError(new Error("boom")), false);
-  assert.equal(isTransientError(undefined), false);
+  assert.equal(isTransientError({ type: "invalid_request_error", message: "bad input" }), false);
+  const notRetryable = new APICallError({ message: "bad key", url: "u", requestBodyValues: {}, statusCode: 401 });
+  assert.equal(isTransientError(new RetryError({ message: "Failed", reason: "errorNotRetryable", errors: [notRetryable] })), false);
 });

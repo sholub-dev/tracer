@@ -8,9 +8,10 @@ import { cn } from "@/lib/utils";
 import { trpc } from "../lib/trpc";
 import { useParsedMessages } from "../lib/chat-utils";
 import { useDeleteSession, usePersistedState } from "../lib/hooks";
+import { useOnResume } from "../lib/resume";
 import { sessionKindLabel } from "../lib/session-kind";
 import { formatTime } from "../lib/format";
-import type { ProgressStore } from "../lib/progress-store";
+import { SessionLoadError } from "../components/chat/SessionLoadError";
 import { LiveStreamView } from "../components/chat/LiveStreamView";
 import { ChatCore, type ChatCoreRef, type RenderView } from "../components/chat/ChatCore";
 import { COLUMN } from "../components/chat/Transcript";
@@ -84,6 +85,8 @@ export function Debug({ sessionId, isNew, onDeleted }: { sessionId: string; isNe
         <Loader2 className="size-5 animate-spin text-muted-foreground" />
       </div>
     );
+  } else if (sessionQuery.isError && !sessionQuery.data) {
+    body = <SessionLoadError onRetry={() => void sessionQuery.refetch()} />;
   } else if (sessionQuery.data?.status === "streaming") {
     // A compacted session hides its summarized messages here too (display-only).
     const live = sessionQuery.data;
@@ -232,9 +235,12 @@ function DebugChat({ chatId, initialMessages, sources, cost, activeProvider, ses
     prevListStatus.current = listStatus;
     if (started && !isStreaming) utils.sessions.get.fetch({ id: chatId }, { staleTime: 0 }).catch(() => {});
   }, [listStatus]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The app was suspended: a run may have started or ended meanwhile. Skip while this view streams itself.
+  useOnResume(() => {
+    if (!isStreaming && hasMessages) utils.sessions.get.fetch({ id: chatId }, { staleTime: 0 }).catch(() => {});
+  });
   const markViewed = trpc.sessions.markViewed.useMutation();
   const truncateMessages = trpc.sessions.truncateMessages.useMutation();
-  const saveMessages = trpc.sessions.saveMessages.useMutation();
   const compactMutation = trpc.sessions.compact.useMutation();
   const updateSummaryMutation = trpc.sessions.updateSummary.useMutation();
   const clearSummaryMutation = trpc.sessions.clearSummary.useMutation();
@@ -313,23 +319,6 @@ function DebugChat({ chatId, initialMessages, sources, cost, activeProvider, ses
     setEditingIndex(null);
     coreRef.current.scrollToBottom({ animation: "instant" });
     coreRef.current.sendMessage({ text: trimmed });
-  };
-
-  // Bake in-memory sub-agent progress into tool parts before saving, so partial results survive a refresh.
-  const handleBeforeStop = ({ messages: msgs, progressStore }: { messages: UIMessage[]; progressStore: ProgressStore }) => {
-    const enrichedMessages = msgs.map((msg) => {
-      if (msg.role !== "assistant") return msg;
-      const parts = msg.parts.map((part) => {
-        const p = part as Record<string, unknown>;
-        if (p.toolCallId && p.state !== "output-available") {
-          const progress = progressStore.getSnapshot(p.toolCallId as string);
-          return { ...p, state: "output-available", output: progress?.parts?.length ? { parts: progress.parts } : { error: "Aborted" } };
-        }
-        return part;
-      });
-      return { ...msg, parts };
-    });
-    saveMessages.mutate({ id: chatId, messages: enrichedMessages });
   };
 
   const handleCompact = async (index: number) => {
@@ -499,7 +488,6 @@ function DebugChat({ chatId, initialMessages, sources, cost, activeProvider, ses
         analysisOnlyIndex={summary && !showOriginals && summaryUpTo ? summaryUpTo : undefined}
         inputDisabled={isCompacting}
         onRetryTruncate={truncateTo}
-        onBeforeStop={handleBeforeStop}
         onStatusChange={(status, msgs) => {
           const loading = status === "submitted" || status === "streaming";
           setIsStreaming(loading);

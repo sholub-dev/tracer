@@ -13,6 +13,52 @@ export type ProgressPart =
   // Legacy: older persisted sessions styled the last text part as a summary block.
   | { type: "summary"; content: string };
 
+/** Folds one streamed sub-agent chunk into the parts received so far. */
+export function mergeProgressPart(
+  prev: readonly ProgressPart[],
+  part: { type: string; [key: string]: unknown },
+): ProgressPart[] {
+  // A retry clears the failed attempt's streamed parts before re-streaming.
+  if (part.type === "reset") return [];
+  const parts = [...prev];
+  if (part.type === "tool-call") {
+    parts.push({ type: "tool-call", toolName: part.toolName as string });
+  } else if (part.type === "text-delta") {
+    const last = parts[parts.length - 1];
+    if (last?.type === "text") {
+      parts[parts.length - 1] = { ...last, content: last.content + (part.delta as string) };
+    } else {
+      parts.push({ type: "text", content: part.delta as string });
+    }
+  } else if (part.type === "reasoning-delta") {
+    const last = parts[parts.length - 1];
+    if (last?.type === "reasoning") {
+      parts[parts.length - 1] = { ...last, content: last.content + (part.delta as string) };
+    } else {
+      parts.push({ type: "reasoning", content: part.delta as string });
+    }
+  } else if (part.type === "query") {
+    let tcIdx = -1;
+    for (let i = parts.length - 1; i >= 0; i--) {
+      if (parts[i].type === "tool-call") { tcIdx = i; break; }
+    }
+    if (tcIdx !== -1) parts.splice(tcIdx, 1);
+    parts.push({ type: "query", query: part.query as string, results: part.results });
+  } else if (part.type === "begin-analysis") {
+    // After begin_analysis, everything the sub-agent writes is its final Analysis.
+    parts.push({ type: "analysis-start" });
+  } else if (part.type === "mark-summary") {
+    // Legacy: older sub-agents marked the last text part as a summary block.
+    for (let i = parts.length - 1; i >= 0; i--) {
+      if (parts[i].type === "text") {
+        parts[i] = { ...parts[i], type: "summary" } as ProgressPart;
+        break;
+      }
+    }
+  }
+  return parts;
+}
+
 /** Tool names as registered on the server */
 export const TOOL_NAMES = {
   CREATE_WIDGET: "create_widget",

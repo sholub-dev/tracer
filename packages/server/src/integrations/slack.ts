@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../db/driver.js";
 import { appSettings } from "../db/schema.js";
+import { fetchWithRetry } from "../lib/fetch-retry.js";
 import { formatLocalTime } from "../lib/current-context.js";
 import { firstSentence, type AlertSummary } from "../monitors/alert-summary.js";
 import { readAppSetting, writeAppSetting } from "../db/config-reader.js";
@@ -38,12 +39,12 @@ export interface SlackPayload {
 export async function postSlack(webhookUrl: string, payload: SlackPayload): Promise<{ ok: true } | { error: string }> {
   if (!isSlackWebhook(webhookUrl)) return { error: "Webhook URL must start with https://hooks.slack.com/services/" };
   try {
-    const res = await fetch(webhookUrl, {
+    // A retry after a lost response can post twice; that beats a lost alert.
+    const res = await fetchWithRetry(webhookUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(10_000),
-    });
+    }, { timeoutMs: 10_000 });
     if (!res.ok) return { error: `Slack returned ${res.status}: ${(await res.text()).slice(0, 200)}` };
     return { ok: true };
   } catch (err) {

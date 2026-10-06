@@ -4,7 +4,9 @@ import { ProgressStore } from "../../lib/progress-store";
 import { handleProgressData, stopChat, useCompactedMessages } from "../../lib/chat-utils";
 import { useChatScroll, useEscapeToStop } from "../../lib/hooks";
 import { WEB_CONFIG } from "../../lib/config";
-import { openEventStream } from "../../lib/sse";
+import { readEventStream } from "../../lib/sse";
+import { serverFetch } from "../../lib/server-fetch";
+import { useOnResume } from "../../lib/resume";
 import { AlertSummaryPanel, alertSummaryOf } from "./AlertSummaryPanel";
 import { WorkingIndicator } from "./ChatIndicators";
 import { Composer } from "./Composer";
@@ -39,52 +41,18 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
 
   const { scrollRef, contentRef, isAtBottom, scrollToBottom } = useChatScroll();
 
+  const wakeRef = useRef<() => void>(() => {});
+  useOnResume(() => wakeRef.current());
+
   useEffect(() => {
     let cancelled = false;
+    let conn: AbortController | null = null;
+    let wakeDelay: (() => void) | null = null;
+    let woken = false;
+    wakeRef.current = () => { woken = true; conn?.abort(); wakeDelay?.(); };
 
-    // Bridge SSE events into a ReadableStream for readUIMessageStream.
-    let ctrl: ReadableStreamDefaultController<UIMessageChunk>;
-    const chunkStream = new ReadableStream<UIMessageChunk>({
-      start(c) { ctrl = c; },
-    });
-
-    let errorCount = 0;
-    let errorTimer: ReturnType<typeof setTimeout> | null = null;
-
-    const closeEvents = openEventStream(`/api/chat/subscribe/${sessionId}`, {
-      onEvent: (event, data) => {
-        if (event === "part") {
-          if (cancelled) return;
-          errorCount = 0;
-          try {
-            const part = JSON.parse(data);
-            if (part.type === "data-provider-part") handleProgressData(progressStore, part.data);
-            ctrl.enqueue(part as UIMessageChunk);
-          } catch { /* ignore parse errors */ }
-        } else if (event === "done") {
-          // Only close here; onComplete fires after the last flush so the final content renders first.
-          try { ctrl.close(); } catch { /* already closed */ }
-          closeEvents();
-        }
-      },
-      onError: (closed) => {
-        if (closed) {
-          try { ctrl.close(); } catch { /* already closed */ }
-          return;
-        }
-        // Transient error: allow auto-reconnect, but give up after a few within 10s.
-        errorCount++;
-        if (errorCount >= WEB_CONFIG.maxSseErrors) {
-          try { ctrl.close(); } catch { /* already closed */ }
-          closeEvents();
-          return;
-        }
-        if (errorTimer) clearTimeout(errorTimer);
-        errorTimer = setTimeout(() => { errorCount = 0; }, 10_000);
-      },
-    });
-
-    (async () => {
+    // Each connection replays the whole buffer, so it builds its own message and replaces the previous one.
+    const readConnection = (stream: ReadableStream<UIMessageChunk>, isCurrent: () => boolean) => (async () => {
       // One render per chatThrottleMs: the server replays the whole buffered stream on subscribe.
       let latest: UIMessage | null = null;
       let flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -92,25 +60,76 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
         flushTimer = null;
         const msg = latest;
         latest = null;
-        if (!cancelled && msg) setMessages([...initialMessagesRef.current, msg]);
+        if (!cancelled && isCurrent() && msg) setMessages([...initialMessagesRef.current, msg]);
       };
       try {
-        for await (const msg of readUIMessageStream({ stream: chunkStream })) {
-          if (cancelled) break;
+        for await (const msg of readUIMessageStream({ stream })) {
+          if (cancelled || !isCurrent()) break;
           latest = msg;
           if (flushTimer === null) flushTimer = setTimeout(flush, WEB_CONFIG.chatThrottleMs);
         }
       } catch { /* stream ended */ }
       if (flushTimer !== null) clearTimeout(flushTimer);
       flush();
-      if (!cancelled) onCompleteRef.current();
+    })();
+
+    (async () => {
+      let current = 0;
+      while (!cancelled) {
+        const id = ++current;
+        const controller = new AbortController();
+        conn = controller;
+        let ctrl!: ReadableStreamDefaultController<UIMessageChunk>;
+        const chunkStream = new ReadableStream<UIMessageChunk>({ start(c) { ctrl = c; } });
+        const reading = readConnection(chunkStream, () => id === current);
+        progressStore.clear();
+        let finished = false;
+        let ended = false;
+        try {
+          const res = await serverFetch(`/api/chat/subscribe/${sessionId}`, { headers: { Accept: "text/event-stream" }, cache: "no-store", signal: controller.signal });
+          // Only a 404 means the run ended; any other failure is retried.
+          if (res.status === 404) {
+            ended = true;
+          } else if (res.ok && res.body && res.headers.get("content-type")?.startsWith("text/event-stream")) {
+            await readEventStream(res.body, (event, data) => {
+              if (event === "part") {
+                try {
+                  const part = JSON.parse(data);
+                  if (part.type === "data-provider-part") handleProgressData(progressStore, part.data);
+                  ctrl.enqueue(part as UIMessageChunk);
+                } catch { /* ignore parse errors */ }
+              } else if (event === "done") {
+                finished = true;
+                controller.abort();
+              }
+            }, controller.signal);
+          } else {
+            void res.body?.cancel().catch(() => {});
+          }
+        } catch { /* network error or abort */ }
+        try { ctrl.close(); } catch { /* already closed */ }
+        if (cancelled) return;
+        if (finished || ended) {
+          // onComplete fires after the last flush so the final content renders first.
+          await reading;
+          if (!cancelled) onCompleteRef.current();
+          return;
+        }
+        if (!woken) {
+          await new Promise<void>((resolve) => {
+            const t = setTimeout(resolve, WEB_CONFIG.sseReconnectMs);
+            wakeDelay = () => { clearTimeout(t); resolve(); };
+          });
+          wakeDelay = null;
+        }
+        woken = false;
+      }
     })();
 
     return () => {
       cancelled = true;
-      closeEvents();
-      if (errorTimer) clearTimeout(errorTimer);
-      try { ctrl.close(); } catch { /* ignore */ }
+      conn?.abort();
+      wakeDelay?.();
       progressStore.clear();
     };
   }, [sessionId, progressStore]); // eslint-disable-line react-hooks/exhaustive-deps

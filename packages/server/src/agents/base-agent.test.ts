@@ -67,6 +67,8 @@ const MID_STREAM_ERROR_SSE = sse([
 
 /** A script entry that sends part of an answer, then drops the connection. */
 const DROPPED = "dropped";
+/** A script entry that sends part of an answer, then never finishes. */
+const STALLED = "stalled";
 
 /** `fail` first requests get a non-retryable API error; `hold` never answers; `script` sets each request's SSE body (null fails it). */
 function fakeAnthropic({ fail = 0, hold = false, script = [] as (string | null)[] } = {}): Promise<{ server: Server; url: string; bodies: Record<string, unknown>[] }> {
@@ -83,6 +85,10 @@ function fakeAnthropic({ fail = 0, hold = false, script = [] as (string | null)[
         return;
       }
       res.writeHead(200, { "content-type": "text/event-stream" });
+      if (script[bodies.length - 1] === STALLED) {
+        res.write(MID_STREAM_ERROR_SSE.slice(0, MID_STREAM_ERROR_SSE.lastIndexOf("event: error")));
+        return;
+      }
       if (script[bodies.length - 1] === DROPPED) {
         res.write(MID_STREAM_ERROR_SSE.slice(0, MID_STREAM_ERROR_SSE.lastIndexOf("event: error")));
         setTimeout(() => res.destroy(), 50);
@@ -185,7 +191,7 @@ test("Anthropic chat request: date-only system prompt with cache breakpoint, tim
   }
 });
 
-async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string | null)[] }, retryDelaysMs: number[], whileRunning?: (ctx: Context) => Promise<void>, tools?: ToolSet) {
+async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string | null)[] }, retryDelaysMs: number[], whileRunning?: (ctx: Context) => Promise<void>, tools?: ToolSet | ((writer: { write: (part: Record<string, unknown>) => void }) => ToolSet)) {
   const { server, url, bodies } = await fakeAnthropic(fake);
   process.env.ANTHROPIC_BASE_URL = url;
   try {
@@ -197,7 +203,7 @@ async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string 
     const failed: string[] = [];
     const res = await runChatAgent({
       sessionId: "s1", messages: [{ id: "u1", role: "user", parts: [{ type: "text", text: "why?" }] }], context,
-      collectTools: async () => ({ tools, afterComplete: () => { completed++; } }),
+      collectTools: async (writer) => ({ tools: typeof tools === "function" ? tools(writer) : tools, afterComplete: () => { completed++; } }),
       sessionTitle: () => "t", retryDelaysMs, onFailed: (e) => failed.push(e),
     });
     assert.ok("stream" in res && res.stream);
@@ -217,8 +223,8 @@ async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string 
   }
 }
 
-test("a failed attempt is re-run on the same history and completes once", async () => {
-  const r = await retryRun({ fail: 2 }, [0, 0, 0]);
+test("a transient failure is re-run on the same history and completes once", async () => {
+  const r = await retryRun({ script: [MID_STREAM_ERROR_SSE, MID_STREAM_ERROR_SSE, SSE] }, [0, 0, 0]);
   assert.equal(r.bodies.length, 3);
   for (const b of r.bodies) assert.equal((b.messages as unknown[]).length, 1, "the user message is sent once");
   assert.equal(r.completed, 1);
@@ -228,14 +234,25 @@ test("a failed attempt is re-run on the same history and completes once", async 
   assert.equal(r.status, "done");
 });
 
-test("when every attempt fails the run reports one failure and one error", async () => {
+test("a non-transient failure is not re-run: one failure, one error, nothing to save", async () => {
   const r = await retryRun({ fail: 99 }, [0, 0]);
-  assert.equal(r.bodies.length, 3);
+  assert.equal(r.bodies.length, 1);
   assert.equal(r.completed, 0);
   assert.deepEqual(r.failed, ["boom"]);
   assert.equal(r.parts.filter((p) => p.type === "error").length, 1);
-  assert.deepEqual(r.saved.map((m) => m.role), ["user"]);
+  assert.deepEqual(r.saved.map((m) => m.role), ["user"], "a failed reply without parts adds no message");
   assert.equal(r.status, "done");
+});
+
+test("a non-transient failure after partial output ends the run at once and keeps the partial reply", async () => {
+  const BAD = MID_STREAM_ERROR_SSE.replace("overloaded_error", "invalid_request_error").replace("Overloaded", "bad input");
+  const r = await retryRun({ script: [BAD] }, [0, 0]);
+  assert.equal(r.bodies.length, 1);
+  assert.equal(r.failed.length, 1);
+  assert.equal(r.parts.filter((p) => p.type === "error").length, 1, "the client still gets the error");
+  const reply = r.saved.at(-1)!;
+  assert.equal(reply.role, "assistant");
+  assert.match((reply.metadata as { error: string }).error, /bad input/);
 });
 
 test("a stop is never retried", async () => {
@@ -247,7 +264,7 @@ test("a stop is never retried", async () => {
   assert.deepEqual(stopped.failed, []);
 
   const started = Date.now();
-  const inBackoff = await retryRun({ fail: 99 }, [60_000], async (ctx) => {
+  const inBackoff = await retryRun({ script: [MID_STREAM_ERROR_SSE] }, [60_000], async (ctx) => {
     await new Promise((r) => setTimeout(r, 300));
     ctx.activeStreams.get("s1")!.controller.abort();
   });
@@ -259,7 +276,7 @@ test("a stop is never retried", async () => {
 test("a retried attempt's streamed steps are dropped for live and late viewers", async () => {
   let broadcaster!: StreamBroadcaster;
   const r = await retryRun(
-    { script: [TOOL_CALL_SSE, TOOL_CALL_SSE, null, TOOL_CALL_SSE] }, [0],
+    { script: [TOOL_CALL_SSE, TOOL_CALL_SSE, DROPPED, TOOL_CALL_SSE] }, [0],
     async (ctx) => { broadcaster = ctx.activeStreams.get("s1")!.broadcaster; },
     { lookup: tool({ inputSchema: z.object({}), execute: async () => "ok" }) },
   );
@@ -299,7 +316,46 @@ test("when every attempt ends in a mid-stream model error the run fails once and
   assert.match(r.failed[0], /Overloaded/);
   assert.equal(r.completed, 0);
   assert.equal(r.parts.filter((p) => p.type === "error").length, 1);
-  assert.deepEqual(r.saved.map((m) => m.role), ["user"]);
+  const reply = r.saved.at(-1)!;
+  assert.equal(reply.role, "assistant", "the partial reply of the last attempt is kept");
+  assert.equal((reply.metadata as { error: string }).error, "The model connection failed. Retry to run it again.");
+  assert.deepEqual(reply.parts.filter((p) => p.type === "text").map((p) => p.type === "text" && p.text), ["half an answer"]);
+});
+
+test("a stopped run keeps its partial reply and is not a failure", async () => {
+  const r = await retryRun({ script: [STALLED] }, [0, 0], async (ctx) => {
+    await new Promise((res) => setTimeout(res, 300));
+    ctx.activeStreams.get("s1")!.controller.abort();
+  });
+  assert.equal(r.bodies.length, 1);
+  assert.deepEqual(r.failed, []);
+  assert.equal(r.completed, 0, "a stopped run skips the after-complete work");
+  const reply = r.saved.at(-1)!;
+  assert.equal(reply.role, "assistant");
+  assert.deepEqual(reply.parts.filter((p) => p.type === "text").map((p) => p.type === "text" && p.text), ["half an answer"]);
+  assert.equal(reply.metadata, undefined);
+});
+
+test("a stop keeps the progress a running tool streamed", async () => {
+  const r = await retryRun({ script: [TOOL_CALL_SSE] }, [0], async (ctx) => {
+    await new Promise((res) => setTimeout(res, 300));
+    ctx.activeStreams.get("s1")!.controller.abort();
+  }, (writer) => ({
+    lookup: tool({
+      inputSchema: z.object({}),
+      execute: async (_input, { abortSignal, toolCallId }) => {
+        const send = (part: unknown) => writer.write({ type: "data-provider-part", data: { toolCallId, part } });
+        send({ type: "text-delta", delta: "checking " });
+        send({ type: "text-delta", delta: "logs" });
+        send({ type: "query", query: "SELECT 1", results: [] });
+        await new Promise((res) => abortSignal?.addEventListener("abort", res));
+        return "late";
+      },
+    }),
+  }));
+  const toolPart = r.saved.at(-1)!.parts.find((p) => p.type === "tool-lookup") as { state: string; output: unknown };
+  assert.equal(toolPart.state, "output-available");
+  assert.deepEqual(toolPart.output, { parts: [{ type: "text", content: "checking logs" }, { type: "query", query: "SELECT 1", results: [] }] });
 });
 
 test("a connection dropped mid-stream on the last attempt fails the run and shows one error", async () => {
@@ -308,6 +364,6 @@ test("a connection dropped mid-stream on the last attempt fails the run and show
   assert.equal(r.failed.length, 1);
   assert.equal(r.completed, 0);
   assert.equal(r.parts.filter((p) => p.type === "error").length, 1);
-  assert.deepEqual(r.saved.map((m) => m.role), ["user"]);
+  assert.deepEqual(r.saved.map((m) => m.role), ["user", "assistant"]);
   assert.equal(r.status, "done");
 });

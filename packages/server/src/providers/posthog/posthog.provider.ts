@@ -32,7 +32,7 @@ export class PosthogProvider extends BaseProvider {
 
   async testConnection(): Promise<boolean> {
     try {
-      await this.client.query("SELECT 1");
+      await this.client.query("SELECT 1", { retry: false });
       this.connected = true;
       this.lastChecked = new Date().toISOString();
       return true;
@@ -45,7 +45,7 @@ export class PosthogProvider extends BaseProvider {
 
   async ping(): Promise<PingResult> {
     try {
-      await this.client.query("SELECT 1");
+      await this.client.query("SELECT 1", { retry: false });
       this.connected = true;
       this.lastChecked = new Date().toISOString();
       return { ok: true };

@@ -3,6 +3,7 @@ import { createGoogle } from "@ai-sdk/google";
 import type { LanguageModel, streamText } from "ai";
 import { readProviderConfig, readAppSetting } from "../db/config-reader.js";
 import type { Db } from "../db/driver.js";
+import { isTransientError } from "../lib/transient.js";
 import { CONFIG, DEFAULTS, ENV, SETTINGS_KEYS, type ModelConfig } from "../config.js";
 
 export type { ModelConfig };
@@ -14,7 +15,24 @@ let llmFetch: typeof fetch | undefined;
 
 /** Sends LLM API calls through `fetch` instead of the global one. The iOS app passes the WebView fetch, which streams. */
 export function setLlmFetch(fetchImpl: typeof fetch): void {
-  llmFetch = fetchImpl;
+  llmFetch = withRetryableFailures(fetchImpl);
+}
+
+/**
+ * The AI SDK retries a failed fetch only for a TypeError "fetch failed" that has a cause.
+ * WebKit rejects with a bare TypeError "Load failed", so transient failures are re-thrown in that shape.
+ */
+export function withRetryableFailures(fetchImpl: typeof fetch): typeof fetch {
+  return (async (...args: Parameters<typeof fetch>) => {
+    try {
+      return await fetchImpl(...args);
+    } catch (err) {
+      if (isTransientError(err)) {
+        throw new TypeError("fetch failed", { cause: err });
+      }
+      throw err;
+    }
+  }) as typeof fetch;
 }
 
 /**

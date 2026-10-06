@@ -48,7 +48,6 @@ interface ChatCoreProps {
   initialMessages?: UIMessage[];
   onStatusChange?: (status: string, messages: UIMessage[]) => void;
   initialInput?: string;
-  onBeforeStop?: (ctx: { messages: UIMessage[]; progressStore: ProgressStore }) => void;
   variant?: "full" | "panel";
 
   header?: ReactNode;
@@ -152,7 +151,6 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
     initialMessages,
     onStatusChange,
     initialInput = "",
-    onBeforeStop,
     variant = "full",
     header,
     scrollHeader,
@@ -284,7 +282,10 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   // `messages.length > collapse` keeps the notice off an interrupted message that is collapsed out of view.
   const lastMessage = messages[messages.length - 1];
   const lastPart = lastMessage?.parts[lastMessage.parts.length - 1];
-  const needsContinue = !isLoading && messages.length > collapse && lastMessage?.role === "assistant" && lastPart?.type.startsWith("tool-");
+  // The server saves the reason a run ended on its last reply; a returning viewer sees it here.
+  const savedError = !isLoading && lastMessage?.role === "assistant" ? (lastMessage.metadata as { error?: unknown } | undefined)?.error : undefined;
+  const savedErrorText = typeof savedError === "string" ? savedError : null;
+  const needsContinue = !isLoading && !savedErrorText && messages.length > collapse && lastMessage?.role === "assistant" && lastPart?.type.startsWith("tool-");
 
   const lastPartState = (lastPart as { state?: string } | undefined)?.state;
   const isSubAgentRunning = lastPart?.type.startsWith("tool-") && lastPartState !== "output-available";
@@ -295,7 +296,6 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   const canRetry = !readOnly && !inputDisabled && !isLoading;
 
   const handleStop = () => {
-    onBeforeStop?.({ messages, progressStore });
     void stopChat(chatId);
     stop();
   };
@@ -454,6 +454,11 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
         {canRetry && !error && onRetryTruncate && lastMessage?.role === "user" && (
           <NoticeRow action={<Button variant="outline" size="sm" onClick={handleRetry}>Retry</Button>}>
             No reply to this message.
+          </NoticeRow>
+        )}
+        {canRetry && !error && savedErrorText && (
+          <NoticeRow tone="error" action={<Button variant="outline" size="sm" onClick={handleRetry}>Retry</Button>}>
+            {savedErrorText}
           </NoticeRow>
         )}
         {canRetry && error && (

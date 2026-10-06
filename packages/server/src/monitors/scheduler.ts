@@ -190,6 +190,7 @@ async function latestSessionRunning(context: Context, monitorId: string): Promis
 
 async function checkMonitor(context: Context, monitor: Monitor, window: { start: number; end: number }): Promise<void> {
   await context.providers.whenLoaded();
+  await context.providers.reconnectDisconnected();
   const provider = context.providers.getProvider(monitor.provider);
   if (!provider?.connected) {
     // No backoff: cheap, and the provider can connect on a later check.

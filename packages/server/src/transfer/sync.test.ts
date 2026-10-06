@@ -205,3 +205,32 @@ test("setup backfills rows that exist before the log and gives them uids", async
     { tbl: "tool_memories", changed_at: 3000 },
   ]);
 });
+
+test("an incremental export equals the full export filtered to the changed rows", async () => {
+  const { a } = await pair();
+  await a.db.insert(toolMemories).values({ toolName: "t", note: "old" }).run();
+  await new Promise((r) => setTimeout(r, 5));
+  const since = Date.now();
+  const memory = (await a.db.select().from(toolMemories).all())[0];
+  await a.db.insert(memoryOperations).values({ sessionId: "s1", operation: "update", memoryId: memory.id, note: "n" }).run();
+  await a.db.update(chatSessions).set({ title: "Renamed" }).where(eq(chatSessions.id, "s1")).run();
+  await a.db.insert(chatSessions).values({ id: "s2", title: "Two", messages: "[]" }).run();
+  await a.db.delete(monitors).where(eq(monitors.id, "m1")).run();
+  await a.db.insert(appSettings).values({ key: "sync_peer_name", value: "x" }).run();
+
+  const full = await exportSyncPayload(a.db);
+  const part = await exportSyncPayload(a.db, since);
+  const changed = new Set(part.rows.map((r) => `${r.tbl}\0${r.row_key}`));
+  assert.ok(changed.size >= 4);
+  const keys: Record<string, string> = { provider_configs: "type", app_settings: "key", tool_memories: "uid", alert_issues: "issueId", memory_operations: "uid" };
+  const sorted = (rows: Record<string, any>[], prop: string) => [...rows].sort((x, y) => String(x[prop]).localeCompare(String(y[prop])));
+  const operations = full.tables.memory_operations.filter((o) => changed.has(`memory_operations\0${o.uid}`));
+  for (const [name, rows] of Object.entries(full.tables)) {
+    const prop = keys[name] ?? "id";
+    const expected = rows.filter((r) => changed.has(`${name}\0${r[prop]}`) || (name === "tool_memories" && operations.some((o) => o.memoryId === r.id)));
+    assert.deepEqual(sorted(part.tables[name], prop), sorted(expected, prop), name);
+  }
+  // The memory did not change, yet it travels so the receiver can map the operation.
+  assert.equal(part.tables.tool_memories.length, 1);
+  assert.deepEqual(part.rows, full.rows.filter((r) => changed.has(`${r.tbl}\0${r.row_key}`)));
+});

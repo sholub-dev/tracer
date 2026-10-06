@@ -14,6 +14,7 @@ import {
   splitAtAnalysis,
 } from "@tracer-sh/shared";
 import { publicProcedure, router } from "../trpc.js";
+import { runInTransaction } from "../../db/driver.js";
 import { chatSessions, agentRuns, monitorTriggers, sessionTimers } from "../../db/schema.js";
 import { generateSessionSummary } from "../../agents/utility/summary.js";
 import { sessionChanged, sessionChanges } from "../../lib/session-events.js";
@@ -137,12 +138,14 @@ export const sessionsRouter = router({
   delete: publicProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      await ctx.db
-        .delete(chatSessions)
-        .where(eq(chatSessions.id, input.id))
-        .run();
-      // Keep the firing in monitor history; it just loses its session link.
-      await ctx.db.update(monitorTriggers).set({ sessionId: null }).where(eq(monitorTriggers.sessionId, input.id)).run();
+      if (ctx.activeStreams.has(input.id)) {
+        throw new TRPCError({ code: "CONFLICT", message: "Cannot delete while a response is in progress" });
+      }
+      await runInTransaction(ctx.db, async (tx) => {
+        await tx.delete(chatSessions).where(eq(chatSessions.id, input.id)).run();
+        // Keep the firing in monitor history; it just loses its session link.
+        await tx.update(monitorTriggers).set({ sessionId: null }).where(eq(monitorTriggers.sessionId, input.id)).run();
+      });
       sessionChanged(input.id);
       return { success: true };
     }),
@@ -187,6 +190,9 @@ export const sessionsRouter = router({
   truncateMessages: publicProcedure
     .input(z.object({ id: z.string(), keepCount: z.number().int().min(0) }))
     .mutation(async ({ ctx, input }) => {
+      if (ctx.activeStreams.has(input.id)) {
+        throw new TRPCError({ code: "CONFLICT", message: "Cannot truncate while a response is in progress" });
+      }
       const row = await ctx.db
         .select({ messages: chatSessions.messages, summaryUpTo: chatSessions.summaryUpTo })
         .from(chatSessions)

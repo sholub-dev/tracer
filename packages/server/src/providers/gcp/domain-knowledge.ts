@@ -7,7 +7,8 @@ export const GCP_AUTH_STOP_RULE = `## Authentication Failure — STOP IMMEDIATEL
 If any tool returns an authentication or permission error (e.g. "unauthenticated", "permission denied", "credentials", "401", "403", "UNAUTHENTICATED", "insufficient permissions"), **STOP ALL FURTHER TOOL CALLS** and report:
 1. The exact error message received.
 2. That authentication/credentials need to be fixed before proceeding.
-Do NOT retry, do NOT try alternative tools — auth errors cannot be resolved by the sub-agent.`;
+Do NOT retry, do NOT try alternative tools — auth errors cannot be resolved by the sub-agent.
+Sibling calls in the same step may return the same auth error; treat them as one failure.`;
 
 export const GCP_PAGE_SIZE_RULE = `**NEVER request large result sets.** Always set pageSize ≤ 20. Always use specific filters (severity, resource type, service name, time range). If you get a size-limit error, halve your pageSize and add tighter filters before retrying.`;
 

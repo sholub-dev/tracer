@@ -1,4 +1,4 @@
-import { exec } from "node:child_process";
+import { exec, execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -182,14 +182,18 @@ function npxPrefixDir(root: string): string {
   return dirname(dirname(root));
 }
 
-function runNpmInstall(install: string): Promise<{ ok: boolean; error?: string }> {
+function runNpmInstall(installArgs: string[]): Promise<{ ok: boolean; error?: string }> {
+  // npm is npm.cmd on Windows, which runs only through a shell; the shell then needs quotes around paths with spaces.
+  const onWindows = process.platform === "win32";
   return new Promise((resolve) => {
-    exec(
+    execFile(
+      "npm",
       // Quiet flags keep output small (a verbose install can otherwise overflow
       // the stdout buffer and look like a failure); maxBuffer adds headroom for
       // native rebuild logs so a successful install is never misreported.
-      `${install} --no-fund --no-audit --loglevel=error --fetch-retries=5`,
-      { encoding: "utf-8", timeout: CONFIG.npmInstallTimeoutMs, maxBuffer: CONFIG.npmInstallMaxBufferBytes },
+      [...installArgs, "--no-fund", "--no-audit", "--loglevel=error", "--fetch-retries=5"]
+        .map((arg) => (onWindows && /\s/.test(arg) ? `"${arg}"` : arg)),
+      { encoding: "utf-8", timeout: CONFIG.npmInstallTimeoutMs, maxBuffer: CONFIG.npmInstallMaxBufferBytes, shell: onWindows },
       (err, _stdout, stderr) => {
         if (err) {
           // Keep the tail — npm prints the actual error last, and full stderr
@@ -256,8 +260,8 @@ export async function performSelfUpdate(): Promise<SelfUpdateResult> {
     return { ok: false, method, error: "An update is already in progress." };
   }
   const install = method === "global"
-    ? "npm install -g tracer-sh@latest"
-    : `npm install --prefix "${npxPrefixDir(root)}" tracer-sh@latest`;
+    ? ["install", "-g", "tracer-sh@latest"]
+    : ["install", "--prefix", npxPrefixDir(root), "tracer-sh@latest"];
 
   installInFlight = true;
   try {

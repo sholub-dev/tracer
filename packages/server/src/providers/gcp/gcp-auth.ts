@@ -10,20 +10,32 @@ const REAUTH_CMD = "Run: gcloud auth application-default login";
 // Google access tokens are valid for 3600s; cache for 55 min to stay safely under that.
 const TOKEN_TTL_MS = 55 * 60 * 1000;
 let tokenCache: { token: string; expiresAt: number } | null = null;
+let refreshing: Promise<GcpAuthResult> | null = null;
 
 /** Clear the cached access token — call this after user re-authenticates. */
 export function clearGcpAuthCache(): void {
   tokenCache = null;
+  refreshing = null;
 }
 
 /**
  * Read ADC from the standard gcloud location and exchange the refresh token for an access token.
  * Caches the token for 55 minutes; returns a structured result to distinguish failure reasons.
  */
-export async function getGcpAuth(): Promise<GcpAuthResult> {
+export function getGcpAuth(): Promise<GcpAuthResult> {
   if (tokenCache && Date.now() < tokenCache.expiresAt) {
-    return { ok: true, token: tokenCache.token };
+    return Promise.resolve({ ok: true, token: tokenCache.token });
   }
+  if (refreshing) return refreshing;
+  // A clear during this refresh starts a new one; this one must not reset it when it ends.
+  const current: Promise<GcpAuthResult> = refreshGcpAuth().finally(() => {
+    if (refreshing === current) refreshing = null;
+  });
+  refreshing = current;
+  return current;
+}
+
+async function refreshGcpAuth(): Promise<GcpAuthResult> {
 
   const credPath =
     process.env.GOOGLE_APPLICATION_CREDENTIALS ||

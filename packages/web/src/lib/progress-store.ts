@@ -36,12 +36,13 @@ export class ProgressStore {
 
   clear() {
     this.data.clear();
-    this.listeners.clear();
     this.pendingIds.clear();
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
     }
+    // Mounted subscribers stay; they re-read their now-empty snapshots.
+    this.listeners.forEach((set) => set.forEach((fn) => fn()));
   }
 
   subscribe(toolCallId: string, callback: Listener): () => void {

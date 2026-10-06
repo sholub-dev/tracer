@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { request } from "node:http";
 import { existsSync, readdirSync, statSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -74,6 +75,24 @@ Examples:
 `);
 }
 
+// node:http has no header or body timeout, unlike fetch (undici stops waiting after 300 s); an analysis can run longer.
+function postJson(url, payload) {
+  return new Promise((resolveResponse, reject) => {
+    const req = request(url, { method: "POST", headers: { "content-type": "application/json" } }, (res) => {
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("error", reject);
+      res.on("end", () => {
+        let data = {};
+        try { data = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch {}
+        resolveResponse({ ok: res.statusCode >= 200 && res.statusCode < 300, statusText: res.statusMessage, data });
+      });
+    });
+    req.on("error", reject);
+    req.end(JSON.stringify(payload));
+  });
+}
+
 async function runAnalyze(args) {
   let message;
   let sessionId;
@@ -100,17 +119,18 @@ async function runAnalyze(args) {
 
   let res;
   try {
-    res = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ message, sessionId, provider }),
-    });
-  } catch {
-    console.error(`Could not reach Tracer at ${url}. Is the server running? Start it with: tracer-sh`);
+    res = await postJson(url, { message, sessionId, provider });
+  } catch (err) {
+    const code = err?.code ?? err?.cause?.code;
+    if (code === "ECONNREFUSED") {
+      console.error(`Could not reach Tracer at ${url}. Is the server running? Start it with: tracer-sh`);
+    } else {
+      console.error(`Request to ${url} failed: ${err?.cause?.message ?? err?.message ?? err}`);
+    }
     process.exit(1);
   }
 
-  const data = await res.json().catch(() => ({}));
+  const data = res.data;
 
   if (!res.ok || data.status === "error") {
     console.error(`Error: ${data.error || res.statusText}`);
@@ -210,13 +230,19 @@ function newestMtime(paths) {
 }
 
 // Restart loop: if server exits with code 75, it means an update was applied
+let child = null;
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, () => child?.kill(signal));
+}
 while (true) {
-  const result = spawnSync(process.execPath, [serverPath], {
-    stdio: "inherit",
-    env: process.env,
+  child = spawn(process.execPath, [serverPath], { stdio: "inherit", env: process.env });
+  const [status, signal] = await new Promise((resolveExit) => {
+    child.once("error", () => resolveExit([1, null]));
+    child.once("exit", (code, sig) => resolveExit([code, sig]));
   });
-  if (result.status !== RESTART_EXIT_CODE) {
-    process.exit(result.status ?? 1);
+  child = null;
+  if (status !== RESTART_EXIT_CODE) {
+    process.exit(status ?? (signal ? 128 + (signal === "SIGINT" ? 2 : 15) : 1));
   }
   console.log("\nRestarting after update...\n");
 }

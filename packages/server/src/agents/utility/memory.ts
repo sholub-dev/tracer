@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { tool, generateText, isStepCount } from "ai";
 import type { Db } from "../../db/driver.js";
+import { CONFIG } from "../../config.js";
 import { resolveModel } from "../../llm/resolve.js";
 import { recordEachCall } from "../../llm/usage.js";
 import { makeMemoryExecute } from "../../tools/memory-executor.js";
@@ -158,6 +159,7 @@ ${tailInstruction}`;
       prompt,
       tools,
       stopWhen: isStepCount(10),
+      abortSignal: AbortSignal.timeout(CONFIG.utilityCallTimeoutMs),
       onLanguageModelCallEnd: sessionId ? recordEachCall(db, sessionId, "memory", resolved.modelId) : undefined,
     });
   } catch (err) {

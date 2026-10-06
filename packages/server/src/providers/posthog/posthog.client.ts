@@ -20,6 +20,9 @@ export class PosthogClient {
   }
 
   async query(hogql: string, options?: { retry?: boolean }): Promise<HogQLQueryResponse> {
+    // The key goes to this host and the project id lands in the URL path, so both need a strict shape.
+    if (!this.host.startsWith("https://") || !URL.canParse(this.host)) throw new Error("PostHog host must be an https URL");
+    if (!/^\d+$/.test(this.projectId)) throw new Error("PostHog project ID must be a number");
     const response = await fetchWithRetry(`${this.host}/api/projects/${this.projectId}/query/`, {
       method: "POST",
       headers: {

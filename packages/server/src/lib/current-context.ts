@@ -2,10 +2,22 @@ import { DEFAULTS, ENV, SETTINGS_KEYS } from "../config.js";
 import { readAppSetting } from "../db/config-reader.js";
 import type { Db } from "../db/driver.js";
 
+export function isValidTimezone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A stored or env value that Intl rejects would break every chat, so it falls back to the next source. */
 export async function getTimezone(db?: Db): Promise<string> {
-  return (db ? await readAppSetting<string>(db, SETTINGS_KEYS.timezone) : null)
-    ?? ENV.TRACER_TIMEZONE
-    ?? DEFAULTS.timezone;
+  const stored = db ? await readAppSetting<string>(db, SETTINGS_KEYS.timezone) : null;
+  for (const candidate of [stored, ENV.TRACER_TIMEZONE]) {
+    if (candidate && isValidTimezone(candidate)) return candidate;
+  }
+  return DEFAULTS.timezone;
 }
 
 function formatNow(timezone: string, withTime: boolean): string {

@@ -110,9 +110,9 @@ export async function runMemoryOptimizer(
 ${domainSection}## Current Memories
 ${memoriesList}
 
-Step 1: Call review_memory for EVERY memory with your verdict and reasoning.
-Step 2: For memories marked "update" — call update_memory with improved text.
-Step 3: For memories marked "delete" — call delete_memory (only clear duplicates or verbatim domain knowledge restating).
+Step 1: Call review_memory for EVERY memory with your verdict and reasoning. You may batch these calls in one step.
+Step 2: For memories marked "update" — call update_memory with improved text. Do this in a later step than all review_memory calls.
+Step 3: For memories marked "delete" — call delete_memory (only clear duplicates or verbatim domain knowledge restating). Do this in a later step than all review_memory calls.
 
 Be conservative. When unsure, keep the memory.`;
 

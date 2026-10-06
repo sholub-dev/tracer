@@ -1,5 +1,5 @@
 import { readFileSync, existsSync, statSync } from "node:fs";
-import { resolve, dirname, extname } from "node:path";
+import { resolve, dirname, extname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Hono } from "hono";
 
@@ -40,7 +40,7 @@ export function mountStaticFiles(app: Hono): void {
     let file = fileCache.get(reqPath);
     if (!file) {
       const filePath = resolve(webRoot, reqPath);
-      if (!filePath.startsWith(webRoot) || !existsSync(filePath) || statSync(filePath).isDirectory()) {
+      if (!filePath.startsWith(webRoot + sep) || !existsSync(filePath) || statSync(filePath).isDirectory()) {
         await next();
         return;
       }

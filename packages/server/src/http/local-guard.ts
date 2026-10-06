@@ -21,6 +21,7 @@ function isLoopbackAddress(addr: string | undefined): boolean {
 export function guardLocalRequests(
   fetchImpl: (req: Request, env: Bindings) => Response | Promise<Response>,
   bindHost: string,
+  allowedOrigins: string[] = [],
 ) {
   const listensOnLoopback = bindHost === "localhost" || bindHost === "::1" || bindHost.startsWith("127.");
   return (req: Request, env: Bindings) => {
@@ -31,6 +32,17 @@ export function guardLocalRequests(
     try { path = decodeURIComponent(path); } catch { /* tRPC rejects a malformed path too */ }
     if (path.startsWith("/api/trpc/") && path.includes("transfer.") && !(localHost && isLoopbackAddress(env.incoming.socket.remoteAddress))) {
       return new Response("Forbidden", { status: 403 });
+    }
+    if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
+      // A cross-site form or no-cors fetch can send a text/plain body that the JSON routes still parse.
+      const origin = req.headers.get("origin");
+      const sameOrigin = !!origin && origin.replace(/^https?:\/\//, "") === req.headers.get("host");
+      if (origin && !sameOrigin && !allowedOrigins.includes(origin)) return new Response("Forbidden", { status: 403 });
+      if (req.headers.get("sec-fetch-site") === "cross-site") return new Response("Forbidden", { status: 403 });
+      if (path.startsWith("/api/") && !path.startsWith("/api/trpc/")) {
+        const type = (req.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+        if (type !== "application/json") return new Response("Unsupported Media Type", { status: 415 });
+      }
     }
     return fetchImpl(req, env);
   };

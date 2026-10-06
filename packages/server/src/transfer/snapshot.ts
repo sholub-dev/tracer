@@ -1,4 +1,4 @@
-import { gte, notInArray } from "drizzle-orm";
+import { and, gte, notInArray, type SQL } from "drizzle-orm";
 import type { SQLiteTable } from "drizzle-orm/sqlite-core";
 import { runInTransaction, type Db } from "../db/driver.js";
 import * as schema from "../db/schema.js";
@@ -36,9 +36,9 @@ export interface SyncRow {
 }
 
 /** Reads one table. Device-local settings are left out. */
-export function readTable(tx: Db, name: string, table: SQLiteTable): Promise<Record<string, unknown>[]> {
-  const query = tx.select().from(table);
-  return (name === "app_settings" ? query.where(notInArray(schema.appSettings.key, LOCAL_SETTING_KEYS)) : query).all() as Promise<Record<string, unknown>[]>;
+export function readTable(tx: Db, name: string, table: SQLiteTable, match?: SQL): Promise<Record<string, unknown>[]> {
+  const where = name === "app_settings" ? and(match, notInArray(schema.appSettings.key, LOCAL_SETTING_KEYS)) : match;
+  return tx.select().from(table).where(where).all() as Promise<Record<string, unknown>[]>;
 }
 
 /** With `since`, only the entries this device changed at or after that local time. */

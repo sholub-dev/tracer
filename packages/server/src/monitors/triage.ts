@@ -120,7 +120,7 @@ export function issuesPrompt(open: AiIssue[]): string[] {
     "",
     "New Relic issues of this firing that are still open:",
     ...issueList(open.map((i) => ({ issueId: i.issueId, conditionName: conditionOf(i), title: titleOf(i) }))),
-    `Before report_alert_summary, ${REPORT_INSTRUCTION} Base it on the data up to now.`,
+    `Before report_alert_summary, ${REPORT_INSTRUCTION} Base it on the data up to now. Call report_issue_status alone in its own step, then report_alert_summary alone in its own step, in that order.`,
     FOLLOW_UP_INSTRUCTION,
   ];
 }

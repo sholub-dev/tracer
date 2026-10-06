@@ -43,9 +43,8 @@ export const CONFIG = {
   mcpReconnectCooldownMs: 60_000,
   mcpPingTimeoutMs: 5_000,
 
-  // ── Agent result sizing ──
-
-  maxModelResultChars: 8_000,
+  /** Upper limit on one title or memory LLM call. */
+  utilityCallTimeoutMs: 5 * 60_000,
 
   /**
    * Code-level cap on the reasoning ("thinking") text a model may stream within a
@@ -85,6 +84,12 @@ export const CONFIG = {
   triageLoopWindowSeconds: 86_400,
   /** Closed, nr_closed and left_open issue rows are deleted after this long. */
   triageRetentionSeconds: 7 * 86_400,
+  /** Monitor firings with no session left and sync delete markers are deleted after this long. */
+  dataRetentionSeconds: 90 * 86_400,
+  /** Least time between two retention sweeps. */
+  retentionSweepIntervalMs: 60 * 60_000,
+  /** Most monitor checks that run at once. */
+  monitorMaxConcurrentChecks: 3,
 
   // ── Session follow-up timers ──
 

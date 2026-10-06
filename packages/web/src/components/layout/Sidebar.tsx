@@ -86,7 +86,7 @@ export function AppSidebar({
       <SidebarContent>
         <SidebarGroup className="px-3 py-1">
           <SidebarMenu>
-            {FEATURES.dashboards && (
+            {__DASHBOARDS__ && (
               <DashboardNav
                 active={currentPage === "dashboard"}
                 currentDashboardId={currentDashboardId}

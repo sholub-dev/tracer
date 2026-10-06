@@ -29,4 +29,29 @@ describe("guardLocalRequests", () => {
     assert.equal(call("0.0.0.0", "http://x/api/trpc/transfer.send", "evil.example", "127.0.0.1").status, 403);
     assert.equal(call("0.0.0.0", "http://x/api/trpc/transfer.send", "localhost:3579", "::ffff:127.0.0.1").status, 200);
   });
+
+  const send = (method: string, path: string, headers: Record<string, string>, body = "{}") =>
+    guardLocalRequests(ok, "127.0.0.1", ["http://localhost:5173"])(
+      new Request(`http://x${path}`, { method, headers: { host: "localhost:3579", ...headers }, body: method === "GET" ? undefined : body }),
+      env("127.0.0.1"),
+    ) as Response;
+
+  it("rejects a foreign Origin on a write but not on a read", () => {
+    assert.equal(send("POST", "/api/chat", { origin: "https://evil.example", "content-type": "application/json" }).status, 403);
+    assert.equal(send("POST", "/api/chat", { "sec-fetch-site": "cross-site", "content-type": "application/json" }).status, 403);
+    assert.equal(send("GET", "/api/v1/x", { origin: "https://evil.example" }).status, 200);
+  });
+
+  it("requires a JSON body on API routes outside tRPC", () => {
+    assert.equal(send("POST", "/api/v1/analyze", { "content-type": "text/plain" }).status, 415);
+    assert.equal(send("POST", "/api/v1/analyze", {}).status, 415);
+    assert.equal(send("POST", "/api/v1/analyze", { "content-type": "application/json; charset=utf-8" }).status, 200);
+  });
+
+  it("accepts a write with no Origin, the same Origin or an allowed Origin", () => {
+    const json = { "content-type": "application/json" };
+    assert.equal(send("POST", "/api/v1/analyze", json).status, 200);
+    assert.equal(send("POST", "/api/v1/analyze", { ...json, origin: "http://localhost:3579" }).status, 200);
+    assert.equal(send("POST", "/api/v1/analyze", { ...json, origin: "http://localhost:5173" }).status, 200);
+  });
 });

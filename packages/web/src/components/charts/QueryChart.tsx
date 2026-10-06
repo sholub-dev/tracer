@@ -30,7 +30,7 @@ export function QueryChart({ provider, query, height, className, refreshKey = 0,
     queryFn: () => utils.client.provider.executeQuery.mutate({ provider, query }),
     placeholderData: keepPreviousData,
     retry: false,
-    staleTime: 0,
+    staleTime: 60_000,
   });
   const { refetch } = result;
   const raw = result.data ?? null;

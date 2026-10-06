@@ -1,3 +1,4 @@
+import { fetchWithRetry } from "../../lib/fetch-retry.js";
 import type { HogQLQueryResponse } from "./types.js";
 
 const DEFAULT_HOST = "https://us.posthog.com";
@@ -18,8 +19,8 @@ export class PosthogClient {
     this.host = (host?.trim() || DEFAULT_HOST).replace(/\/+$/, "");
   }
 
-  async query(hogql: string): Promise<HogQLQueryResponse> {
-    const response = await fetch(`${this.host}/api/projects/${this.projectId}/query/`, {
+  async query(hogql: string, options?: { retry?: boolean }): Promise<HogQLQueryResponse> {
+    const response = await fetchWithRetry(`${this.host}/api/projects/${this.projectId}/query/`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -29,8 +30,7 @@ export class PosthogClient {
         query: { kind: "HogQLQuery", query: hogql },
         name: "tracer",
       }),
-      signal: AbortSignal.timeout(35_000),
-    });
+    }, { timeoutMs: 35_000, retry: options?.retry });
 
     if (!response.ok) {
       // PostHog returns a JSON error body; surface its `detail`/`error` so auth

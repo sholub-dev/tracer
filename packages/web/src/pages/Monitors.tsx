@@ -41,7 +41,8 @@ export function Monitors({ builderSessionId, onNavigate: navigate, onOpenBuilder
   const [storedSince, setSince] = usePersistedState<string>("tracer:monitorsSince", DEFAULT_RANGE);
   const since = RANGE_PRESETS.some((p) => p.since === storedSince) ? storedSince : DEFAULT_RANGE;
   const utils = trpc.useUtils();
-  const listQuery = trpc.monitors.list.useQuery();
+  // Each visit reloads: the cached list can be from before the app went to the background.
+  const listQuery = trpc.monitors.list.useQuery(undefined, { refetchOnMount: "always" });
   const monitors = listQuery.data ?? [];
 
   usePolling(() => utils.monitors.list.invalidate(), LIST_POLL_MS, true, false);

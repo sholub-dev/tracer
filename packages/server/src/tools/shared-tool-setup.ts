@@ -31,6 +31,7 @@ export async function collectBaseTools(
   let maxSteps: number | undefined;
   const afterCompleteCallbacks: Array<(params: AfterCompleteParams) => void> = [];
   await registry.whenLoaded();
+  await registry.reconnectDisconnected();
   let connectedProviders = registry.getAllProviders().filter((p) => p.connected);
 
   // Filter to active provider if specified (exclusive toggle)

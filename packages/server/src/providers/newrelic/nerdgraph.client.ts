@@ -1,3 +1,4 @@
+import { fetchWithRetry } from "../../lib/fetch-retry.js";
 import type { NerdGraphResponse } from "./types.js";
 
 export interface AiIssue {
@@ -25,8 +26,8 @@ export class NerdGraphClient {
     this.accountId = accountId;
   }
 
-  private async graphql<T>(query: string, variables: Record<string, unknown>, optIn?: string): Promise<T> {
-    const response = await fetch("https://api.newrelic.com/graphql", {
+  private async graphql<T>(query: string, variables: Record<string, unknown>, optIn?: string, retry?: boolean): Promise<T> {
+    const response = await fetchWithRetry("https://api.newrelic.com/graphql", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -34,8 +35,7 @@ export class NerdGraphClient {
         ...(optIn ? { "nerd-graph-unsafe-experimental-opt-in": optIn } : {}),
       },
       body: JSON.stringify({ query, variables: { accountId: parseInt(this.accountId, 10), ...variables } }),
-      signal: AbortSignal.timeout(35_000),
-    });
+    }, { timeoutMs: 35_000, retry });
 
     if (!response.ok) {
       throw new Error(`NerdGraph request failed: ${response.status} ${response.statusText}`);
@@ -50,7 +50,7 @@ export class NerdGraphClient {
     return result as T;
   }
 
-  async query(nrql: string): Promise<NerdGraphResponse> {
+  async query(nrql: string, options?: { retry?: boolean }): Promise<NerdGraphResponse> {
     return this.graphql<NerdGraphResponse>(`query($accountId: Int!, $nrql: Nrql!) {
       actor {
         account(id: $accountId) {
@@ -59,7 +59,7 @@ export class NerdGraphClient {
           }
         }
       }
-    }`, { nrql });
+    }`, { nrql }, undefined, options?.retry);
   }
 
   async aiIssues(filter: AiIssuesFilter, startMs: number, endMs: number): Promise<AiIssue[]> {

@@ -1,6 +1,6 @@
 import { streamText, convertToModelMessages, isStepCount, createUIMessageStream, toUIMessageStream, type UIMessage, type ToolSet } from "ai";
 import { eq, sql } from "drizzle-orm";
-import { DEFAULT_SESSION_TITLE, unixNow, splitAtAnalysis, type AfterCompleteParams } from "@tracer-sh/shared";
+import { DEFAULT_SESSION_TITLE, unixNow, splitAtAnalysis, mergeProgressPart, type AfterCompleteParams, type ProgressPart, type TokenUsage } from "@tracer-sh/shared";
 import { chatSessions } from "../db/schema.js";
 import { sessionChanged } from "../lib/session-events.js";
 import { decodeMessages, encodeMessages } from "../lib/messages-codec.js";
@@ -13,6 +13,7 @@ import { getCurrentDateBlock, getCurrentTimeText } from "../lib/current-context.
 import { stampSentTime, withPromptCaching, withSentTimes } from "../llm/prompt-cache.js";
 import { EVIDENCE_GROUNDING, PLAIN_LANGUAGE } from "../lib/shared-prompts.js";
 import { CONFIG } from "../config.js";
+import { isTransientError } from "../lib/transient.js";
 
 /** Appended to the system prompt only when an attachment is present. */
 const IMAGE_ANALYSIS_GUIDANCE = `## Working with attached images and files
@@ -109,6 +110,15 @@ async function finalizeSession(sessionId: string, context: Context, broadcaster:
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
+const MAX_ERROR_NOTE_CHARS = 300;
+
+/** Short user-facing note stored on the reply of a run that failed for good. */
+function failureNote(err: unknown): string {
+  if (isTransientError(err)) return "The model connection failed. Retry to run it again.";
+  const text = errorText(err).trim();
+  return text.length > MAX_ERROR_NOTE_CHARS ? `${text.slice(0, MAX_ERROR_NOTE_CHARS)}...` : text || "The run failed.";
+}
+
 /** Resolves after `ms`, or at once when `signal` aborts. */
 function delay(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
@@ -126,6 +136,7 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
 /**
  * Background LLM processing — runs completely independent of the HTTP response.
  * Emits stream parts to the broadcaster; saves messages to DB on completion; returns the error of a failed attempt.
+ * A failed last attempt and a stopped run still save the reply they produced.
  */
 async function processLLMStream(
   sessionId: string,
@@ -141,10 +152,16 @@ async function processLLMStream(
   providerOptions: ProviderOptions,
   compaction: { summary?: string | null; summaryUpTo?: number | null },
   final: boolean,
-): Promise<{ error?: string }> {
+): Promise<{ error?: string; transient?: boolean }> {
+  // Sub-agent progress per tool call, so a stopped run keeps what its tools streamed.
+  const progress = new Map<string, ProgressPart[]>();
   const writer: StreamWriter = {
     write: (part) => {
       const p = part as Record<string, unknown>;
+      if (p.type === "data-provider-part") {
+        const data = p.data as { toolCallId: string; part: { type: string } };
+        progress.set(data.toolCallId, mergeProgressPart(progress.get(data.toolCallId) ?? [], data.part));
+      }
       const emitted = p.type === "data-provider-part"
         ? { ...p, transient: true }
         : p;
@@ -238,8 +255,9 @@ When the user's question spans multiple providers, query each relevant provider 
   // Gates the fallback cleanup so processLLMStream doesn't return prematurely.
   let resolveFinish!: () => void;
   const finishPromise = new Promise<void>((r) => { resolveFinish = r; });
-  let failure: string | undefined;
-  let streamError: string | undefined;
+  let failure: unknown;
+  let streamError: unknown;
+  let errorSent = false;
 
   const uiStream = toUIMessageStream({
     stream: result.stream,
@@ -247,28 +265,57 @@ When the user's question spans multiple providers, query each relevant provider 
     sendStart: false,
     originalMessages: messages,
     onError: (err) => {
-      streamError ??= errorText(err);
+      streamError ??= err;
       return "An error occurred.";
     },
     onEnd: ({ messages: updatedMessages, outcome, finishReason }) => {
-      // A failed attempt is not saved, so a re-run starts from the same history.
       // A mid-stream model error still ends with "finish", so only its finish reason shows the failure.
-      if (outcome.status === "failed" || finishReason === "error") {
-        failure = outcome.status === "failed" ? errorText(outcome.error) : streamError ?? "The model stream failed";
-        resolveFinish();
-        return;
+      const failed = outcome.status === "failed" || finishReason === "error";
+      if (failed) {
+        failure = (outcome.status === "failed" ? outcome.error : undefined) ?? streamError ?? new Error("The model stream failed");
+        // A re-run starts from the same history, so an attempt that will be re-run is not saved.
+        if (!final && isTransientError(failure)) {
+          resolveFinish();
+          return;
+        }
       }
       // onEnd is synchronous but usage requires an await, so full
       // persistence runs in a detached IIFE to avoid blocking the stream close.
       (async () => {
         try {
-          const rawUsage = await result.usage;
-          const chatUsage = extractUsage(rawUsage, modelId);
+          // Usage rejects when the run was stopped or failed; the reply is still worth saving.
+          let chatUsage: TokenUsage | undefined;
+          try {
+            chatUsage = extractUsage(await result.usage, modelId);
+          } catch { /* no usage to record */ }
 
-          const enrichedMessages = updatedMessages.map((msg, i) => {
+          let toSave = updatedMessages;
+          if (failed) {
+            const reply = updatedMessages.length > messages.length ? updatedMessages.at(-1)! : undefined;
+            if (!reply || reply.parts.length === 0) {
+              toSave = messages;
+            } else {
+              const metadata = { ...(reply.metadata as object | undefined), error: failureNote(failure) };
+              toSave = [...updatedMessages.slice(0, -1), { ...reply, metadata }];
+            }
+          }
+          if (toSave === messages) return;
+
+          // A stopped or failed reply can end inside a tool call; saved, it would show as still running.
+          const withProgress = toSave.map((msg) => msg.role !== "assistant" ? msg : {
+            ...msg,
+            parts: msg.parts.map((part) => {
+              const p = part as Record<string, unknown>;
+              const streamed = typeof p.toolCallId === "string" ? progress.get(p.toolCallId) : undefined;
+              return streamed?.length && p.state !== "output-available" && p.state !== "output-error"
+                ? { ...p, output: { parts: streamed } } as typeof part
+                : part;
+            }),
+          });
+          const enrichedMessages = sanitizeMessages(withProgress).map((msg, i) => {
             if (msg.role !== "assistant") return msg;
             const parts = msg.parts;
-            if (i === updatedMessages.length - 1) {
+            if (i === toSave.length - 1) {
               return { ...msg, parts, usage: chatUsage };
             }
             return { ...msg, parts };
@@ -278,12 +325,14 @@ When the user's question spans multiple providers, query each relevant provider 
           const now = unixNow();
           const packed = encodeMessages(enrichedMessages);
 
-          await recordAgentRun(context.db, {
-            sessionId,
-            agentType: "chat",
-            model: modelId,
-            usage: chatUsage,
-          });
+          if (chatUsage) {
+            await recordAgentRun(context.db, {
+              sessionId,
+              agentType: "chat",
+              model: modelId,
+              usage: chatUsage,
+            });
+          }
 
           await context.db
             .insert(chatSessions)
@@ -307,7 +356,8 @@ When the user's question spans multiple providers, query each relevant provider 
             .run();
           sessionChanged(sessionId);
 
-          if (collected.afterComplete) {
+          // A stopped reply is partial; follow-up work (e.g. a monitor's report) waits for a full run.
+          if (!failed && !serverAbort.signal.aborted && collected.afterComplete) {
             let lastUserText = "";
             let lastAssistantText = "";
             for (let i = enrichedMessages.length - 1; i >= 0; i--) {
@@ -350,8 +400,11 @@ When the user's question spans multiple providers, query each relevant provider 
           break;
         }
       }
-      // A re-run follows, so the client should not show this attempt's error.
-      if (v.type === "error" && !final) continue;
+      // A re-run follows a transient failure, so the client should not show this attempt's error.
+      if (v.type === "error") {
+        if (!final && (streamError === undefined || isTransientError(streamError))) continue;
+        errorSent = true;
+      }
       // Clients see a retryable attempt as one step, so one reset-step drops all of it.
       if (v.type === "start-step" && !final) {
         if (stepSent) continue;
@@ -364,9 +417,7 @@ When the user's question spans multiple providers, query each relevant provider 
     }
   } catch (err) {
     console.warn(`[chat] Stream error for ${sessionId}:`, err);
-    failure ??= errorText(err);
-    // A dropped connection throws here instead of sending an error part; clients need one to show Retry.
-    if (final && !serverAbort.signal.aborted) broadcaster.emit({ type: "error", errorText: "An error occurred." });
+    failure ??= err;
   } finally {
     reader.releaseLock();
   }
@@ -377,7 +428,11 @@ When the user's question spans multiple providers, query each relevant provider 
   const timeout = new Promise<void>((r) => { timeoutId = setTimeout(r, 5000); });
   await Promise.race([finishPromise, timeout]);
   clearTimeout(timeoutId!);
-  return serverAbort.signal.aborted ? {} : { error: failure };
+  if (serverAbort.signal.aborted || failure === undefined) return {};
+  const transient = isTransientError(failure);
+  // A dropped connection throws instead of sending an error part; clients need one to show Retry.
+  if ((final || !transient) && !errorSent) broadcaster.emit({ type: "error", errorText: "An error occurred." });
+  return { error: errorText(failure), transient };
 }
 
 export async function runChatAgent({
@@ -423,20 +478,20 @@ export async function runChatAgent({
   (async () => {
     for (let attempt = 0; ; attempt++) {
       const final = attempt >= retryDelaysMs.length;
-      const { error } = await processLLMStream(
+      const { error, transient } = await processLLMStream(
         sessionId, messages, context, broadcaster, serverAbort,
         collectTools, sessionTitle, model, provider, modelId, providerOptions,
         { summary, summaryUpTo }, final,
       );
       if (error === undefined) break;
-      if (!final) {
+      if (!final && transient) {
         broadcaster.discard({ type: "reset-step" });
         console.warn(`[chat] Attempt ${attempt + 1} for ${sessionId} failed, retrying in ${retryDelaysMs[attempt] / 1000}s:`, error);
         await delay(retryDelaysMs[attempt], serverAbort.signal);
         // A user stop during the wait is not a failure.
         if (serverAbort.signal.aborted) break;
       }
-      if (final) {
+      if (final || !transient) {
         console.warn(`[chat] Run for ${sessionId} failed:`, error);
         onFailed?.(error);
         break;

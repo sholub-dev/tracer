@@ -147,21 +147,6 @@ export const sessionsRouter = router({
       return { success: true };
     }),
 
-  saveMessages: publicProcedure
-    .input(z.object({ id: z.string(), messages: z.array(z.any()) }))
-    .mutation(async ({ ctx, input }) => {
-      await ctx.db
-        .update(chatSessions)
-        .set({
-          messages: encodeMessages(input.messages),
-          updatedAt: unixNow(),
-        })
-        .where(eq(chatSessions.id, input.id))
-        .run();
-      sessionChanged(input.id);
-      return { success: true };
-    }),
-
   importAnalysis: publicProcedure
     .input(ImportedAnalysisSchema)
     .mutation(async ({ ctx, input }) => {

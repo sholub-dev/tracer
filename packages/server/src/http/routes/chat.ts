@@ -11,6 +11,7 @@ import { generateSessionTitle } from "../../agents/utility/title.js";
 import { pastSessionToolFor } from "../../monitors/repeats.js";
 import { setTimerTool } from "../../tools/timer-tool.js";
 import { firingRerun } from "../../monitors/scheduler.js";
+import { CONFIG } from "../../config.js";
 
 export function registerChatRoutes(app: Hono, context: Context): void {
   app.post("/api/chat", async (c) => {
@@ -40,6 +41,7 @@ export function registerChatRoutes(app: Hono, context: Context): void {
       summary,
       summaryUpTo,
       context,
+      retryDelaysMs: CONFIG.chatRetryDelaysMs,
       collectTools: async (writer) => {
         const collected = await collectChatTools(context.providers, context.db, writer, scopedProvider, mode);
         const afterComplete: typeof collected.afterComplete = rerun
@@ -72,6 +74,7 @@ export function registerChatRoutes(app: Hono, context: Context): void {
       summary,
       summaryUpTo,
       context,
+      retryDelaysMs: CONFIG.chatRetryDelaysMs,
       collectTools: (writer) => collectDashboardTools(context.providers, context.db, writer, dashboardId),
       sessionTitle: () => "Dashboard Builder",
     });
@@ -93,6 +96,7 @@ export function registerChatRoutes(app: Hono, context: Context): void {
       summary,
       summaryUpTo,
       context,
+      retryDelaysMs: CONFIG.chatRetryDelaysMs,
       collectTools: (writer) => collectMonitorTools(context.providers, context.db, context.activeStreams, writer),
       sessionTitle: firstUserMessageTitle,
     });

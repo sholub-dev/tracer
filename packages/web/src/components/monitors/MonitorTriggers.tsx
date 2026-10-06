@@ -97,7 +97,7 @@ interface MonitorTriggersProps {
 
 export const MonitorTriggers = memo(function MonitorTriggers({ monitorId, lastRunAt, since, rangeLabel, onNavigate }: MonitorTriggersProps) {
   const utils = trpc.useUtils();
-  const query = trpc.monitors.triggers.useQuery({ monitorId, sinceSeconds: sinceToSeconds(since) }, { placeholderData: (prev) => prev });
+  const query = trpc.monitors.triggers.useQuery({ monitorId, sinceSeconds: sinceToSeconds(since) }, { placeholderData: (prev) => prev, refetchOnMount: "always" });
   const triggers = query.data ?? [];
 
   const seenRunAt = useRef(lastRunAt);

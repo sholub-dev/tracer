@@ -73,6 +73,22 @@ export class ProviderRegistry {
     }));
   }
 
+  private lastReconnectAt = new Map<string, number>();
+
+  /** Pings each provider that is not connected, at most once per cooldown. A failed ping does not throw. */
+  async reconnectDisconnected(): Promise<void> {
+    const now = Date.now();
+    const due = this.getAllProviders().filter((p) => {
+      if (p.connected || now - (this.lastReconnectAt.get(p.name) ?? -Infinity) < CONFIG.providerReconnectCooldownMs) return false;
+      this.lastReconnectAt.set(p.name, now);
+      return true;
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const limit = new Promise<void>((resolve) => { timer = setTimeout(resolve, CONFIG.providerReconnectWaitMs); });
+    const pings = Promise.all(due.map((p) => p.ping().catch(() => {})));
+    await Promise.race([pings, limit]).finally(() => clearTimeout(timer));
+  }
+
   /** Replaces every configured provider with a fresh one from the stored settings, e.g. after a sync changed them. */
   reloadFromDb(db: Db): Promise<void> {
     return this.load(db, true);

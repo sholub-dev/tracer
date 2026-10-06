@@ -28,7 +28,8 @@ export const WEB_CONFIG = {
 
   /** Streaming re-render cadence; 100ms reads as live while halving render work vs 50ms. */
   chatThrottleMs: 100,
-  maxSseErrors: 3,
+  /** Wait before a live stream subscribes again after its connection ends. */
+  sseReconnectMs: 3000,
   /** Upper bound on monitor chart buckets. */
   maxBuckets: 366,
 } as const;

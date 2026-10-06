@@ -7,6 +7,7 @@ import superjson from "superjson";
 import { sessionChanges, startMobileServer } from "@tracer-sh/server/mobile";
 import type { AppRouter } from "@tracer-sh/server/router";
 import { setCopyLink } from "./copy-link";
+import { RESUME_EVENT } from "./resume";
 import { setServerFetch } from "./server-fetch";
 
 const DB_NAME = "tracer";
@@ -90,11 +91,13 @@ function failWhenIdle(fetchImpl: typeof fetch): typeof fetch {
   };
 }
 
-/** iOS suspends the WebView soon after the app leaves the foreground; monitors run only while it is in front. */
+/** iOS suspends the WebView soon after the app leaves the foreground; monitors run only while it is in front. On return, open views re-check their session. */
 function runSchedulerInForeground(scheduler: { start(): void; stop(): Promise<void> }) {
   void App.addListener("appStateChange", ({ isActive }) => {
-    if (isActive) scheduler.start();
-    else void scheduler.stop();
+    if (isActive) {
+      scheduler.start();
+      window.dispatchEvent(new Event(RESUME_EVENT));
+    } else void scheduler.stop();
   });
 }
 

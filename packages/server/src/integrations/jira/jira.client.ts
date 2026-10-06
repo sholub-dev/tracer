@@ -1,3 +1,5 @@
+import { fetchWithRetry } from "../../lib/fetch-retry.js";
+
 /**
  * Jira Cloud REST API v2 client using a classic Atlassian API token over HTTP
  * Basic auth against the site host. v2 (not v3) keeps issue descriptions and
@@ -98,7 +100,7 @@ export class JiraClient {
   }
 
   private async request(path: string, init?: RequestInit): Promise<Response> {
-    const res = await fetch(`${this.baseUrl}${path}`, {
+    const res = await fetchWithRetry(`${this.baseUrl}${path}`, {
       ...init,
       headers: {
         Authorization: this.authHeader,
@@ -106,8 +108,7 @@ export class JiraClient {
         ...(init?.body ? { "Content-Type": "application/json" } : {}),
         ...init?.headers,
       },
-      signal: AbortSignal.timeout(15_000),
-    });
+    }, { timeoutMs: 15_000, retry: !init?.method || init.method === "GET" });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       throw new Error(`Jira ${res.status}: ${text.slice(0, 300) || res.statusText}`);

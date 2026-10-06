@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { IProvider } from "@tracer-sh/shared";
 import type { Db } from "../db/driver.js";
+import { CONFIG } from "../config.js";
 import { ProviderRegistry } from "./registry.js";
 
 function fakeDb(types: string[]): Db {
@@ -65,4 +66,45 @@ test("a status read during a reload waits for the new providers", async () => {
   current.connect();
   await read;
   assert.deepEqual(registry.getStatus().map((s) => [s.type, s.connected]), [["posthog", true]]);
+});
+
+test("reconnectDisconnected pings a disconnected provider once per cooldown and survives a failed ping", async () => {
+  const registry = new ProviderRegistry();
+  let pings = 0;
+  const down = { name: "down", type: "down", connected: false, ping: async () => { pings++; throw new Error("boom"); } };
+  const up = { name: "up", type: "up", connected: true, ping: async () => { pings += 100; return { ok: true }; } };
+  registry.register(down as unknown as IProvider);
+  registry.register(up as unknown as IProvider);
+  await registry.reconnectDisconnected();
+  await registry.reconnectDisconnected();
+  assert.equal(pings, 1);
+});
+
+test("reconnectDisconnected stops waiting after the limit and the ping still updates the status", async () => {
+  const realWait = CONFIG.providerReconnectWaitMs;
+  (CONFIG as unknown as { providerReconnectWaitMs: number }).providerReconnectWaitMs = 20;
+  try {
+    const registry = new ProviderRegistry();
+    let finish = () => {};
+    const provider = {
+      name: "newrelic",
+      type: "newrelic",
+      connected: false,
+      lastChecked: null,
+      ping: () => new Promise((resolve) => { finish = () => { provider.connected = true; resolve({ ok: true }); }; }),
+      dispose: async () => {},
+    };
+    registry.register(provider as unknown as IProvider);
+
+    const started = Date.now();
+    await registry.reconnectDisconnected();
+    assert.ok(Date.now() - started < 1000);
+    assert.equal(provider.connected, false);
+
+    finish();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(provider.connected, true);
+  } finally {
+    (CONFIG as unknown as { providerReconnectWaitMs: number }).providerReconnectWaitMs = realWait;
+  }
 });

@@ -57,8 +57,16 @@ export const CONFIG = {
 
   /** Waits before re-running a background agent run (monitor, timer, API) that failed with an LLM/API error. */
   agentRetryDelaysMs: [5_000, 15_000, 45_000],
+  /** Shorter waits for a chat the user watches. */
+  chatRetryDelaysMs: [2_000, 8_000],
+  /** Waits before repeating a data source or integration request that failed with a network error, 429 or 5xx. */
+  fetchRetryDelaysMs: [1_000, 3_000],
+  /** Least time between reconnect attempts for a data source that is not connected. */
+  providerReconnectCooldownMs: 30_000,
+  /** Upper limit on how long a chat start or a monitor check waits for reconnect pings. A slower ping goes on in the background. */
+  providerReconnectWaitMs: 5_000,
 
-  /** Upper limit on how long a status read waits for the startup connection checks (the API clients time out at 35 s). */
+  /** Upper limit on how long a status read waits for the startup connection checks (a status check makes one request of at most 35 s). */
   providerLoadWaitMs: 40_000,
 
   // ── Monitor scheduler ──

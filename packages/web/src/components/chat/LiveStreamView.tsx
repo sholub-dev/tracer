@@ -60,7 +60,11 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
         flushTimer = null;
         const msg = latest;
         latest = null;
-        if (!cancelled && isCurrent() && msg) setMessages([...initialMessagesRef.current, msg]);
+        if (!cancelled && isCurrent() && msg) {
+          // The server saves each tool step, so the loaded messages can end with the reply this stream rebuilds.
+          const loaded = initialMessagesRef.current;
+          setMessages([...(loaded.at(-1)?.role === "assistant" ? loaded.slice(0, -1) : loaded), msg]);
+        }
       };
       try {
         for await (const msg of readUIMessageStream({ stream })) {

@@ -5,7 +5,7 @@ import { chatSessions } from "../db/schema.js";
 import { sessionChanged } from "../lib/session-events.js";
 import { decodeMessages, encodeMessages } from "../lib/messages-codec.js";
 import { resolveModel, type ProviderOptions } from "../llm/resolve.js";
-import { extractUsage, recordAgentRun } from "../llm/usage.js";
+import { extractUsage, recordEachCall } from "../llm/usage.js";
 import { StreamBroadcaster } from "../lib/stream-broadcaster.js";
 import type { Context } from "../trpc/context.js";
 import type { ChatToolWriter as StreamWriter } from "@tracer-sh/shared";
@@ -114,9 +114,20 @@ const MAX_ERROR_NOTE_CHARS = 300;
 
 /** Short user-facing note stored on the reply of a run that failed for good. */
 function failureNote(err: unknown): string {
-  if (isTransientError(err)) return "The model connection failed. Retry to run it again.";
   const text = errorText(err).trim();
-  return text.length > MAX_ERROR_NOTE_CHARS ? `${text.slice(0, MAX_ERROR_NOTE_CHARS)}...` : text || "The run failed.";
+  const detail = text.length > MAX_ERROR_NOTE_CHARS ? `${text.slice(0, MAX_ERROR_NOTE_CHARS)}...` : text;
+  if (!isTransientError(err)) return detail || "The run failed.";
+  return detail ? `The run failed after retries: ${detail}` : "The run failed after retries.";
+}
+
+/** True when the last step of `msg` ran tools: its results are complete, so a re-run can continue after it. */
+function endsWithToolStep(msg: UIMessage | undefined): boolean {
+  if (msg?.role !== "assistant") return false;
+  const stepStart = msg.parts.map((p) => p.type).lastIndexOf("step-start");
+  return msg.parts.slice(stepStart + 1).some((part) => {
+    const p = part as { toolCallId?: unknown; state?: unknown };
+    return typeof p.toolCallId === "string" && (p.state === "output-available" || p.state === "output-error");
+  });
 }
 
 /** Resolves after `ms`, or at once when `signal` aborts. */
@@ -135,7 +146,8 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
 
 /**
  * Background LLM processing — runs completely independent of the HTTP response.
- * Emits stream parts to the broadcaster; saves messages to DB on completion; returns the error of a failed attempt.
+ * Emits stream parts to the broadcaster; saves messages to DB after each tool step and on completion.
+ * Returns the error of a failed attempt and the messages of its last saved step, which a re-run continues from.
  * A failed last attempt and a stopped run still save the reply they produced.
  */
 async function processLLMStream(
@@ -152,7 +164,7 @@ async function processLLMStream(
   providerOptions: ProviderOptions,
   compaction: { summary?: string | null; summaryUpTo?: number | null },
   final: boolean,
-): Promise<{ error?: string; transient?: boolean }> {
+): Promise<{ error?: string; transient?: boolean; checkpoint?: UIMessage[] }> {
   // Sub-agent progress per tool call, so a stopped run keeps what its tools streamed.
   const progress = new Map<string, ProgressPart[]>();
   const writer: StreamWriter = {
@@ -249,6 +261,7 @@ When the user's question spans multiple providers, query each relevant provider 
     stopWhen: tools ? isStepCount(collected.maxSteps ?? 15) : undefined,
     providerOptions: cached.providerOptions,
     abortSignal: serverAbort.signal,
+    onLanguageModelCallEnd: recordEachCall(context.db, sessionId, "chat", modelId),
   });
 
   // Promise that resolves when the detached persistence IIFE in onEnd completes.
@@ -258,8 +271,14 @@ When the user's question spans multiple providers, query each relevant provider 
   let failure: unknown;
   let streamError: unknown;
   let errorSent = false;
+  let checkpoint: UIMessage[] | undefined;
+  let stepSaved = false;
+  let stepSave: Promise<void> = Promise.resolve();
+  // The model stream can end before the wrapper runs its last step save, so the final save waits for the read loop too.
+  let readDone!: () => void;
+  const readEnd = new Promise<void>((r) => { readDone = r; });
 
-  const uiStream = toUIMessageStream({
+  const modelStream = toUIMessageStream({
     stream: result.stream,
     tools: tools as ToolSet | undefined,
     sendStart: false,
@@ -273,7 +292,7 @@ When the user's question spans multiple providers, query each relevant provider 
       const failed = outcome.status === "failed" || finishReason === "error";
       if (failed) {
         failure = (outcome.status === "failed" ? outcome.error : undefined) ?? streamError ?? new Error("The model stream failed");
-        // A re-run starts from the same history, so an attempt that will be re-run is not saved.
+        // A re-run continues from the last saved step, so an attempt that will be re-run saves no more.
         if (!final && isTransientError(failure)) {
           resolveFinish();
           return;
@@ -283,6 +302,8 @@ When the user's question spans multiple providers, query each relevant provider 
       // persistence runs in a detached IIFE to avoid blocking the stream close.
       (async () => {
         try {
+          await readEnd;
+          await stepSave;
           // Usage rejects when the run was stopped or failed; the reply is still worth saving.
           let chatUsage: TokenUsage | undefined;
           try {
@@ -291,7 +312,9 @@ When the user's question spans multiple providers, query each relevant provider 
 
           let toSave = updatedMessages;
           if (failed) {
-            const reply = updatedMessages.length > messages.length ? updatedMessages.at(-1)! : undefined;
+            // A re-run continues the saved reply, so the last message can be that reply with no new parts.
+            const last = updatedMessages.at(-1);
+            const reply = last?.role === "assistant" ? last : undefined;
             if (!reply || reply.parts.length === 0) {
               toSave = messages;
             } else {
@@ -324,15 +347,6 @@ When the user's question spans multiple providers, query each relevant provider 
           const title = sessionTitle(enrichedMessages);
           const now = unixNow();
           const packed = encodeMessages(enrichedMessages);
-
-          if (chatUsage) {
-            await recordAgentRun(context.db, {
-              sessionId,
-              agentType: "chat",
-              model: modelId,
-              usage: chatUsage,
-            });
-          }
 
           await context.db
             .insert(chatSessions)
@@ -381,10 +395,42 @@ When the user's question spans multiple providers, query each relevant provider 
     },
   });
 
+  // The wrapper waits for each step save before it passes the step end on.
+  const uiStream = createUIMessageStream({
+    originalMessages: messages,
+    // Saved replies have an empty id, as the final save writes them; a step save must match.
+    generateId: () => "",
+    execute: ({ writer }) => writer.merge(modelStream),
+    // A throw from the model stream ends here instead of in the read loop below.
+    onError: (err) => {
+      failure ??= err;
+      streamError ??= err;
+      return "An error occurred.";
+    },
+    // Each finished tool step is saved, so a failure later in the run keeps the tool work.
+    onStepEnd: async ({ messages: stepMessages }) => {
+      if (!endsWithToolStep(stepMessages.at(-1))) return;
+      // A re-run continues from this step even when the write fails, so viewers keep it too.
+      checkpoint = stepMessages;
+      stepSaved = true;
+      stepSave = (async () => {
+        try {
+          await context.db
+            .update(chatSessions)
+            .set({ messages: encodeMessages(sanitizeMessages(stepMessages)), updatedAt: unixNow() })
+            .where(eq(chatSessions.id, sessionId))
+            .run();
+        } catch (err) {
+          console.warn(`[chat] Failed to save a step of ${sessionId}:`, err);
+        }
+      })();
+      await stepSave;
+    },
+  });
+
   // This loop runs independently of any HTTP connection.
   const reader = uiStream.getReader();
   let reasoningChars = 0; // per-step; code-level guard against runaway thinking loops
-  let stepSent = false;
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -405,21 +451,22 @@ When the user's question spans multiple providers, query each relevant provider 
         if (!final && (streamError === undefined || isTransientError(streamError))) continue;
         errorSent = true;
       }
-      // Clients see a retryable attempt as one step, so one reset-step drops all of it.
-      if (v.type === "start-step" && !final) {
-        if (stepSent) continue;
-        stepSent = true;
-      }
       // Strip providerMetadata — the AI SDK emits it on some event types
       // but its own strictObject schema rejects it on the client side.
       const { providerMetadata: _, ...clean } = v;
       broadcaster.emit(clean);
+      // A re-run drops only what came after the last saved step.
+      if (v.type === "finish-step" && stepSaved) {
+        broadcaster.mark();
+        stepSaved = false;
+      }
     }
   } catch (err) {
     console.warn(`[chat] Stream error for ${sessionId}:`, err);
     failure ??= err;
   } finally {
     reader.releaseLock();
+    readDone();
   }
 
   // Wait for onEnd persistence to complete.
@@ -432,7 +479,7 @@ When the user's question spans multiple providers, query each relevant provider 
   const transient = isTransientError(failure);
   // A dropped connection throws instead of sending an error part; clients need one to show Retry.
   if ((final || !transient) && !errorSent) broadcaster.emit({ type: "error", errorText: "An error occurred." });
-  return { error: errorText(failure), transient };
+  return { error: errorText(failure), transient, checkpoint };
 }
 
 export async function runChatAgent({
@@ -476,16 +523,26 @@ export async function runChatAgent({
   // If the HTTP response is cancelled (client navigates away), this continues running.
   // The session stays active between attempts, so nothing else starts a run on it.
   (async () => {
+    // Each re-run continues from the last saved step of the attempts before it.
+    let history = messages;
     for (let attempt = 0; ; attempt++) {
       const final = attempt >= retryDelaysMs.length;
-      const { error, transient } = await processLLMStream(
-        sessionId, messages, context, broadcaster, serverAbort,
+      // A throw before the model call (tool setup, history conversion) is a failed attempt too, so it is retried and reported.
+      const { error, transient, checkpoint } = await processLLMStream(
+        sessionId, history, context, broadcaster, serverAbort,
         collectTools, sessionTitle, model, provider, modelId, providerOptions,
         { summary, summaryUpTo }, final,
-      );
+      ).catch((err: unknown): { error?: string; transient?: boolean; checkpoint?: UIMessage[] } => {
+        if (serverAbort.signal.aborted) return {};
+        const transient = isTransientError(err);
+        // Clients need an error part to show Retry, as for a failure inside the stream.
+        if (final || !transient) broadcaster.emit({ type: "error", errorText: "An error occurred." });
+        return { error: errorText(err), transient };
+      });
       if (error === undefined) break;
+      if (checkpoint) history = checkpoint;
       if (!final && transient) {
-        broadcaster.discard({ type: "reset-step" });
+        broadcaster.rewind({ type: "reset-step" });
         console.warn(`[chat] Attempt ${attempt + 1} for ${sessionId} failed, retrying in ${retryDelaysMs[attempt] / 1000}s:`, error);
         await delay(retryDelaysMs[attempt], serverAbort.signal);
         // A user stop during the wait is not a failure.

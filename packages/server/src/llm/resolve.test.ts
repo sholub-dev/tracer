@@ -9,11 +9,11 @@ test("a bare WebKit network error becomes a TypeError 'fetch failed' with a caus
   await assert.rejects(failWith(original), (e: Error) => e instanceof TypeError && e.message === "fetch failed" && e.cause === original);
 });
 
-test("aborts and non-transient errors pass through unchanged", async () => {
+test("an abort passes through unchanged; any other rejection becomes retryable", async () => {
   const abort = new DOMException("aborted", "AbortError");
   await assert.rejects(failWith(abort), (e) => e === abort);
-  const other = new Error("bad request");
-  await assert.rejects(failWith(other), (e) => e === other);
+  const other = new Error("Software caused connection abort");
+  await assert.rejects(failWith(other), (e) => e instanceof TypeError && e.message === "fetch failed" && e.cause === other);
 });
 
 test("a successful response passes through", async () => {

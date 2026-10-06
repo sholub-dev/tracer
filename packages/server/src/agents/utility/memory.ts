@@ -2,7 +2,7 @@ import { z } from "zod";
 import { tool, generateText, isStepCount } from "ai";
 import type { Db } from "../../db/driver.js";
 import { resolveModel } from "../../llm/resolve.js";
-import { extractUsage, recordAgentRun } from "../../llm/usage.js";
+import { recordEachCall } from "../../llm/usage.js";
 import { makeMemoryExecute } from "../../tools/memory-executor.js";
 import { createUpdateMemoryTool, createDeleteMemoryTool } from "../../tools/memory-tools.js";
 import { memoryOperations } from "../../db/schema.js";
@@ -151,24 +151,15 @@ ${memoriesSection}
 ${tailInstruction}`;
 
   try {
-    const result = await generateText({
+    await generateText({
       model: resolved.model,
       temperature: 0,
       instructions: SYSTEM_PROMPT,
       prompt,
       tools,
       stopWhen: isStepCount(10),
+      onLanguageModelCallEnd: sessionId ? recordEachCall(db, sessionId, "memory", resolved.modelId) : undefined,
     });
-
-    if (sessionId && result.usage) {
-      const u = extractUsage(result.usage, resolved.modelId);
-      await recordAgentRun(db, {
-        sessionId,
-        agentType: "memory",
-        model: resolved.modelId,
-        usage: u,
-      });
-    }
   } catch (err) {
     console.warn(`[memory-agent] ${providerType} failed:`, err);
   } finally {

@@ -6,6 +6,7 @@ type Callback = (part: Record<string, unknown>) => void;
  */
 export class StreamBroadcaster {
   private buffer: Record<string, unknown>[] = [];
+  private marked = 0;
   private subscribers = new Set<Callback>();
   private doneCallbacks = new Set<() => void>();
   private _done = false;
@@ -20,10 +21,18 @@ export class StreamBroadcaster {
     this.send(part);
   }
 
-  /** Empties the replay buffer and sends `part` to live subscribers only, so late subscribers start clean. */
-  discard(part: Record<string, unknown>): void {
-    if (this._done) return;
-    this.buffer = [];
+  /** Marks the end of the buffer: a later rewind keeps everything up to here. */
+  mark(): void {
+    this.marked = this.buffer.length;
+  }
+
+  /**
+   * Drops the parts after the mark from the replay buffer and sends `part` to live subscribers only,
+   * so late subscribers do not see them. Nothing is sent when nothing came after the mark.
+   */
+  rewind(part: Record<string, unknown>): void {
+    if (this._done || this.buffer.length === this.marked) return;
+    this.buffer.length = this.marked;
     this.send(part);
   }
 

@@ -31,6 +31,8 @@ export const WEB_CONFIG = {
   chatThrottleMs: 100,
   /** Wait before a live stream subscribes again after its connection ends. */
   sseReconnectMs: 3000,
+  /** A live stream silent this long (3x the server heartbeat) counts as dead and reconnects. */
+  sseIdleTimeoutMs: 45_000,
   /** Upper bound on monitor chart buckets. */
   maxBuckets: 366,
 } as const;

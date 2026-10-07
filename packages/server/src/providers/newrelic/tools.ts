@@ -103,7 +103,7 @@ function buildListIssuesTool(provider: NewRelicProvider) {
   });
 }
 
-function buildIssueActionTool(description: string, run: (issueId: string) => Promise<{ ok: true } | { error: string }>) {
+export function buildIssueActionTool(description: string, run: (issueId: string) => Promise<{ ok: true } | { error: string }>): Tool {
   return tool({
     description,
     inputSchema: z.object({ issueId: z.string().describe("The New Relic issue id, from list_nr_issues") }),

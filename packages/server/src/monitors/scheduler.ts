@@ -14,8 +14,8 @@ import { monitorAlert, postSlack, readSlackConfig } from "../integrations/slack.
 import { dismissAlertTool, reportAlertSummaryTool } from "./alert-summary.js";
 import { fireDueTimers } from "./timers.js";
 import {
-  checkWatches, closedCheckPrompt, findIssues, forgetReports, incidentQuery, ingestLagSeconds, triageEnabled, issuesPrompt, pendingIssueIds, recordIssues,
-  reportIssueStatusTool, triageAfterRun, type FoundIssues, type Triage,
+  checkWatches, closeCounts, closedCheckPrompt, conditionOf, findIssues, forgetReports, incidentQuery, ingestLagSeconds, triageEnabled, issuesPrompt, pendingIssueIds, recordIssues,
+  monitorIssueTools, reportIssueStatusTool, triageAfterRun, type FoundIssues, type Triage,
 } from "./triage.js";
 
 type Monitor = typeof monitors.$inferSelect;
@@ -54,7 +54,7 @@ function sessionTitle(name: string, classified: TriggerGroup[]): string {
   return title.length > 80 ? `${title.slice(0, 77)}...` : title;
 }
 
-function buildMessage(
+export function buildMessage(
   monitor: Monitor,
   value: number,
   window: { start: number; end: number },
@@ -62,6 +62,7 @@ function buildMessage(
   past: PastSession[],
   triageLines: string[] = [],
   dismissible = false,
+  slack = false,
 ): string {
   const lines = [
     `Monitor "${monitor.name}" triggered.`,
@@ -86,7 +87,7 @@ function buildMessage(
   lines.push(
     "",
     "If this looks like a past issue, its past cause is only a hypothesis. Read the most relevant past session, then check in this window that the same cause appears, starts before this firing and explains its groups and size. If it does, say which session; if any part differs, investigate fully.",
-    `${dismissible ? "Unless you dismissed the alert, find" : "Find"} the root cause, or state where the data stops. Answer with report_finding as in any session. Right after it, before any visual, call report_alert_summary once with the alert details (after report_issue_status when that tool is listed). Slack posts the card and the details together. Do not repeat the card or the details as text.`,
+    `${dismissible ? "Unless you dismissed the alert, find" : "Find"} the root cause, or state where the data stops. Answer with report_finding as in any session.${slack ? " Right after it, before any visual, call report_alert_summary once with the alert details (after report_issue_status when that tool is listed). Slack posts the card and the details together. Do not repeat the card or the details as text." : ""}`,
   );
   return lines.join("\n");
 }
@@ -138,7 +139,7 @@ async function completeFiring(
       // The provider's error text stays in the local log; Slack gets a fixed line.
       console.warn(`[monitor] "${monitor.name}" investigation failed:`, error);
       await notifySlack(context, monitor, triggeredAt, sessionId, {
-        action: "Investigation failed (AI model error after retries). New Relic issues left open; Retry the session to triage them.",
+        action: "Investigation failed (AI model error after retries). Issues it did not close stay open; Retry the session to triage them.",
         ping: true,
       });
       return;
@@ -165,8 +166,8 @@ export async function firingRerun(context: Context, sessionId: string): Promise<
   const pending = await pendingIssueIds(db, sessionId);
   return {
     tools: {
-      report_alert_summary: reportAlertSummaryTool(),
-      ...(pending.length > 0 ? { report_issue_status: reportIssueStatusTool(db, pending) }
+      ...(await readSlackConfig(db) ? { report_alert_summary: reportAlertSummaryTool() } : {}),
+      ...(pending.length > 0 ? { report_issue_status: reportIssueStatusTool(db, pending), ...monitorIssueTools(context, pending) }
         : incidentQuery(monitor.query) ? { dismiss_alert: dismissAlertTool() } : {}),
     },
     onComplete: (outcome) => void completeFiring(context, monitor, trigger.triggeredAt, sessionId, undefined, outcome),
@@ -255,8 +256,9 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
   const found: FoundIssues | null = alerting && await triageEnabled(context.db) && onIncidents ? await findIssues(context, monitor, window) : null;
   const openIssues = found && !("error" in found) ? found.open : [];
   const checkClosed = alerting && onIncidents && openIssues.length === 0;
+  const slack = alerting && await readSlackConfig(context.db) !== null;
   const message = alerting
-    ? buildMessage(monitor, value, window, classified, past, checkClosed ? closedCheckPrompt(found) : issuesPrompt(openIssues), checkClosed)
+    ? buildMessage(monitor, value, window, classified, past, checkClosed ? closedCheckPrompt(found, slack) : issuesPrompt(openIssues, await closeCounts(context.db, monitor.id, sessionId!, openIssues.map((i) => ({ issueId: i.issueId, conditionName: conditionOf(i) }))), slack), checkClosed, slack)
     : "";
   try {
     // Insert first: the monitor_id FK fails if the monitor was deleted mid-check.
@@ -285,8 +287,8 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
       message,
       tools: {
         read_past_session: readPastSessionTool(() => past),
-        report_alert_summary: reportAlertSummaryTool(),
-        ...(openIssues.length > 0 ? { report_issue_status: reportIssueStatusTool(context.db, openIssues.map((i) => i.issueId)) } : {}),
+        ...(slack ? { report_alert_summary: reportAlertSummaryTool() } : {}),
+        ...(openIssues.length > 0 ? { report_issue_status: reportIssueStatusTool(context.db, openIssues.map((i) => i.issueId)), ...monitorIssueTools(context, openIssues.map((i) => i.issueId)) } : {}),
         ...(checkClosed ? { dismiss_alert: dismissAlertTool() } : {}),
       },
       onComplete: (outcome) => void completeFiring(context, monitor, now, sessionId, found, outcome),

@@ -9,6 +9,7 @@ import { CONFIG, SETTINGS_KEYS } from "../config.js";
 import { readAppSetting } from "../db/config-reader.js";
 import { NewRelicProvider } from "../providers/newrelic/newrelic.provider.js";
 import type { AiIssue } from "../providers/newrelic/nerdgraph.client.js";
+import { buildIssueActionTool } from "../providers/newrelic/tools.js";
 import { clip, postSlack, readSlackConfig, triageUpdate } from "../integrations/slack.js";
 import { hasPendingTimer } from "../tools/timer-tool.js";
 import { SEVERITIES } from "./alert-summary.js";
@@ -70,7 +71,7 @@ function newRelic(context: Context): NewRelicProvider | null {
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 const titleOf = (i: AiIssue) => i.title?.[0] ?? i.issueId;
-const conditionOf = (i: AiIssue) => i.conditionName?.[0] ?? "";
+export const conditionOf = (i: AiIssue) => i.conditionName?.[0] ?? "";
 
 /** The firing's NR issues not handled by an earlier firing, split into open and already closed. */
 export async function findIssues(context: Context, monitor: Monitor, window: { start: number; end: number }): Promise<FoundIssues> {
@@ -106,21 +107,27 @@ export async function recordIssues(db: Db, ids: { monitorId: string; triggerId: 
   if (rows.length > 0) await db.insert(alertIssues).values(rows).onConflictDoNothing().run();
 }
 
-const issueList = (issues: { issueId: string; conditionName: string; title: string }[]) =>
-  issues.map((i) => `- ${i.issueId}: ${i.conditionName || "unknown condition"} | ${i.title}`);
+type ListedIssue = { issueId: string; conditionName: string; title: string };
+
+const issueList = (issues: ListedIssue[], closes: Map<string, number> = new Map()) =>
+  issues.map((i) => {
+    const n = closes.get(i.issueId) ?? 0;
+    const note = n > 0 ? ` | Tracer closed this condition ${n} time${n === 1 ? "" : "s"} on earlier firings in the last ${Math.round(CONFIG.triageLoopWindowSeconds / 3600)}h` : "";
+    return `- ${i.issueId}: ${i.conditionName || "unknown condition"} | ${i.title}${note}`;
+  });
 
 // In the tool result too, so later chat turns can explain what the report did in New Relic.
-export const TRIAGE_EFFECT = "Alert triage is on: after this run Tracer acts on these issues from your report_issue_status. Stopped: Tracer acks and closes the issue in New Relic, which closes its JSM alert. Ongoing or recurring: left open and followed up if you set a timer. Unknown: left open and people are pinged.";
-const REPORT_INSTRUCTION = "call report_issue_status once with the severity and, for each issue id above, its status: stopped, ongoing, recurring or unknown. Use stopped only when a query result up to now shows no error since a time you name in reason; without that result, use unknown.";
+export const TRIAGE_EFFECT = "Alert triage is on: you act on these issues yourself. close_nr_issue acks and closes a stopped issue in New Relic, which closes its JSM alert. Tracer records what happened and reports it after the run. Ongoing or recurring: leave the issue open and follow up with a timer. Unknown: leave it open; people are pinged.";
+const REPORT_INSTRUCTION = "for each issue id above that a query result up to now shows stopped (no error since a time you name in reason), call close_nr_issue alone in its own step: it acks first, then closes. Then call report_issue_status once with the severity and, for each issue id above, its status: stopped, ongoing, recurring or unknown. Without that result, use unknown and close nothing. An issue that keeps coming back after closes is usually recurring: decide from the data whether closing it again helps, and say why in the reason.";
 const FOLLOW_UP_INSTRUCTION = `If any issue is ongoing or recurring, call set_timer with ${CONFIG.timerFollowUpMinutes} minutes: while an incident is live, checking too often is better than waiting too long. Without a timer it is left open.`;
 
-export function issuesPrompt(open: AiIssue[]): string[] {
+export function issuesPrompt(open: AiIssue[], closes: Map<string, number>, slack: boolean): string[] {
   if (open.length === 0) return [];
   return [
     "",
     "New Relic issues of this firing that are still open:",
-    ...issueList(open.map((i) => ({ issueId: i.issueId, conditionName: conditionOf(i), title: titleOf(i) }))),
-    `After report_finding, ${REPORT_INSTRUCTION} Base it on the data up to now. Make the calls in this order: report_finding, then report_issue_status alone in its own step, then report_alert_summary alone in its own step, all before any visual.`,
+    ...issueList(open.map((i) => ({ issueId: i.issueId, conditionName: conditionOf(i), title: titleOf(i) })), closes),
+    `After report_finding, ${REPORT_INSTRUCTION} Base it on the data up to now. Make the calls in this order: report_finding, then the close calls, then report_issue_status alone in its own step${slack ? ", then report_alert_summary alone in its own step" : ""}, all before any visual.`,
     FOLLOW_UP_INSTRUCTION,
   ];
 }
@@ -129,7 +136,7 @@ export function issuesPrompt(open: AiIssue[]): string[] {
  * For an NrAiIncident monitor with no issue known to be open: the agent first checks that the alert is still open.
  * Another device or a person can resolve it before this one checks the window.
  */
-export function closedCheckPrompt(found: FoundIssues | null): string[] {
+export function closedCheckPrompt(found: FoundIssues | null, slack: boolean): string[] {
   const known = found && !("error" in found) && found.closed.length + found.tracked > 0
     ? [`Tracer found no open New Relic issue for this firing: ${found.closed.length} already closed, ${found.tracked} handled by an earlier alert.`]
     : [];
@@ -137,7 +144,7 @@ export function closedCheckPrompt(found: FoundIssues | null): string[] {
     "",
     "First check that this alert is still open. Query NrAiIncident for this firing's incidents up to now, with latest(event) FACET incidentId and the monitor query's filters. An incident whose latest event is 'close' is closed: a person resolved it, or another Tracer device handled it.",
     ...known,
-    "If every incident of this firing is closed, call dismiss_alert alone with the result that shows it, then report_finding with that result, then stop: no investigation, no report_alert_summary, nothing goes to Slack. If any incident is still open, or the data does not show its state, investigate.",
+    `If every incident of this firing is closed, call dismiss_alert alone with the result that shows it, then report_finding with that result, then stop: no investigation${slack ? ", no report_alert_summary, nothing goes to Slack" : ""}. If any incident is still open, or the data does not show its state, investigate.`,
   ];
 }
 
@@ -145,7 +152,7 @@ type IssueReport = { severity: (typeof SEVERITIES)[number]; issues: { issueId: s
 
 export function reportIssueStatusTool(db: Db, allowedIds: string[]): Tool<IssueReport, { error: string } | { recorded: number; next: string }> {
   return tool({
-    description: `Report the severity and the status of each New Relic issue listed in the prompt. ${TRIAGE_EFFECT} The tool itself only records the report; Tracer acts after the run ends.`,
+    description: `Report the severity and the status of each New Relic issue listed in the prompt. ${TRIAGE_EFFECT} Call it once, alone in its step, right after report_finding and your close calls. It only records the report.`,
     inputSchema: z.object({
       severity: z.enum(SEVERITIES),
       issues: z.array(z.object({
@@ -163,35 +170,32 @@ export function reportIssueStatusTool(db: Db, allowedIds: string[]): Tool<IssueR
         await db.update(alertIssues).set({ severity, verdict: i.status, reason: clip(i.reason.trim().replace(/[.\s]+$/, ""), REASON_MAX_CHARS), updatedAt: now })
           .where(eq(alertIssues.issueId, i.issueId)).run();
       }
-      return { recorded: issues.length, next: TRIAGE_EFFECT };
+      return { recorded: issues.length, next: "Tracer reports these statuses and your closes after the run." };
     },
   });
 }
 
 export interface DecideInput {
   verdict: IssueStatus;
-  severity: string | null;
-  nrState: "open" | "closed" | "unknown";
-  /** Earlier firings of the same monitor whose issue on this condition Tracer closed in the last 24h. */
-  recentCloses: number;
+  /** New Relic shows the issue closed although the agent did not close it. */
+  nrClosed: boolean;
   watchExpired: boolean;
+  hasFollowUp: boolean;
   recheck: boolean;
+  /** The error of the agent's last failed close. */
+  closeError?: string | null;
 }
 
-export type Decision = { outcome: "close" | "watching" | "nr_closed" | "left_open"; ping: boolean; reason?: string };
+export type Decision = { outcome: "watching" | "nr_closed" | "left_open"; ping: boolean; reason?: string };
 
+/** What happens to an issue the agent did not close. */
 export function decide(i: DecideInput): Decision {
-  if (i.nrState === "closed") return { outcome: "nr_closed", ping: false };
+  if (i.nrClosed) return { outcome: "nr_closed", ping: false };
   if (i.verdict === "unknown") return { outcome: "left_open", ping: true, reason: "status unknown" };
-  if (i.verdict !== "stopped") {
-    if (i.watchExpired) return { outcome: "left_open", ping: true, reason: "still ongoing after 24h" };
-    return { outcome: "watching", ping: !i.recheck };
-  }
-  if (i.nrState === "unknown") return { outcome: "left_open", ping: true, reason: "could not read its New Relic state" };
-  if (i.recentCloses >= CONFIG.triageLoopMax) {
-    return { outcome: "left_open", ping: true, reason: `closed ${i.recentCloses} times in 24h and it keeps coming back` };
-  }
-  return { outcome: "close", ping: !i.recheck && i.severity === "high" };
+  if (i.verdict === "stopped") return { outcome: "left_open", ping: true, reason: i.closeError ? `close failed: ${i.closeError}` : "not closed" };
+  if (i.watchExpired) return { outcome: "left_open", ping: true, reason: "still ongoing after 24h" };
+  if (!i.hasFollowUp) return { outcome: "left_open", ping: true, reason: "no follow-up set" };
+  return { outcome: "watching", ping: !i.recheck };
 }
 
 // The condition name is short; raw issue titles can be whole error messages.
@@ -208,14 +212,20 @@ function actionLine(state: string, title: string, reason?: string, why?: string 
 }
 
 // Counts earlier firings, not sibling issues of this one.
-async function recentCloses(db: Db, row: IssueRow, now: number): Promise<number> {
+async function recentCloses(db: Db, monitorId: string, conditionName: string, sessionId: string, now: number): Promise<number> {
   return (await db.select({ n: countDistinct(alertIssues.sessionId) }).from(alertIssues).where(and(
-    eq(alertIssues.monitorId, row.monitorId),
-    eq(alertIssues.conditionName, row.conditionName),
+    eq(alertIssues.monitorId, monitorId),
+    eq(alertIssues.conditionName, conditionName),
     eq(alertIssues.state, "closed"),
     gte(alertIssues.updatedAt, now - CONFIG.triageLoopWindowSeconds),
-    ne(alertIssues.sessionId, row.sessionId),
+    ne(alertIssues.sessionId, sessionId),
   )).get())?.n ?? 0;
+}
+
+/** Per issue id: how often Tracer closed its condition on earlier firings of the monitor within the loop window. */
+export async function closeCounts(db: Db, monitorId: string, sessionId: string, issues: { issueId: string; conditionName: string }[]): Promise<Map<string, number>> {
+  const now = unixNow();
+  return new Map(await Promise.all(issues.map(async (i) => [i.issueId, await recentCloses(db, monitorId, i.conditionName, sessionId, now)] as const)));
 }
 
 async function freshStates(context: Context, rows: IssueRow[]): Promise<Map<string, AiIssue> | null> {
@@ -240,11 +250,40 @@ async function ackThenClose(nr: NewRelicProvider, issueId: string): Promise<{ ok
   return nr.resolveIssue(issueId);
 }
 
-/** Decides and acts on the session's pending issues; returns the Slack action and whether to ping. */
-export async function applyTriage(context: Context, sessionId: string, recheck: boolean): Promise<Triage | null> {
+/** ack_nr_issue and close_nr_issue for a monitor run, limited to the issues of this firing; none when New Relic is not connected. */
+export function monitorIssueTools(context: Context, issueIds: string[]): Record<string, Tool> {
+  const nr = newRelic(context);
+  if (!nr || issueIds.length === 0) return {};
+  const allowed = new Set(issueIds);
+  const guard = async (id: string, run: () => Promise<{ ok: true } | { error: string }>) => {
+    if (!allowed.has(id)) return { error: `Not an issue of this firing: ${id}. Allowed issue ids: ${issueIds.join(", ")}.` };
+    // The Settings switch can turn off between the firing and a Retry or follow-up.
+    if (!await triageEnabled(context.db)) return { error: "Alert triage is turned off in Settings. Leave the issue open." };
+    return run();
+  };
+  return {
+    ack_nr_issue: buildIssueActionTool(
+      "Acknowledge a New Relic issue of this firing. For a stopped issue use close_nr_issue, which acks too.",
+      (id) => guard(id, () => nr.ackIssue(id)),
+    ),
+    close_nr_issue: buildIssueActionTool(
+      "Ack and close a New Relic issue of this firing. Close an issue only when a query result up to now shows it stopped. Never close other issues.",
+      (id) => guard(id, async () => {
+        const result = await ackThenClose(nr, id);
+        const fields = "error" in result ? { lastError: result.error } : { state: "closed", lastError: null };
+        await context.db.update(alertIssues).set({ ...fields, updatedAt: unixNow() }).where(eq(alertIssues.issueId, id)).run();
+        return result;
+      }),
+    ),
+  };
+}
+
+/** Records what happened to the session's issues (the agent acts itself); returns the Slack action and whether to ping. `ids` limits a re-check to the issues it covered. */
+export async function applyTriage(context: Context, sessionId: string, recheck: boolean, ids?: string[]): Promise<Triage | null> {
   const { db } = context;
+  const states = recheck ? ["pending"] : ["pending", "nr_closed", "closed"];
   const rows = await db.select().from(alertIssues)
-    .where(and(eq(alertIssues.sessionId, sessionId), inArray(alertIssues.state, recheck ? ["pending"] : ["pending", "nr_closed"]))).all();
+    .where(and(eq(alertIssues.sessionId, sessionId), ids ? inArray(alertIssues.issueId, ids) : inArray(alertIssues.state, states))).all();
   if (rows.length === 0) return null;
   const enabled = await triageEnabled(db);
   const pending = rows.filter((r) => r.state === "pending");
@@ -253,44 +292,32 @@ export async function applyTriage(context: Context, sessionId: string, recheck: 
   const lines: string[] = [];
   let ping = false;
   for (const row of rows) {
-    if (row.state === "nr_closed") {
-      lines.push(actionLine("nr_closed", nameOf(row)));
+    if (row.state === "nr_closed" || row.state === "closed") {
+      const agent = row.state === "closed";
+      lines.push(actionLine(row.state, nameOf(row), undefined, agent ? row.reason : null));
+      ping ||= agent && !recheck && row.severity === "high";
       continue;
     }
+    if (row.state !== "pending") continue;
     const now = unixNow();
-    const nrIssue = fresh?.get(row.issueId);
-    let d: Decision = !enabled
+    const d: Decision = !enabled
       ? { outcome: "left_open", ping: true, reason: "triage turned off" }
       : decide({
         verdict: (row.verdict ?? "unknown") as IssueStatus,
-        severity: row.severity,
-        nrState: !nrIssue ? "unknown" : nrIssue.state === "CLOSED" ? "closed" : "open",
-        recentCloses: await recentCloses(db, row, now),
+        nrClosed: fresh?.get(row.issueId)?.state === "CLOSED",
         watchExpired: row.watchUntil !== null && now >= row.watchUntil,
+        hasFollowUp: followUp,
         recheck,
+        closeError: row.lastError,
       });
-    if (d.outcome === "watching" && !followUp) d = { outcome: "left_open", ping: true, reason: "no follow-up set" };
-    let state: string = d.outcome;
-    let lastError: string | null = null;
-    if (d.outcome === "close") {
-      const nr = newRelic(context);
-      const result = nr ? await ackThenClose(nr, row.issueId) : { error: "New Relic is not connected" };
-      state = "closed";
-      if ("error" in result) {
-        state = "left_open";
-        lastError = result.error;
-        d = { outcome: "left_open", ping: true, reason: `close failed: ${result.error}` };
-      }
-    }
-    const watching = state === "watching";
+    const watching = d.outcome === "watching";
     await db.update(alertIssues).set({
-      state,
-      lastError,
+      state: d.outcome,
       watchUntil: watching ? (row.watchUntil ?? now + CONFIG.triageWatchMaxSeconds) : row.watchUntil,
       updatedAt: now,
     }).where(eq(alertIssues.issueId, row.issueId)).run();
     ping ||= d.ping;
-    if (!(recheck && watching)) lines.push(actionLine(state, nameOf(row), d.reason, row.reason));
+    if (!(recheck && watching)) lines.push(actionLine(d.outcome, nameOf(row), d.reason, row.reason));
   }
   return { action: lines.join("; "), ping };
 }
@@ -380,19 +407,20 @@ export async function wakeupExtras(context: Context, sessionId: string): Promise
   const active = rows.filter((r) => r.watchUntil === null || now < r.watchUntil);
   if (active.length === 0) return { lines: [] };
 
+  const activeIds = active.map((r) => r.issueId);
   await setRows(db, active, { state: "pending", verdict: null, reason: null });
   return {
     lines: [
       "",
       "New Relic issues still being followed up:",
-      ...issueList(active),
+      ...issueList(active, await closeCounts(db, rows[0].monitorId, sessionId, active)),
       `Look at the data since the last check only, with the fewest queries possible. Then ${REPORT_INSTRUCTION}`,
       FOLLOW_UP_INSTRUCTION,
     ],
-    tools: { report_issue_status: reportIssueStatusTool(db, active.map((r) => r.issueId)) },
+    tools: { report_issue_status: reportIssueStatusTool(db, activeIds), ...monitorIssueTools(context, activeIds) },
     onComplete: ({ error }) => {
       void (error ? forgetReports(db, sessionId) : Promise.resolve())
-        .then(() => applyTriage(context, sessionId, true))
+        .then(() => applyTriage(context, sessionId, true, activeIds))
         .then((t) => postUpdate(context, rows[0], t))
         .catch((err) => console.error("[triage] follow-up failed:", errorText(err)));
     },
@@ -413,8 +441,10 @@ export async function checkWatches(context: Context): Promise<void> {
       // The agent died or the server restarted mid-run: the report is treated as unknown.
       await forgetReports(db, sessionId);
       const first = stale.find((r) => r.sessionId === sessionId)!;
-      const triage = await applyTriage(context, sessionId, true);
-      const run = first.watchUntil === null ? "Investigation" : "Follow-up check";
+      const followUp = first.watchUntil !== null;
+      // A first run that died reports its closes too, as a finished run does.
+      const triage = await applyTriage(context, sessionId, followUp);
+      const run = followUp ? "Follow-up check" : "Investigation";
       await postUpdate(context, first, triage && { ...triage, action: `${run} never finished. ${triage.action}` });
     } catch (err) {
       console.error("[triage] stale sweep failed:", errorText(err));

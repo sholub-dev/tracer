@@ -88,6 +88,13 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
         progressStore.clear();
         let finished = false;
         let ended = false;
+        // A half-open connection never errors, so silence aborts it and the loop reconnects.
+        let idleTimer: ReturnType<typeof setTimeout> | undefined;
+        const resetIdle = () => {
+          clearTimeout(idleTimer);
+          idleTimer = setTimeout(() => controller.abort(), WEB_CONFIG.sseIdleTimeoutMs);
+        };
+        resetIdle();
         try {
           const res = await serverFetch(`/api/chat/subscribe/${sessionId}`, { headers: { Accept: "text/event-stream" }, cache: "no-store", signal: controller.signal });
           // Only a 404 means the server has no run; any other failure is retried.
@@ -95,6 +102,7 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
             ended = true;
           } else if (res.ok && res.body && res.headers.get("content-type")?.startsWith("text/event-stream")) {
             await readEventStream(res.body, (event, data) => {
+              resetIdle();
               if (event === "part") {
                 try {
                   const part = JSON.parse(data);
@@ -110,6 +118,7 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
             void res.body?.cancel().catch(() => {});
           }
         } catch { /* network error or abort */ }
+        clearTimeout(idleTimer);
         try { ctrl.close(); } catch { /* already closed */ }
         if (cancelled) return;
         if (finished || ended) {

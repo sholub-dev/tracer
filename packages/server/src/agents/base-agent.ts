@@ -14,7 +14,7 @@ import { stampSentTime, withPromptCaching, withSentTimes } from "../llm/prompt-c
 import { EVIDENCE_GROUNDING, PLAIN_LANGUAGE } from "../lib/shared-prompts.js";
 import { CONFIG } from "../config.js";
 import { isTransientError } from "../lib/transient.js";
-import { createToolGate } from "../tools/tool-gate.js";
+import { createToolGate, WRITE_TOOLS } from "../tools/tool-gate.js";
 import { ANALYSIS_TOOL_NAME, createBeginAnalysisTool } from "../tools/analysis-tool.js";
 import { reviewConclusion } from "./utility/review.js";
 
@@ -161,6 +161,29 @@ function endsWithToolStep(msg: UIMessage | undefined): boolean {
   });
 }
 
+const FINDING_TOOL = "report_finding";
+// Every tool call is a query unless it writes state or only reads another session; provider data tools differ per provider, so they are not listed.
+const NON_QUERY_TOOLS: ReadonlySet<string> = new Set([...WRITE_TOOLS, "read_past_session"]);
+
+/** Names of the tool calls in the reply to the newest user message; a failed finding call does not count. */
+function turnToolNames(messages: UIMessage[]): string[] {
+  const lastUser = messages.map((m) => m.role).lastIndexOf("user");
+  return messages.slice(lastUser + 1).flatMap((msg) => msg.parts.flatMap((part) => {
+    const p = part as { type: string; toolName?: string; state?: string };
+    const name = p.type === "dynamic-tool" ? p.toolName : p.type.startsWith("tool-") ? p.type.slice(5) : undefined;
+    return name && !(name === FINDING_TOOL && p.state === "output-error") ? [name] : [];
+  }));
+}
+
+/** True when a query ran and no finding card followed. */
+function owesFinding(toolNames: string[]): boolean {
+  return toolNames.some((name) => !NON_QUERY_TOOLS.has(name)) && !toolNames.includes(FINDING_TOOL);
+}
+
+/** A finished reply that still owes its finding card, and the follow-up work that waits for it. */
+type Owed = { messages: UIMessage[]; finish: () => void };
+type AttemptResult = { error?: string; transient?: boolean; checkpoint?: UIMessage[]; owed?: Owed };
+
 /** Resolves after `ms`, or at once when `signal` aborts. */
 function delay(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
@@ -195,7 +218,9 @@ async function processLLMStream(
   providerOptions: ProviderOptions,
   compaction: { summary?: string | null; summaryUpTo?: number | null },
   final: boolean,
-): Promise<{ error?: string; transient?: boolean; checkpoint?: UIMessage[] }> {
+  /** The one extra pass that adds the finding card a finished turn still owes. */
+  repair = false,
+): Promise<AttemptResult> {
   // Sub-agent progress per tool call, so a stopped run keeps what its tools streamed.
   const progress = new Map<string, ProgressPart[]>();
   const writer: StreamWriter = {
@@ -288,14 +313,30 @@ When the user's question spans multiple providers, query each relevant provider 
     systemPrompt += `\n\n## Earlier conversation summary\nThe earlier part of this conversation was compacted to save context. The summary below replaces those messages: the work it describes is already done — do NOT redo it. Reuse its identifiers and queries. Its numbers are second-hand: re-run the query before you quote a number in a finding card. Its conclusions are earlier claims: keep them while the data agrees, and test them again when a new result contradicts them.\n\n<conversation_summary>\n${summaryForPrompt}\n</conversation_summary>`;
   }
 
+  // The nudge is model input only, so the saved reply does not gain a user turn.
+  if (repair) modelMessages.push({ role: "user", content: `Call ${FINDING_TOOL} now with the answer to the question.` });
+
   const cached = withPromptCaching(provider, systemPrompt, providerOptions);
+  const maxSteps = collected.maxSteps ?? 15;
+  const canReport = tools !== undefined && FINDING_TOOL in tools;
+  // Anthropic extended thinking rejects a forced tool choice; activeTools alone still works.
+  const mayForceTool = provider !== "anthropic" || !providerOptions?.anthropic?.thinking;
   const result = streamText({
     model,
     temperature: 0,
     instructions: cached.instructions,
     messages: modelMessages,
     tools: tools as Parameters<typeof streamText>[0]["tools"],
-    stopWhen: tools ? isStepCount(collected.maxSteps ?? 15) : undefined,
+    stopWhen: tools ? isStepCount(maxSteps) : undefined,
+    prepareStep: canReport ? ({ stepNumber, steps }) => {
+      if (repair && stepNumber === 0) {
+        return { activeTools: [FINDING_TOOL], ...(mayForceTool ? { toolChoice: { type: "tool" as const, toolName: FINDING_TOOL } } : {}) };
+      }
+      // The last step must carry the card, or a turn that spent its budget on queries ends without an answer.
+      if (stepNumber !== maxSteps - 1) return undefined;
+      const names = [...turnToolNames(messages), ...steps.flatMap((s) => s.toolCalls.map((c) => c.toolName))];
+      return owesFinding(names) ? { activeTools: [FINDING_TOOL] } : undefined;
+    } : undefined,
     providerOptions: cached.providerOptions,
     abortSignal: serverAbort.signal,
     onLanguageModelCallEnd: recordEachCall(context.db, sessionId, "chat", modelId),
@@ -310,6 +351,8 @@ When the user's question spans multiple providers, query each relevant provider 
   let errorSent = false;
   let checkpoint: UIMessage[] | undefined;
   let stepSaved = false;
+  let owed: Owed | undefined;
+  let settled = false;
   let stepSave: Promise<void> = Promise.resolve();
   // The model stream can end before the wrapper runs its last step save, so the final save waits for the read loop too.
   let readDone!: () => void;
@@ -407,8 +450,8 @@ When the user's question spans multiple providers, query each relevant provider 
             .run();
           sessionChanged(sessionId);
 
-          // A stopped reply is partial; follow-up work (e.g. a monitor's report) waits for a full run.
-          if (!failed && !serverAbort.signal.aborted && collected.afterComplete) {
+          const finish = () => {
+            if (!collected.afterComplete) return;
             let lastUserText = "";
             let lastAssistantText = "";
             for (let i = enrichedMessages.length - 1; i >= 0; i--) {
@@ -422,6 +465,12 @@ When the user's question spans multiple providers, query each relevant provider 
               if (lastUserText && lastAssistantText) break;
             }
             collected.afterComplete({ lastUserMessage: lastUserText, lastAssistantText, sessionId });
+          };
+          // A stopped reply is partial; follow-up work (e.g. a monitor's report) waits for a full run.
+          if (!failed && !serverAbort.signal.aborted) {
+            // The repair pass runs next and follow-up work waits for its reply; a save that outlived the wait below gets no repair pass.
+            if (canReport && !repair && !settled && owesFinding(turnToolNames(enrichedMessages))) owed = { messages: enrichedMessages, finish };
+            else finish();
           }
         } catch (err) {
           console.warn(`[chat] Failed to save session ${sessionId}:`, err);
@@ -511,8 +560,9 @@ When the user's question spans multiple providers, query each relevant provider 
   let timeoutId: ReturnType<typeof setTimeout>;
   const timeout = new Promise<void>((r) => { timeoutId = setTimeout(r, 5000); });
   await Promise.race([finishPromise, timeout]);
+  settled = true;
   clearTimeout(timeoutId!);
-  if (serverAbort.signal.aborted || failure === undefined) return {};
+  if (serverAbort.signal.aborted || failure === undefined) return { owed };
   const transient = isTransientError(failure);
   // A dropped connection throws instead of sending an error part; clients need one to show Retry.
   if ((final || !transient) && !errorSent) broadcaster.emit({ type: "error", errorText: "An error occurred." });
@@ -570,21 +620,38 @@ export async function runChatAgent({
   (async () => {
     // Each re-run continues from the last saved step of the attempts before it.
     let history = messages;
+    // A throw before the model call (tool setup, history conversion) is a failed attempt too, so it is retried and reported.
+    const attemptFailed = (final: boolean) => (err: unknown): AttemptResult => {
+      if (serverAbort.signal.aborted) return {};
+      const transient = isTransientError(err);
+      // Clients need an error part to show Retry, as for a failure inside the stream.
+      if (final || !transient) broadcaster.emit({ type: "error", errorText: "An error occurred." });
+      return { error: errorText(err), transient };
+    };
     for (let attempt = 0; ; attempt++) {
       const final = attempt >= retryDelaysMs.length;
-      // A throw before the model call (tool setup, history conversion) is a failed attempt too, so it is retried and reported.
-      const { error, transient, checkpoint } = await processLLMStream(
+      const { error, transient, checkpoint, owed } = await processLLMStream(
         sessionId, history, context, broadcaster, serverAbort,
         collectTools, sessionTitle, model, provider, modelId, providerOptions,
         { summary, summaryUpTo }, final,
-      ).catch((err: unknown): { error?: string; transient?: boolean; checkpoint?: UIMessage[] } => {
-        if (serverAbort.signal.aborted) return {};
-        const transient = isTransientError(err);
-        // Clients need an error part to show Retry, as for a failure inside the stream.
-        if (final || !transient) broadcaster.emit({ type: "error", errorText: "An error occurred." });
-        return { error: errorText(err), transient };
-      });
-      if (error === undefined) break;
+      ).catch(attemptFailed(final));
+      if (error === undefined) {
+        if (!owed) break;
+        // One extra pass on the saved reply, never repeated.
+        const repaired = await processLLMStream(
+          sessionId, owed.messages, context, broadcaster, serverAbort,
+          collectTools, sessionTitle, model, provider, modelId, providerOptions,
+          { summary, summaryUpTo }, false, true,
+        ).catch(attemptFailed(false));
+        if (repaired.error !== undefined) {
+          console.warn(`[chat] Finding pass for ${sessionId} failed:`, repaired.error);
+          // Clients drop what the failed pass streamed after the last saved step.
+          if (repaired.transient) broadcaster.rewind({ type: "reset-step" });
+          // The reply before this pass was complete, so its follow-up work still runs.
+          owed.finish();
+        }
+        break;
+      }
       if (checkpoint) history = checkpoint;
       if (!final && transient) {
         broadcaster.rewind({ type: "reset-step" });

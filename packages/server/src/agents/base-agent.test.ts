@@ -21,6 +21,7 @@ import { resumeRuns, settleInterruptedRuns } from "./resume.js";
 import { ProviderRegistry as Registry } from "../providers/registry.js";
 import { encodeMessages } from "../lib/messages-codec.js";
 import { UNIFIED_SCOPE } from "@tracer-sh/shared";
+import { reportFindingTool } from "../tools/finding-tool.js";
 import { CONFIG } from "../config.js";
 import { getCurrentDateBlock, getCurrentTimeText } from "../lib/current-context.js";
 import { stampSentTime, withPromptCaching, withSentTimes } from "../llm/prompt-cache.js";
@@ -326,6 +327,50 @@ test("a re-run continues after the last saved tool step; only the failed step is
   assert.equal(replay.some((p) => p.type === "reset-step"), false);
   assert.deepEqual(await render(replay), expected, "late viewer");
   assert.deepEqual(r.saved.map((m) => m.role), ["user", "assistant"]);
+});
+
+const EMPTY_TEXT_SSE = sse([
+  MESSAGE_START,
+  ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
+  ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "" } }],
+  ...end("end_turn"),
+]);
+const FINDING_CALL_SSE = sse([
+  MESSAGE_START,
+  ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_f", name: "report_finding", input: {} } }],
+  ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ kind: "summary", headline: "Checkout is slow", details: "One query ran.", points: [] }) } }],
+  ...end("tool_use"),
+]);
+const findingTools = { lookup: tool({ inputSchema: z.object({}), execute: async () => "ok" }), report_finding: reportFindingTool() };
+
+test("a turn that ran a query and stopped without a finding card gets one extra pass limited to report_finding", async () => {
+  const r = await retryRun({ script: [TOOL_CALL_SSE, EMPTY_TEXT_SSE, FINDING_CALL_SSE, SSE] }, [], undefined, findingTools);
+  assert.equal(r.bodies.length, 4);
+  const toolNames = (i: number) => (r.bodies[i].tools as { name: string }[]).map((t) => t.name);
+  assert.deepEqual(toolNames(1), ["lookup", "report_finding"]);
+  assert.deepEqual(toolNames(2), ["report_finding"], "the first repair step offers only the card");
+  assert.deepEqual(toolNames(3), ["lookup", "report_finding"], "later steps offer every tool");
+  const last = r.bodies[2].messages as { role: string }[];
+  assert.equal(last.at(-1)!.role, "user", "the repair request ends with a nudge, not a prefill");
+  assert.deepEqual(r.saved.map((m) => m.role), ["user", "assistant"], "the nudge is not saved");
+  const types = r.saved[1].parts.map((p) => p.type);
+  assert.ok(types.includes("tool-report_finding"));
+  assert.equal(r.completed, 1, "follow-up work runs once, after the repair pass");
+});
+
+test("a failed repair pass still runs the follow-up work of the complete reply and reports no failure", async () => {
+  const r = await retryRun({ script: [TOOL_CALL_SSE, EMPTY_TEXT_SSE, MID_STREAM_ERROR_SSE] }, [], undefined, findingTools);
+  assert.equal(r.bodies.length, 3);
+  assert.equal(r.completed, 1);
+  assert.deepEqual(r.failed, []);
+});
+
+test("a turn that already has a finding card or ran no query gets no repair pass", async () => {
+  const carded = await retryRun({ script: [TOOL_CALL_SSE, FINDING_CALL_SSE, SSE] }, [], undefined, findingTools);
+  assert.equal(carded.bodies.length, 3);
+  const plain = await retryRun({ script: [SSE] }, [], undefined, findingTools);
+  assert.equal(plain.bodies.length, 1);
+  assert.equal(plain.completed, 1);
 });
 
 test("each tool step is saved while the run goes on, and a stop keeps it", async () => {

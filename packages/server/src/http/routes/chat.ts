@@ -93,17 +93,18 @@ export function registerChatRoutes(app: Hono, context: Context): void {
     return streamSSE(c, async (stream) => {
       await new Promise<void>((resolve) => {
         let unDone: () => void = () => {};
+        const end = () => { clearInterval(heartbeat); unsub(); unDone(); resolve(); };
+        const heartbeat = setInterval(() => {
+          stream.writeSSE({ event: "ping", data: "{}" }).catch(end);
+        }, CONFIG.sseHeartbeatMs);
         const unsub = active.broadcaster.subscribe((part) => {
-          stream.writeSSE({ event: "part", data: JSON.stringify(part) })
-            .catch(() => { unsub(); unDone(); resolve(); });
+          stream.writeSSE({ event: "part", data: JSON.stringify(part) }).catch(end);
         });
         unDone = active.broadcaster.onDone(async () => {
           try { await stream.writeSSE({ event: "done", data: "{}" }); } catch {}
-          unsub(); unDone(); resolve();
+          end();
         });
-        c.req.raw.signal.addEventListener("abort", () => {
-          unsub(); unDone(); resolve();
-        }, { once: true });
+        c.req.raw.signal.addEventListener("abort", end, { once: true });
       });
     });
   });

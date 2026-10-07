@@ -29,6 +29,9 @@ export const CONFIG = {
   /** CORS origin. null = derive from port at runtime as http://localhost:{port}. */
   corsOrigin: ENV.TRACER_CORS_ORIGIN ?? null as string | null,
 
+  /** Interval of the keep-alive event on the live session stream, so clients detect a dead connection. */
+  sseHeartbeatMs: 15_000,
+
   // ── LLM defaults ──
 
   /** Single model default — chat, provider agents, and utility agents (titles, memory). */
@@ -87,8 +90,6 @@ export const CONFIG = {
   monitorIncidentLagSeconds: 15,
   monitorRepeatWindowSeconds: 86_400,
   triageWatchMaxSeconds: 86_400,
-  /** Stop closing a condition after this many Tracer closes in 24h. */
-  triageLoopMax: 3,
   triageLoopWindowSeconds: 86_400,
   /** Closed, nr_closed and left_open issue rows are deleted after this long. */
   triageRetentionSeconds: 7 * 86_400,

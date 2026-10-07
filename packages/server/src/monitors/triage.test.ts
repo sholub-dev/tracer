@@ -9,8 +9,8 @@ import type { ProviderRegistry } from "../providers/registry.js";
 import { CONFIG } from "../config.js";
 import { NewRelicProvider } from "../providers/newrelic/newrelic.provider.js";
 import type { AiIssue } from "../providers/newrelic/nerdgraph.client.js";
-import { applyTriage, checkWatches, closedCheckPrompt, decide, incidentQuery, incidentRefs, reportIssueStatusTool, TRIAGE_EFFECT, wakeupExtras, type DecideInput } from "./triage.js";
-import { firingRerun } from "./scheduler.js";
+import { applyTriage, checkWatches, closedCheckPrompt, decide, issuesPrompt, monitorIssueTools, incidentQuery, incidentRefs, reportIssueStatusTool, wakeupExtras, type DecideInput } from "./triage.js";
+import { buildMessage, firingRerun } from "./scheduler.js";
 import { writeSlackConfig } from "../integrations/slack.js";
 
 const MONITOR_QUERY = "SELECT count(*) FROM NrAiIncident WHERE event = 'open' AND policyName LIKE '%foundations%' FACET conditionName LIMIT 100 SINCE {{SINCE}} UNTIL {{UNTIL}}";
@@ -68,23 +68,18 @@ function fakeNewRelic(states: Record<string, AiIssue["state"]>, globalOn = true)
   return { context, resolved, acked };
 }
 
-const base: DecideInput = { verdict: "stopped", severity: "low", nrState: "open", recentCloses: 0, watchExpired: false, recheck: false };
+const base: DecideInput = { verdict: "ongoing", nrClosed: false, watchExpired: false, hasFollowUp: true, recheck: false };
 
 test("decide follows the triage rules", () => {
-  assert.deepEqual(decide(base), { outcome: "close", ping: false });
-  assert.deepEqual(decide({ ...base, severity: "medium" }), { outcome: "close", ping: false });
-  assert.deepEqual(decide({ ...base, severity: "high" }), { outcome: "close", ping: true });
-  assert.deepEqual(decide({ ...base, severity: "high", recheck: true }), { outcome: "close", ping: false });
-  assert.deepEqual(decide({ ...base, verdict: "ongoing" }), { outcome: "watching", ping: true });
+  assert.deepEqual(decide(base), { outcome: "watching", ping: true });
   assert.deepEqual(decide({ ...base, verdict: "recurring", recheck: true }), { outcome: "watching", ping: false });
-  assert.equal(decide({ ...base, verdict: "ongoing", watchExpired: true }).outcome, "left_open");
-  assert.equal(decide({ ...base, verdict: "ongoing", watchExpired: true }).ping, true);
+  assert.equal(decide({ ...base, watchExpired: true }).outcome, "left_open");
+  assert.equal(decide({ ...base, watchExpired: true }).ping, true);
+  assert.deepEqual(decide({ ...base, hasFollowUp: false }), { outcome: "left_open", ping: true, reason: "no follow-up set" });
   assert.equal(decide({ ...base, verdict: "unknown" }).outcome, "left_open");
-  assert.deepEqual(decide({ ...base, nrState: "closed", verdict: "ongoing" }), { outcome: "nr_closed", ping: false });
-  assert.equal(decide({ ...base, nrState: "unknown" }).outcome, "left_open");
-  assert.equal(decide({ ...base, recentCloses: 3 }).outcome, "left_open");
-  assert.equal(decide({ ...base, recentCloses: 3 }).ping, true);
-  assert.equal(decide({ ...base, recentCloses: 2 }).outcome, "close");
+  assert.deepEqual(decide({ ...base, verdict: "stopped" }), { outcome: "left_open", ping: true, reason: "not closed" });
+  assert.deepEqual(decide({ ...base, nrClosed: true }), { outcome: "nr_closed", ping: false });
+  assert.deepEqual(decide({ ...base, nrClosed: true, verdict: "stopped" }), { outcome: "nr_closed", ping: false });
 });
 
 test("incidentQuery lists incident, policy and condition ids, keeps the rest, rejects other event types", () => {
@@ -108,36 +103,103 @@ test("report_issue_status rejects ids outside the firing and records allowed one
   const run = (input: Parameters<NonNullable<typeof t.execute>>[0]) => t.execute!(input, { toolCallId: "c", messages: [] } as never);
   assert.ok("error" in (await run({ severity: "low", issues: [{ issueId: "a", status: "stopped", reason: "errors back to 0 since 13:58" }, { issueId: "zzz", status: "stopped", reason: "errors back to 0 since 13:58" }] }) as object));
   assert.equal((await db.select().from(schema.alertIssues).get())?.verdict, null);
-  assert.deepEqual(await run({ severity: "high", issues: [{ issueId: "a", status: "ongoing", reason: "errors back to 0 since 13:58" }] }), { recorded: 1, next: TRIAGE_EFFECT });
+  assert.deepEqual(await run({ severity: "high", issues: [{ issueId: "a", status: "ongoing", reason: "errors back to 0 since 13:58" }] }), { recorded: 1, next: "Tracer reports these statuses and your closes after the run." });
   const row = await db.select().from(schema.alertIssues).get();
   assert.equal(row?.verdict, "ongoing");
   assert.equal(row?.severity, "high");
 });
 
-test("applyTriage: stopped is acked then closed, ongoing is watched, skipped report is unknown", async () => {
-  const { context, resolved, acked } = fakeNewRelic({ a: "ACTIVATED", b: "ACTIVATED", c: "ACTIVATED", d: "CLOSED" });
-  await addIssue(context.db, "a", { verdict: "stopped", severity: "low" });
+const toolRun = (t: unknown, issueId: string) =>
+  (t as { execute: (i: unknown, o: unknown) => Promise<unknown> }).execute({ issueId }, { toolCallId: "c", messages: [] });
+
+test("the monitor close tool rejects an id outside the firing and names the allowed ids", async () => {
+  const { context, resolved, acked } = fakeNewRelic({ a: "ACTIVATED" });
+  const tools = monitorIssueTools(context, ["a", "b"]);
+  const error = await toolRun(tools.close_nr_issue, "zzz") as { error: string };
+  assert.match(error.error, /zzz/);
+  assert.match(error.error, /a, b/);
+  assert.ok("error" in (await toolRun(tools.ack_nr_issue, "zzz") as object));
+  assert.deepEqual([acked, resolved], [[], []]);
+});
+
+test("the monitor close tool closes and marks the issue closed, even when the ack fails", async () => {
+  const { context, resolved } = fakeNewRelic({ a: "ACTIVATED" });
+  await addIssue(context.db, "a");
+  const provider = context.providers.getProvider("newrelic") as NewRelicProvider;
+  provider.ackIssue = async () => ({ error: "ack failed" });
+  assert.deepEqual(await toolRun(monitorIssueTools(context, ["a"]).close_nr_issue, "a"), { ok: true });
+  assert.deepEqual(resolved, ["a"]);
+  assert.equal((await context.db.select().from(schema.alertIssues).get())?.state, "closed");
+});
+
+test("the monitor close tool acks before it closes", async () => {
+  const { context, acked, resolved } = fakeNewRelic({ a: "ACTIVATED" });
+  await addIssue(context.db, "a");
+  await toolRun(monitorIssueTools(context, ["a"]).close_nr_issue, "a");
+  assert.deepEqual([acked, resolved], [["a"], ["a"]]);
+});
+
+test("the monitor close tool leaves the row pending when New Relic fails to close", async () => {
+  const { context } = fakeNewRelic({ a: "ACTIVATED" });
+  await addIssue(context.db, "a");
+  const provider = context.providers.getProvider("newrelic") as NewRelicProvider;
+  provider.resolveIssue = async () => ({ error: "boom" });
+  assert.deepEqual(await toolRun(monitorIssueTools(context, ["a"]).close_nr_issue, "a"), { error: "boom" });
+  assert.equal((await context.db.select().from(schema.alertIssues).get())?.state, "pending");
+  await context.db.update(schema.alertIssues).set({ verdict: "stopped", severity: "low" }).run();
+  assert.match((await applyTriage(context, "s1", false))!.action, /Left open \(close failed: boom\): Errors/);
+});
+
+test("the monitor ack and close tools refuse while the Settings switch is off", async () => {
+  const { context, acked, resolved } = fakeNewRelic({ a: "ACTIVATED" }, false);
+  await addIssue(context.db, "a");
+  const tools = monitorIssueTools(context, ["a"]);
+  assert.match((await toolRun(tools.close_nr_issue, "a") as { error: string }).error, /turned off/);
+  assert.ok("error" in (await toolRun(tools.ack_nr_issue, "a") as object));
+  assert.deepEqual([acked, resolved], [[], []]);
+  assert.equal((await context.db.select().from(schema.alertIssues).get())?.state, "pending");
+});
+
+test("the close tool does not refuse a condition Tracer closed often; the prompt reports the count", async () => {
+  const { context, resolved } = fakeNewRelic({ e: "ACTIVATED" });
+  for (const [n, sessionId] of ["s2", "s3", "s4", "s5"].entries()) await addIssue(context.db, `old${n}`, { sessionId, state: "closed" });
+  await addIssue(context.db, "e");
+  assert.deepEqual(await toolRun(monitorIssueTools(context, ["e"]).close_nr_issue, "e"), { ok: true });
+  assert.deepEqual(resolved, ["e"]);
+  const text = issuesPrompt([{ issueId: "e", conditionName: ["Errors"], title: ["Issue e"] } as unknown as AiIssue], new Map([["e", 4]]), false).join("\n");
+  assert.match(text, /- e: Errors \| Issue e \| Tracer closed this condition 4 times on earlier firings in the last 24h/);
+  assert.match(text, /keeps coming back after closes is usually recurring/);
+});
+
+test("no monitor ack or close tool exists without issues or without New Relic", () => {
+  const { context } = fakeNewRelic({});
+  assert.deepEqual(monitorIssueTools(context, []), {});
+  assert.deepEqual(monitorIssueTools({ ...context, providers: { getProvider: () => undefined } as unknown as ProviderRegistry }, ["a"]), {});
+});
+
+test("applyTriage records what the agent did: closed, nr_closed, left open, watching", async () => {
+  const { context, resolved, acked } = fakeNewRelic({ b: "ACTIVATED", c: "ACTIVATED", d: "CLOSED", e: "ACTIVATED" });
+  await addIssue(context.db, "a", { state: "closed", verdict: "stopped", severity: "high", reason: "errors back to 0 since 13:58" });
   await addIssue(context.db, "b", { verdict: "ongoing", severity: "low" });
   await addIssue(context.db, "c");
   await addIssue(context.db, "d", { verdict: "stopped", severity: "low" });
+  await addIssue(context.db, "e", { verdict: "stopped", severity: "low" });
   await addTimer(context.db);
   const result = await applyTriage(context, "s1", false);
   const states = Object.fromEntries((await context.db.select().from(schema.alertIssues).all()).map((r) => [r.issueId, r.state]));
-  assert.deepEqual(states, { a: "closed", b: "watching", c: "left_open", d: "nr_closed" });
-  assert.deepEqual(acked, ["a"]);
-  assert.deepEqual(resolved, ["a"]);
+  assert.deepEqual(states, { a: "closed", b: "watching", c: "left_open", d: "nr_closed", e: "left_open" });
+  assert.deepEqual([acked, resolved], [[], []], "Tracer no longer acts itself");
   assert.equal(result?.ping, true);
-  assert.match(result!.action, /Acked and closed in New Relic: Errors/);
+  assert.match(result!.action, /Acked and closed in New Relic: Errors\. Why: errors back to 0 since 13:58/);
+  assert.match(result!.action, /Left open \(not closed\): Errors/);
 });
 
-test("applyTriage counts earlier firings, not sibling issues, toward the close loop limit", async () => {
-  const { context, resolved } = fakeNewRelic({ a: "ACTIVATED", b: "ACTIVATED", c: "ACTIVATED", d: "ACTIVATED", e: "ACTIVATED" });
-  for (const id of ["a", "b", "c", "d"]) await addIssue(context.db, id, { verdict: "stopped", severity: "low" });
-  await applyTriage(context, "s1", false);
-  assert.deepEqual(resolved, ["a", "b", "c", "d"]);
-  await addIssue(context.db, "e", { sessionId: "s2", verdict: "stopped", severity: "low" });
-  await applyTriage(context, "s2", false);
-  assert.deepEqual(resolved, ["a", "b", "c", "d", "e"]);
+test("applyTriage pings for a high-severity close the agent made, not for a medium one", async () => {
+  const { context } = fakeNewRelic({});
+  await addIssue(context.db, "a", { state: "closed", verdict: "stopped", severity: "medium" });
+  assert.equal((await applyTriage(context, "s1", false))?.ping, false);
+  await context.db.update(schema.alertIssues).set({ severity: "high" }).run();
+  assert.equal((await applyTriage(context, "s1", false))?.ping, true);
 });
 
 test("applyTriage never closes while the Settings switch is off", async () => {
@@ -160,17 +222,18 @@ test("applyTriage leaves an ongoing issue open and pings when no follow-up timer
   assert.match(result!.action, /Left open \(no follow-up set\): Errors/);
 });
 
-test("a follow-up wake-up re-checks watched issues and acks then closes a stopped one", async () => {
-  const { context, resolved, acked } = fakeNewRelic({ a: "ACTIVATED" });
+test("a follow-up wake-up gives the close tool for its issues; the agent closes and the re-check reports it", async () => {
+  const { context, resolved } = fakeNewRelic({ a: "ACTIVATED" });
   await addIssue(context.db, "a", { state: "watching", verdict: "ongoing", severity: "low", watchUntil: Math.floor(Date.now() / 1000) + 3600 });
   const extras = await wakeupExtras(context, "s1");
   assert.equal((await context.db.select().from(schema.alertIssues).get())?.state, "pending");
   assert.match(extras.lines.join("\n"), /- a: Errors \| Issue a/);
+  assert.deepEqual(Object.keys(extras.tools!).sort(), ["ack_nr_issue", "close_nr_issue", "report_issue_status"]);
+  await toolRun(extras.tools!.close_nr_issue, "a");
   const t = extras.tools!.report_issue_status as ReturnType<typeof reportIssueStatusTool>;
   await t.execute!({ severity: "low", issues: [{ issueId: "a", status: "stopped", reason: "errors back to 0 since 13:58" }] }, { toolCallId: "c", messages: [] } as never);
-  const result = await applyTriage(context, "s1", true);
+  const result = await applyTriage(context, "s1", true, ["a"]);
   assert.equal((await context.db.select().from(schema.alertIssues).get())?.state, "closed");
-  assert.deepEqual(acked, ["a"]);
   assert.deepEqual(resolved, ["a"]);
   assert.match(result!.action, /Acked and closed in New Relic: Errors\. Why: errors back to 0 since 13:58$/);
 });
@@ -233,6 +296,8 @@ test("a retried firing gets report_issue_status for its pending issues, triages 
   await addIssue(context.db, "a");
   await withSlack(context.db, async (posts) => {
     const rerun = (await firingRerun(context, "s1"))!;
+    assert.ok(rerun.tools.report_alert_summary);
+    await toolRun(rerun.tools.close_nr_issue, "a");
     const t = rerun.tools.report_issue_status as ReturnType<typeof reportIssueStatusTool>;
     await t.execute!({ severity: "low", issues: [{ issueId: "a", status: "stopped", reason: "errors back to 0 since 13:58" }] }, { toolCallId: "c", messages: [] } as never);
     rerun.onComplete({});
@@ -254,6 +319,8 @@ test("a retried incident firing with no open issue can be dismissed, and a dismi
     const rerun = (await firingRerun(context, "s1"))!;
     assert.ok(rerun.tools.dismiss_alert);
     assert.equal(rerun.tools.report_issue_status, undefined);
+    assert.equal(rerun.tools.close_nr_issue, undefined);
+    assert.equal(rerun.tools.ack_nr_issue, undefined);
     rerun.onComplete({});
     await settle(() => false);
     assert.equal(posts.length, 0);
@@ -262,11 +329,12 @@ test("a retried incident firing with no open issue can be dismissed, and a dismi
 });
 
 test("closedCheckPrompt asks to check the incident state and states what Tracer already found", () => {
-  const text = closedCheckPrompt({ open: [], closed: [{ issueId: "a" } as AiIssue], tracked: 2 }).join("\n");
+  const text = closedCheckPrompt({ open: [], closed: [{ issueId: "a" } as AiIssue], tracked: 2 }, true).join("\n");
   assert.match(text, /First check that this alert is still open/);
   assert.match(text, /1 already closed, 2 handled by an earlier alert/);
   assert.match(text, /call dismiss_alert alone/);
-  assert.doesNotMatch(closedCheckPrompt(null).join("\n"), /Tracer found/);
+  assert.doesNotMatch(closedCheckPrompt(null, true).join("\n"), /Tracer found/);
+  assert.doesNotMatch(closedCheckPrompt(null, false).join("\n"), /Slack|report_alert_summary/);
 });
 
 test("a firing whose every attempt failed posts once and keeps its issues for a Retry, which acks and closes", async () => {
@@ -278,7 +346,7 @@ test("a firing whose every attempt failed posts once and keeps its issues for a 
     first.onComplete({ error: "Overloaded" });
     await settle(() => posts.length > 0);
     assert.equal(posts.length, 1);
-    assert.match(posts[0], /Investigation failed \(AI model error after retries\)\. New Relic issues left open; Retry the session to triage them\./);
+    assert.match(posts[0], /Investigation failed \(AI model error after retries\)\. Issues it did not close stay open; Retry the session to triage them\./);
     const row = await context.db.select().from(schema.alertIssues).get();
     assert.equal(row?.state, "pending");
     assert.equal(row?.verdict, null, "a failed run's report is not trusted");
@@ -289,6 +357,7 @@ test("a firing whose every attempt failed posts once and keeps its issues for a 
     retry.onComplete({ error: "Overloaded" });
     await settle(() => false);
     assert.equal(posts.length, 1, "a repeated failure is not posted again");
+    await toolRun(retry.tools.close_nr_issue, "a");
     const t = retry.tools.report_issue_status as ReturnType<typeof reportIssueStatusTool>;
     await t.execute!({ severity: "low", issues: [{ issueId: "a", status: "stopped", reason: "errors back to 0 since 13:58" }] }, { toolCallId: "c", messages: [] } as never);
     retry.onComplete({});
@@ -310,4 +379,17 @@ test("a failed follow-up run leaves its issues open instead of trusting a partia
   await settle(async () => (await context.db.select().from(schema.alertIssues).get())?.state !== "pending");
   assert.equal((await context.db.select().from(schema.alertIssues).get())?.state, "left_open");
   assert.deepEqual(resolved, []);
+});
+
+test("without Slack a retried firing has no report_alert_summary, and the prompt never names Slack", async () => {
+  const { context } = fakeNewRelic({ a: "ACTIVATED" });
+  await addIssue(context.db, "a");
+  const rerun = (await firingRerun(context, "s1"))!;
+  assert.equal(rerun.tools.report_alert_summary, undefined);
+  const issue = [{ issueId: "a", conditionName: ["Errors"], title: ["Issue a"] } as unknown as AiIssue];
+  const monitor = { name: "M", provider: "newrelic", query: "q", condition: "> 0" } as typeof schema.monitors.$inferSelect;
+  const groups = [{ key: "", count: 3, sessionId: null, repeat: false }];
+  const text = buildMessage(monitor, 3, { start: 0, end: 60 }, groups, [], issuesPrompt(issue, new Map(), false), false, false);
+  assert.doesNotMatch(text, /Slack|report_alert_summary/);
+  assert.match(buildMessage(monitor, 3, { start: 0, end: 60 }, groups, [], issuesPrompt(issue, new Map(), true), false, true), /report_alert_summary/);
 });

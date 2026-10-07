@@ -36,7 +36,7 @@ export function reportAlertSummaryTool(): Tool<AlertSummary, { recorded: true }>
 
 export function dismissAlertTool(): Tool<{ reason: string }, { recorded: true }> {
   return tool({
-    description: "End a firing whose New Relic incidents are all closed already. Nothing is posted to Slack and no issue is acked or closed. "
+    description: "End a firing whose New Relic incidents are all closed already. Nothing more is posted and no issue is acked or closed. "
       + "Call it only when a query result shows that every incident of this firing is closed.",
     inputSchema: z.object({
       reason: z.string().describe("The result that shows it, e.g. \"incident 4821 closed at 13:58\""),

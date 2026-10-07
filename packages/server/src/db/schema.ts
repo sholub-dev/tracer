@@ -47,6 +47,10 @@ export const chatSessions = sqliteTable("chat_sessions", {
    *  are only appended or suffix-truncated, never reordered). */
   summaryUpTo: integer("summary_up_to"),
   summaryCreatedAt: integer("summary_created_at"),
+  /** How a restart rebuilds the run: the chat scope, or the monitor builder marker. Null: not resumable. */
+  runScope: text("run_scope"),
+  /** 1 once a restart resumed the run; a second interruption ends it. */
+  resumed: integer("resumed").notNull().default(0),
   createdAt: integer("created_at")
     .notNull()
     .$defaultFn(() => unixNow()),

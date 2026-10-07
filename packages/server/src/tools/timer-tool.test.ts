@@ -18,7 +18,7 @@ function memoryDb(): Db {
     CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
     CREATE TABLE chat_sessions (
       id TEXT PRIMARY KEY, title TEXT NOT NULL, messages TEXT NOT NULL, status TEXT NOT NULL, kind TEXT,
-      summary TEXT, summary_up_to INTEGER, summary_created_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      summary TEXT, summary_up_to INTEGER, summary_created_at INTEGER, run_scope TEXT, resumed INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     );
     CREATE TABLE session_timers (session_id TEXT PRIMARY KEY, fire_at INTEGER, note TEXT NOT NULL, set_at INTEGER NOT NULL);
     CREATE TABLE alert_issues (

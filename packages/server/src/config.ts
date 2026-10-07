@@ -64,6 +64,8 @@ export const CONFIG = {
   agentRetryDelaysMs: [5_000, 15_000, 45_000],
   /** Shorter waits for a chat the user watches. */
   chatRetryDelaysMs: [2_000, 8_000],
+  /** Longest gap since a run's last save for which a restart still resumes it; an older run ends as done. */
+  chatResumeMaxAgeSec: 10 * 60,
   /** Waits before repeating a data source or integration request that failed with a network error, 429 or 5xx. */
   fetchRetryDelaysMs: [1_000, 3_000],
   /** Least time between reconnect attempts for a data source that is not connected. */

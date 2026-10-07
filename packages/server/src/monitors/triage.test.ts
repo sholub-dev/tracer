@@ -26,9 +26,9 @@ function memoryDb(globalOn = true): Db {
     INSERT INTO monitors VALUES ('m1', 'M', 'newrelic', 'q', NULL, 'c', 60, 1, NULL, 'ok', NULL, NULL, NULL, 1, 0, 0);
     CREATE TABLE chat_sessions (
       id TEXT PRIMARY KEY, title TEXT NOT NULL, messages TEXT NOT NULL, status TEXT NOT NULL, kind TEXT,
-      summary TEXT, summary_up_to INTEGER, summary_created_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      summary TEXT, summary_up_to INTEGER, summary_created_at INTEGER, run_scope TEXT, resumed INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     );
-    INSERT INTO chat_sessions VALUES ('s1', 'Firing', '[]', 'idle', 'monitor', NULL, NULL, NULL, 0, 0);
+    INSERT INTO chat_sessions VALUES ('s1', 'Firing', '[]', 'idle', 'monitor', NULL, NULL, NULL, NULL, 0, 0, 0);
     CREATE TABLE session_timers (session_id TEXT PRIMARY KEY, fire_at INTEGER, note TEXT NOT NULL, set_at INTEGER NOT NULL);
     CREATE TABLE monitor_triggers (
       id TEXT PRIMARY KEY, monitor_id TEXT, triggered_at INTEGER, window_start INTEGER NOT NULL, session_id TEXT, reported TEXT

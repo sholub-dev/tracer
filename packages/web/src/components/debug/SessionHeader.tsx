@@ -107,6 +107,8 @@ interface SessionHeaderProps {
   /** Resolved title; while generating, the header waits and fades it in. */
   title?: string;
   meta: string[];
+  /** Tokens and cost; phones show them here, wider screens next to the composer. */
+  cost?: string;
   streaming?: boolean;
   /** Blocks Post-mortem and Compact (streaming or compacting). */
   busy?: boolean;
@@ -126,6 +128,7 @@ export function SessionHeader({
   chatId,
   title,
   meta,
+  cost,
   streaming = false,
   busy = false,
   readOnly = false,
@@ -162,6 +165,7 @@ export function SessionHeader({
           </h1>
           <p className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
             <span className="truncate">{meta.join(" · ")}</span>
+            {cost && <span className="shrink-0 tabular-nums sm:hidden">· {cost}</span>}
             {streaming && (
               <span className="flex shrink-0 items-center gap-1.5 font-medium text-primary">
                 <span aria-hidden="true">·</span>

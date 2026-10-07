@@ -73,7 +73,7 @@ export function sanitizeMessages(messages: UIMessage[]): UIMessage[] {
 export async function loadSessionMessages(
   db: Context["db"],
   sessionId: string,
-  newMessage: UIMessage,
+  newMessage?: UIMessage,
 ): Promise<{ messages: UIMessage[]; summary: string | null; summaryUpTo: number | null }> {
   const existing = await db.select().from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
   let previous: UIMessage[] = [];
@@ -85,7 +85,7 @@ export async function loadSessionMessages(
     }
   }
   return {
-    messages: [...sanitizeMessages(previous), newMessage],
+    messages: [...sanitizeMessages(previous), ...(newMessage ? [newMessage] : [])],
     summary: existing?.summary ?? null,
     summaryUpTo: existing?.summaryUpTo ?? null,
   };
@@ -112,6 +112,10 @@ export interface ChatAgentConfig {
   retryDelaysMs?: readonly number[];
   /** Fires once when the last attempt failed with an error; never on a user stop. */
   onFailed?: (error: string) => void;
+  /** Saved with the run so a restart can rebuild it; a run without one is not resumed. */
+  scope?: string;
+  /** Marks a run a restart resumed, so a second interruption does not resume it again. */
+  resumed?: boolean;
 }
 
 /**
@@ -516,7 +520,7 @@ When the user's question spans multiple providers, query each relevant provider 
 }
 
 export async function runChatAgent({
-  sessionId, messages: incoming, summary, summaryUpTo, context, collectTools, sessionTitle, retryDelaysMs = [], onFailed,
+  sessionId, messages: incoming, summary, summaryUpTo, context, collectTools, sessionTitle, retryDelaysMs = [], onFailed, scope, resumed,
 }: ChatAgentConfig) {
   const messages = stampSentTime(incoming, await getCurrentTimeText(context.db));
   const resolved = await resolveModel(context.db);
@@ -543,12 +547,14 @@ export async function runChatAgent({
         title: DEFAULT_SESSION_TITLE,
         messages: packed,
         status: "streaming",
+        runScope: scope ?? null,
+        resumed: resumed ? 1 : 0,
         createdAt: now,
         updatedAt: now,
       })
       .onConflictDoUpdate({
         target: chatSessions.id,
-        set: { messages: packed, status: "streaming", updatedAt: now },
+        set: { messages: packed, status: "streaming", runScope: scope ?? null, resumed: resumed ? 1 : 0, updatedAt: now },
       })
       .run();
   } catch (err) {

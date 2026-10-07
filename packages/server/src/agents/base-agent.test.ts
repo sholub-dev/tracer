@@ -17,6 +17,11 @@ import { SETTINGS_KEYS } from "../config.js";
 import type { Context } from "../trpc/context.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 import { runChatAgent, sanitizeMessages } from "./base-agent.js";
+import { resumeRuns, settleInterruptedRuns } from "./resume.js";
+import { ProviderRegistry as Registry } from "../providers/registry.js";
+import { encodeMessages } from "../lib/messages-codec.js";
+import { UNIFIED_SCOPE } from "@tracer-sh/shared";
+import { CONFIG } from "../config.js";
 import { getCurrentDateBlock, getCurrentTimeText } from "../lib/current-context.js";
 import { stampSentTime, withPromptCaching, withSentTimes } from "../llm/prompt-cache.js";
 
@@ -31,7 +36,9 @@ function memoryDb(): Db {
     CREATE TABLE provider_configs (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL UNIQUE, config TEXT NOT NULL, created_at INTEGER NOT NULL);
     CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
     CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, messages TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'idle',
-      kind TEXT, summary TEXT, summary_up_to INTEGER, summary_created_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+      kind TEXT, summary TEXT, summary_up_to INTEGER, summary_created_at INTEGER, run_scope TEXT, resumed INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+    CREATE TABLE tool_memories (id INTEGER PRIMARY KEY AUTOINCREMENT, tool_name TEXT NOT NULL, note TEXT NOT NULL, review_note TEXT, uid TEXT, created_at INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE monitor_triggers (id TEXT PRIMARY KEY, monitor_id TEXT, triggered_at INTEGER, window_start INTEGER NOT NULL, session_id TEXT, reported TEXT);
     CREATE TABLE agent_runs (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, agent_type TEXT NOT NULL, model TEXT,
       input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, cached_input_tokens INTEGER NOT NULL DEFAULT 0,
       reasoning_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0, duration_ms INTEGER, created_at INTEGER NOT NULL);
@@ -483,4 +490,73 @@ test("two tool calls in one step run together, are saved in one step, and a stop
   assert.deepEqual(midRun, [], "an unfinished step is not saved mid-run");
   const parts = stopped.saved.at(-1)!.parts.filter((p) => p.type.startsWith("tool-")) as { type: string; state: string; output: unknown }[];
   assert.deepEqual(parts.map((p) => [p.type, p.output]), [["tool-lookup", "a"], ["tool-slow", { error: "Aborted" }]]);
+});
+
+const INTERRUPTED: UIMessage[] = [
+  { id: "u1", role: "user", parts: [{ type: "text", text: "why?" }] },
+  { id: "", role: "assistant", parts: [{ type: "step-start" }, { type: "tool-lookup", toolCallId: "toolu_1", state: "output-available", input: {}, output: "ok" }] },
+];
+
+async function interruptedSession(db: Db, fields: Partial<typeof schema.chatSessions.$inferInsert> = {}) {
+  const now = Math.floor(Date.now() / 1000);
+  await db.insert(schema.chatSessions).values({
+    id: "s1", title: "t", messages: encodeMessages(INTERRUPTED), status: "streaming", runScope: UNIFIED_SCOPE, createdAt: now, updatedAt: now, ...fields,
+  }).run();
+}
+
+async function resumeAfterRestart(db: Db, context: Context) {
+  const runs = await settleInterruptedRuns(db);
+  await resumeRuns(context, runs);
+  while (context.activeStreams.size > 0) await new Promise((r) => setTimeout(r, 20));
+  return { runs, row: await db.select().from(schema.chatSessions).get() };
+}
+
+test("a restart resumes an interrupted run from its saved step without a new user message, and only once", async () => {
+  const { server, url, bodies } = await fakeAnthropic();
+  process.env.ANTHROPIC_BASE_URL = url;
+  try {
+    const db = memoryDb();
+    await db.insert(schema.providerConfigs).values({ type: "anthropic", config: JSON.stringify({ apiKey: "test" }) }).run();
+    await writeAppSetting(db, SETTINGS_KEYS.chatModel, { provider: "anthropic", modelId: "claude-test" });
+    const context: Context = { db, providers: new Registry(), activeStreams: new Map() };
+    await interruptedSession(db);
+
+    const first = await resumeAfterRestart(db, context);
+    assert.equal(first.runs.length, 1);
+    assert.equal(bodies.length, 1);
+    const sent = bodies[0].messages as { role: string; content: { type: string }[] }[];
+    assert.deepEqual(sent.map((m) => m.role), ["user", "assistant", "user"], "the saved tool step is sent; no user message is added");
+    assert.equal(sent.at(-1)!.content[0].type, "tool_result");
+    const saved = decodeMessages(first.row!.messages);
+    assert.deepEqual(saved.map((m) => m.role), ["user", "assistant"]);
+    assert.ok(saved[1].parts.some((p) => p.type === "tool-lookup") && saved[1].parts.some((p) => p.type === "text"), "the reply is continued");
+    assert.equal(first.row!.status, "done");
+    assert.equal(first.row!.resumed, 1);
+
+    // The run is interrupted again: it ends as done and is not resumed a second time.
+    await db.update(schema.chatSessions).set({ status: "streaming" }).run();
+    const second = await resumeAfterRestart(db, context);
+    assert.deepEqual(second.runs, []);
+    assert.equal(bodies.length, 1);
+    assert.equal(second.row!.status, "done");
+  } finally {
+    delete process.env.ANTHROPIC_BASE_URL;
+    server.close();
+  }
+});
+
+test("a restart does not resume a stopped run, an old run or a run without a scope", async () => {
+  const stopped = await retryRun({ hold: true }, [0], async (ctx) => {
+    await new Promise((r) => setTimeout(r, 100));
+    ctx.activeStreams.get("s1")!.controller.abort();
+  });
+  assert.equal(stopped.status, "done");
+
+  const db = memoryDb();
+  const old = Math.floor(Date.now() / 1000) - CONFIG.chatResumeMaxAgeSec - 60;
+  await interruptedSession(db, { id: "old", updatedAt: old });
+  await interruptedSession(db, { id: "unscoped", runScope: null });
+  assert.deepEqual(await settleInterruptedRuns(db), []);
+  const rows = await db.select().from(schema.chatSessions).all();
+  assert.deepEqual(rows.map((r) => r.status), ["done", "done"]);
 });

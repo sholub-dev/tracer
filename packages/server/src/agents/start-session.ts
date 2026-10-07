@@ -83,6 +83,7 @@ export async function startAgentSession(
       };
     },
     sessionTitle: firstUserMessageTitle,
+    scope: provider || UNIFIED_SCOPE,
     retryDelaysMs: CONFIG.agentRetryDelaysMs,
     onFailed: (error) => onComplete?.({ error }),
   });

@@ -1,15 +1,12 @@
 import { z } from "zod";
-import { CONFIDENCE } from "@tracer-sh/shared";
 import { tool, type Tool, type UIMessage } from "ai";
+import { findingFromMessages, type Finding } from "@tracer-sh/shared";
 
 export const SEVERITIES = ["high", "medium", "low"] as const;
 
 const alertSummarySchema = z.object({
   severity: z.enum(SEVERITIES)
     .describe("high: outage, users blocked or a key flow degraded; medium: limited impact; low: noise or no user impact"),
-  tldr: z.string().describe("One sentence: what broke and its impact, with the key number. Not a restatement of the monitor."),
-  rootCause: z.string().describe("Two or three sentences: why it happened, the chain from cause to errors, proven by query results."),
-  confidence: z.enum(CONFIDENCE).optional().describe("confirmed: a query result shows the cause itself and eliminates the strongest alternative. likely: the data points to it. unverified: the data does not show it."),
   policy: z.string().describe("The alert policy or condition that fired"),
   started: z.string().describe("The first bad minute in the data, with time zone"),
   status: z.string().describe("One of: stopped (last error at <time>); ongoing (errors in the latest minutes up to now); recurring (the repeat pattern, e.g. every hour since 06:00). Check the data up to now."),
@@ -28,7 +25,7 @@ export type AlertSummary = z.infer<typeof alertSummarySchema>;
 // Read back from the saved tool call: failed attempts are never saved, and it goes with the session.
 export function reportAlertSummaryTool(): Tool<AlertSummary, { recorded: true }> {
   return tool({
-    description: "Report the alert summary that is posted to Slack. Call it once when the investigation is done; a later call replaces it. "
+    description: "Report the alert details that Slack posts together with the answer card from report_finding. Call it once, alone in its step, after report_finding (and after report_issue_status when that tool is present); a later call replaces it. "
       + "Facts from query results only; write \"unknown\" when the data does not show it, never guess. "
       + "Name endpoints by route pattern, never raw URLs or IDs. No personal data such as emails, names or account numbers. "
       + "Never suggest fixes or actions, never add counts across endpoints, never mention sessions, session ids or Tracer.",
@@ -72,6 +69,15 @@ export function summaryFromMessages(messages: UIMessage[]): AlertSummary | null 
     }
   }
   return null;
+}
+
+const isReport = (p: UIMessage["parts"][number]) => p.type === "tool-report_alert_summary" && "state" in p && p.state === "output-available";
+
+/** The finding that goes with the alert details: a finding from a later follow-up turn must not replace it. */
+export function alertFindingFromMessages(messages: UIMessage[]): Finding | null {
+  let end = messages.length;
+  while (end > 0 && !messages[end - 1].parts.some(isReport)) end--;
+  return findingFromMessages(end > 0 ? messages.slice(0, end) : messages);
 }
 
 /** First prose sentence: the summary of a run that never reported one. */

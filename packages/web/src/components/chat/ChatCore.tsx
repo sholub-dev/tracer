@@ -23,7 +23,6 @@ import { WEB_CONFIG } from "../../lib/config";
 import { serverFetch } from "../../lib/server-fetch";
 import { IS_IOS } from "../../lib/platform";
 import { preloadResultChunks } from "../charts/ResultView";
-import { AlertSummaryPanel, alertSummaryOf } from "./AlertSummaryPanel";
 import { WorkingIndicator } from "./ChatIndicators";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { Composer, type Attachment } from "./Composer";
@@ -261,7 +260,6 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   const { collapse, analysisOnlyMsg } = useCompactedMessages(messages, collapseCount, analysisOnlyIndex);
   const firstRow = showAll ? collapse : Math.max(collapse, messages.length - INITIAL_ROWS);
 
-  const alert = useMemo(() => (compact ? null : alertSummaryOf(messages)), [compact, messages]);
   const meta = useMemo<SourceMeta>(() => ({ sourceTitle, sourceCreatedAt, resolveSourceTitle }), [sourceTitle, sourceCreatedAt, resolveSourceTitle]);
 
   const prevStatus = useRef(status);
@@ -443,7 +441,6 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
           </>
         }
       >
-        {alert && <AlertSummaryPanel summary={alert.summary} triage={alert.triage} />}
         {beforeMessages}
         {messages.length === 0 && status !== "submitted" && (
           emptyHint ?? <p className="py-16 text-center text-sm text-muted-foreground">{placeholder}</p>

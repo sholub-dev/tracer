@@ -1,11 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { isSlackWebhook, monitorAlert, parseMentions, postSlack, redact, triageUpdate, verdictOf } from "./slack.js";
+import type { Finding } from "@tracer-sh/shared";
 import type { AlertSummary } from "../monitors/alert-summary.js";
 
 const issue = (service: string, endpoint: string, errors: string, userImpact = "", journeyStep = "") => ({ service, endpoint, errors, userImpact, journeyStep });
+const finding = (f: Partial<Finding> = {}): Finding => ({ kind: "root_cause", headline: "", details: "", points: [], confidence: "likely", ...f });
 const summary = (s: Partial<AlertSummary>): AlertSummary => ({
-  severity: "low", tldr: "", rootCause: "", policy: "", started: "", status: "", issues: [], seenBefore: "", ...s,
+  severity: "low", policy: "", started: "", status: "", issues: [], seenBefore: "", ...s,
 });
 
 test("isSlackWebhook accepts only Slack webhook URLs", () => {
@@ -27,10 +29,10 @@ test("parseMentions maps IDs and specials, rejects names", () => {
 test("verdictOf hides unknowns and shows no summary text without a report", () => {
   assert.deepEqual(
     verdictOf(summary({
-      severity: "high", tldr: "**DB** timeouts after the 1.2 deploy.", rootCause: "Pool size dropped to 5 in 1.2.", policy: "Errors", started: "unknown",
+      severity: "high", policy: "Errors", started: "unknown",
       issues: [issue("`pay-api`", "/pay", "3 × Timeout", "unknown", "Checkout"), issue("unknown", "/cart", "1 × Timeout"), issue("n/a", "", "")],
       seenBefore: "No.",
-    })),
+    }), finding({ headline: "**DB** timeouts after the 1.2 deploy.", details: "Pool size dropped to 5 in 1.2.", confidence: undefined })),
     {
       severity: "high",
       summary: "DB timeouts after the 1.2 deploy.",
@@ -41,7 +43,14 @@ test("verdictOf hides unknowns and shows no summary text without a report", () =
       seenBefore: "No.",
     },
   );
-  assert.deepEqual(verdictOf(null), { severity: "unknown", summary: "", rootCause: "", confidence: "", facts: [], issues: [], seenBefore: "" });
+  assert.deepEqual(verdictOf(null, null), { severity: "unknown", summary: "", rootCause: "", confidence: "", facts: [], issues: [], seenBefore: "" });
+});
+
+test("verdictOf takes the headline, root cause and confidence from the finding", () => {
+  const v = verdictOf(null, finding({ headline: "Pool exhausted.", details: "The pool held 50 of 50.", confidence: "confirmed" }));
+  assert.deepEqual([v.summary, v.rootCause, v.confidence], ["Pool exhausted.", "The pool held 50 of 50.", "confirmed"]);
+  const s = verdictOf(summary({ severity: "high" }), finding({ kind: "summary", headline: "Checkout is healthy.", details: "Errors stayed at 0.2%.", confidence: undefined }));
+  assert.deepEqual([s.severity, s.summary, s.rootCause], ["high", "Checkout is healthy.", ""]);
 });
 
 test("redact masks personal data, keeps normal text", () => {
@@ -62,10 +71,11 @@ test("monitorAlert builds one compact section and a footer, escapes", () => {
     name: "Errors <prod>",
     triggeredAt: 1_767_225_600,
     summary: summary({
-      severity: "high", tldr: "Checkout is down & failing.", rootCause: "pay-db ran out of connections.", confidence: "likely", policy: "Errors", started: "10:02 UTC",
+      severity: "high", policy: "Errors", started: "10:02 UTC",
       status: "stopped (last error at 10:09 UTC)", issues: [issue("pay-api", "/pay", "40 × Timeout", "Pay fails", "Checkout"), issue("unknown", "/cart", "1 × <Err>")],
       seenBefore: "No.",
     }),
+    finding: finding({ headline: "Checkout is down & failing.", details: "pay-db ran out of connections." }),
     timeZone: "UTC",
     mentions: "U0123ABCD",
   });
@@ -86,26 +96,27 @@ test("monitorAlert builds one compact section and a footer, escapes", () => {
 });
 
 test("monitorAlert without a summary posts the no-root-cause fallback", () => {
-  const { text } = monitorAlert({ name: "m", triggeredAt: 0, summary: null, timeZone: "UTC" });
+  const { text } = monitorAlert({ name: "m", triggeredAt: 0, summary: null, finding: null, timeZone: "UTC" });
   assert.match(text, /Monitor "m" fired; no root cause found/);
 });
 
 test("monitorAlert stays under Slack's section limit", () => {
   const long = "x".repeat(400);
-  const s = summary({ tldr: long, rootCause: long.repeat(2), issues: Array.from({ length: 5 }, () => issue(long, long, long, long, long)), seenBefore: long });
-  const section = monitorAlert({ name: "m", triggeredAt: 0, summary: s, timeZone: "UTC" }).blocks[0] as { text: { text: string } };
+  const s = summary({ issues: Array.from({ length: 5 }, () => issue(long, long, long, long, long)), seenBefore: long });
+  const section = monitorAlert({ name: "m", triggeredAt: 0, summary: s, finding: finding({ headline: long, details: long.repeat(2) }), timeZone: "UTC" }).blocks[0] as { text: { text: string } };
   assert.ok(section.text.text.length <= 3000);
 });
 
 test("verdictOf redacts before clipping", () => {
-  const service = verdictOf(summary({ issues: [issue(`${"x".repeat(290)} jo.doe@corp.com`, "", "")] })).issues[0][0];
+  const service = verdictOf(summary({ issues: [issue(`${"x".repeat(290)} jo.doe@corp.com`, "", "")] }), null).issues[0][0];
   assert.ok(service.endsWith("[email]"), service);
 });
 
 test("monitorAlert always keeps the Action line and skips mentions when no ping is needed", () => {
   const alert = (ping?: boolean, action = "Acked and closed in New Relic: Errors on /pay <x> by jo@corp.com") => monitorAlert({
     name: "m", triggeredAt: 0, timeZone: "UTC", mentions: "U0123ABCD", ping,
-    summary: summary({ tldr: "Noise.", policy: "Errors", issues: [issue("api", "/pay", "1 × Timeout")] }),
+    summary: summary({ policy: "Errors", issues: [issue("api", "/pay", "1 × Timeout")] }),
+    finding: finding({ kind: "summary", headline: "Noise." }),
     action,
   });
   const { blocks } = alert(false);

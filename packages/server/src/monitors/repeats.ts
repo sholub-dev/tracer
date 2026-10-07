@@ -1,14 +1,14 @@
 import { and, desc, eq, gte, isNotNull, lt } from "drizzle-orm";
 import { z } from "zod";
 import { tool, type Tool, type UIMessage } from "ai";
-import { SESSION_KIND } from "@tracer-sh/shared";
+import { SESSION_KIND, type Finding } from "@tracer-sh/shared";
 import type { Db } from "../db/driver.js";
 import { chatSessions, monitorTriggers } from "../db/schema.js";
 import { extractAnalysis } from "../agents/analysis.js";
 import { CONFIG } from "../config.js";
 import { decodeMessages } from "../lib/messages-codec.js";
 import { redact } from "../integrations/slack.js";
-import { dismissalFromMessages, firstSentence, summaryFromMessages, type AlertSummary } from "./alert-summary.js";
+import { alertFindingFromMessages, dismissalFromMessages, firstSentence, summaryFromMessages, type AlertSummary } from "./alert-summary.js";
 import type { Group } from "./condition.js";
 
 export interface TriggerGroup extends Group {
@@ -22,6 +22,7 @@ export interface PastSession {
   keys: string[];
   analysis: string;
   report: AlertSummary | null;
+  finding: Finding | null;
 }
 
 const PAST_SESSIONS_LIMIT = 5;
@@ -67,18 +68,18 @@ export function byRelevance<T extends { keys: string[] }>(newestFirst: T[], curr
   return [...newestFirst.filter(shares), ...newestFirst.filter((p) => !shares(p))];
 }
 
-/** A session's analysis and the summary it reported. */
-export async function readOutcome(db: Db, sessionId: string): Promise<{ analysis: string; report: AlertSummary | null; dismissed: string | null }> {
+/** A session's analysis, the answer card and the alert details it reported. */
+export async function readOutcome(db: Db, sessionId: string): Promise<{ analysis: string; report: AlertSummary | null; finding: Finding | null; dismissed: string | null }> {
   const row = await db.select({ messages: chatSessions.messages }).from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
   try {
     const messages = row ? decodeMessages(row.messages) : [];
-    return { analysis: extractAnalysis(messages).analysis, report: summaryFromMessages(messages), dismissed: dismissalFromMessages(messages) };
+    return { analysis: extractAnalysis(messages).analysis, report: summaryFromMessages(messages), finding: alertFindingFromMessages(messages), dismissed: dismissalFromMessages(messages) };
   } catch {
-    return { analysis: "", report: null, dismissed: null };
+    return { analysis: "", report: null, finding: null, dismissed: null };
   }
 }
 
-export const outcomeSummary = (o: { analysis: string; report: AlertSummary | null }) => o.report?.tldr ?? firstSentence(o.analysis);
+export const outcomeSummary = (o: { analysis: string; finding: Finding | null }) => o.finding?.headline ?? firstSentence(o.analysis);
 /** The one-line summary of a past run, for the prompt. */
 export const pastSummary = (p: PastSession) => redact(outcomeSummary(p));
 
@@ -96,13 +97,13 @@ export async function pastSessions(db: Db, monitorId: string, currentKeys: strin
   const picked: PastSession[] = [];
   for (const t of byRelevance(triggers, currentKeys)) {
     if (picked.length === PAST_SESSIONS_LIMIT) break;
-    const { analysis, report, dismissed } = await readOutcome(db, t.sessionId);
-    if (dismissed === null && (analysis || report)) picked.push({ ...t, report, analysis: analysis.length > ANALYSIS_MAX_CHARS ? `${analysis.slice(0, ANALYSIS_MAX_CHARS)} …[truncated]` : analysis });
+    const { analysis, report, finding, dismissed } = await readOutcome(db, t.sessionId);
+    if (dismissed === null && (analysis || report || finding)) picked.push({ ...t, report, finding, analysis: analysis.length > ANALYSIS_MAX_CHARS ? `${analysis.slice(0, ANALYSIS_MAX_CHARS)} …[truncated]` : analysis });
   }
   return picked.sort((a, b) => b.triggeredAt - a.triggeredAt);
 }
 
-type PastSessionResult = { error: string } | { sessionId: string; triggeredAt: string; groups: string[]; summary: AlertSummary | null; analysis: string; note: string };
+type PastSessionResult = { error: string } | { sessionId: string; triggeredAt: string; groups: string[]; summary: AlertSummary | null; finding: Finding | null; analysis: string; note: string };
 
 export function readPastSessionTool(load: () => PastSession[] | Promise<PastSession[]>): Tool<{ sessionId: string }, PastSessionResult> {
   let sessions: PastSession[] | undefined;
@@ -113,7 +114,7 @@ export function readPastSessionTool(load: () => PastSession[] | Promise<PastSess
       sessions ??= await load();
       const s = sessions.find((p) => p.sessionId === sessionId);
       if (!s) return { error: `Session ${sessionId} is not one of the listed past sessions` };
-      return { sessionId, triggeredAt: new Date(s.triggeredAt * 1000).toISOString(), groups: s.keys, summary: s.report, analysis: s.analysis, note: "Earlier model-written analysis. Not re-checked. Re-query before quoting its numbers." };
+      return { sessionId, triggeredAt: new Date(s.triggeredAt * 1000).toISOString(), groups: s.keys, summary: s.report, finding: s.finding, analysis: s.analysis, note: "Earlier model-written analysis. Not re-checked. Re-query before quoting its numbers." };
     },
   });
 }

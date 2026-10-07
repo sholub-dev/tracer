@@ -3,7 +3,7 @@ import type { ProviderRegistry } from "../providers/registry.js";
 import type { ChatToolWriter as StreamWriter, ChatMode, SessionKind } from "@tracer-sh/shared";
 import { DEFAULT_CHAT_MODE, SESSION_KIND } from "@tracer-sh/shared";
 import { setTimerTool } from "./timer-tool.js";
-import { findingTools } from "./finding-tool.js";
+import { reportFindingTool } from "./finding-tool.js";
 import { collectBaseTools, type BaseToolSetup } from "./shared-tool-setup.js";
 
 type ChatToolsResult = Omit<BaseToolSetup, "connectedProviders" | "tools"> & {
@@ -36,5 +36,5 @@ const TRIAGE_TOOLS = new Set(["ack_nr_issue", "close_nr_issue"]);
 /** The provider tools plus the tools every chat session gets. */
 export function withSessionTools(tools: Record<string, unknown>, db: Db, sessionId: string, kind?: SessionKind, extras: Record<string, unknown> = {}): Record<string, unknown> {
   const own = kind === SESSION_KIND.MONITOR ? Object.fromEntries(Object.entries(tools).filter(([name]) => !TRIAGE_TOOLS.has(name))) : tools;
-  return { ...own, set_timer: setTimerTool(db, sessionId), ...findingTools(kind), ...extras };
+  return { ...own, set_timer: setTimerTool(db, sessionId), report_finding: reportFindingTool(), ...extras };
 }

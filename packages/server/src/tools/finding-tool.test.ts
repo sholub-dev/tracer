@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SESSION_KIND, findingFromMessages, findingMarkdown } from "@tracer-sh/shared";
-import { findingTools } from "./finding-tool.js";
 import { WRITE_TOOLS } from "./tool-gate.js";
 import { withSessionTools } from "./chat-tools.js";
 import type { Db } from "../db/driver.js";
@@ -26,10 +25,9 @@ test("findingFromMessages skips invalid input and unfinished calls", () => {
   assert.equal(findingFromMessages([]), null);
 });
 
-test("chat runs get report_finding and monitor runs do not", () => {
-  assert.ok("report_finding" in findingTools());
-  assert.ok("report_finding" in findingTools(SESSION_KIND.API));
-  assert.deepEqual(findingTools(SESSION_KIND.MONITOR), {});
+test("every session kind gets report_finding", () => {
+  const db = {} as Db;
+  for (const kind of [undefined, SESSION_KIND.API, SESSION_KIND.MONITOR]) assert.ok("report_finding" in withSessionTools({}, db, "s", kind), String(kind));
   assert.ok(WRITE_TOOLS.has("report_finding"));
 });
 
@@ -39,7 +37,7 @@ test("monitor runs leave the New Relic issue actions to triage", () => {
   const chat = withSessionTools(provider, db, "s");
   for (const name of ["execute_nrql", "list_nr_issues", "ack_nr_issue", "close_nr_issue", "set_timer", "report_finding"]) assert.ok(name in chat, name);
   const monitor = withSessionTools(provider, db, "s", SESSION_KIND.MONITOR, { report_alert_summary: {} });
-  assert.deepEqual(Object.keys(monitor).sort(), ["execute_nrql", "list_nr_issues", "report_alert_summary", "set_timer"]);
+  assert.deepEqual(Object.keys(monitor).sort(), ["execute_nrql", "list_nr_issues", "report_alert_summary", "report_finding", "set_timer"]);
 });
 
 test("findingMarkdown shows the confidence and a to-confirm line only when present", () => {

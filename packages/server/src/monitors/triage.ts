@@ -120,7 +120,7 @@ export function issuesPrompt(open: AiIssue[]): string[] {
     "",
     "New Relic issues of this firing that are still open:",
     ...issueList(open.map((i) => ({ issueId: i.issueId, conditionName: conditionOf(i), title: titleOf(i) }))),
-    `Before report_alert_summary, ${REPORT_INSTRUCTION} Base it on the data up to now. Call report_issue_status alone in its own step, then report_alert_summary alone in its own step, in that order.`,
+    `After report_finding, ${REPORT_INSTRUCTION} Base it on the data up to now. Make the calls in this order: report_finding, then report_issue_status alone in its own step, then report_alert_summary alone in its own step, all before any visual.`,
     FOLLOW_UP_INSTRUCTION,
   ];
 }
@@ -137,7 +137,7 @@ export function closedCheckPrompt(found: FoundIssues | null): string[] {
     "",
     "First check that this alert is still open. Query NrAiIncident for this firing's incidents up to now, with latest(event) FACET incidentId and the monitor query's filters. An incident whose latest event is 'close' is closed: a person resolved it, or another Tracer device handled it.",
     ...known,
-    "If every incident of this firing is closed, call dismiss_alert alone with the result that shows it, then stop: no investigation, no report_alert_summary, nothing goes to Slack. If any incident is still open, or the data does not show its state, investigate.",
+    "If every incident of this firing is closed, call dismiss_alert alone with the result that shows it, then report_finding with that result, then stop: no investigation, no report_alert_summary, nothing goes to Slack. If any incident is still open, or the data does not show its state, investigate.",
   ];
 }
 

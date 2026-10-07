@@ -126,8 +126,8 @@ export const CONFIG = {
    *  is not retried inside npm, so the whole install is retried instead. */
   npmInstallAttempts: 3,
   npmInstallRetryDelayMs: 3_000,
-  /** Re-run the background version check when the cached result is older than this. */
-  updateCheckTtlMs: 6 * 60 * 60 * 1000,
+  /** How often the server re-checks npm for a new version. */
+  updateCheckIntervalMs: 60 * 60 * 1000,
 
   // ── Dashboard defaults ──
 

@@ -1,7 +1,7 @@
 import "./node-version.js";
 import { serve } from "@hono/node-server";
 import { CONFIG } from "./config.js";
-import { checkForUpdateBackground, setRestartHandler } from "./updater.js";
+import { startUpdateChecks, setRestartHandler } from "./updater.js";
 import { db, setupDriver } from "./db/client.js";
 import { registerGcpProvider } from "./providers/gcp/register.js";
 import { registerApiRoutes } from "./http/routes/api.js";
@@ -12,7 +12,7 @@ import { startRuntime } from "./runtime.js";
 export type { AppRouter } from "./trpc/router.js";
 
 async function main() {
-  checkForUpdateBackground();
+  startUpdateChecks();
   const { providers, context, app, scheduler } = await startRuntime(db, setupDriver, registerGcpProvider);
   registerApiRoutes(app, context);
   // Last: it answers every remaining GET with the web app.

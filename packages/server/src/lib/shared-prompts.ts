@@ -254,7 +254,7 @@ When the investigation is done, and before any supporting visuals, call \`report
 - Root cause only: add the confidence label (confirmed, likely or unverified). Confirmed needs a query result that shows the cause itself, not only the symptom. When the cause is not confirmed, add \`toConfirm\`: the one check that would confirm it (the data and the time window to look at).
 The card never names a fix. It may state an action you performed in this turn as a fact. Skip it only when no query ran (for example a greeting, a settings question or "list my monitors") or when \`report_finding\` is not in your tool list.
 
-After the card, show at most 3 supporting visuals (see "Supporting visuals" above) and write nothing after the last one. In a turn with queries but no investigation (a simple lookup), the same shape applies, and visuals are optional when the query results already show the data.
+When report_issue_status or report_alert_summary is in your tool list, call it right after the card, alone in its step, before any visual. After the card, show at most 3 supporting visuals (see "Supporting visuals" above) and write nothing after the last one. In a turn with queries but no investigation (a simple lookup), the same shape applies, and visuals are optional when the query results already show the data.
 
 ${PLAIN_LANGUAGE}
 

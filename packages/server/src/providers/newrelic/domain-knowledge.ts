@@ -6,8 +6,8 @@
 export const NR_AUTH_STOP_RULE = `## Authentication Failure — STOP IMMEDIATELY
 If any query returns an authentication or permission error (e.g. "Invalid API key", "401", "403", "Unauthorized"), **STOP ALL FURTHER TOOL CALLS** and report:
 1. The exact error message received.
-2. That the New Relic API key needs to be checked in Settings.
-Do NOT retry — auth errors cannot be resolved by the sub-agent.
+2. That the New Relic API key needs checking in Settings.
+Do NOT retry.
 Sibling calls in the same step may return the same auth error; treat them as one failure.`;
 
 const NRQL_QUICK_REFERENCE = `## NRQL Reference
@@ -105,7 +105,7 @@ _Flag if:_ Current rate is more than 50% relatively higher than baseline, OR the
 
 **[ ] Check 3 — External Services Errors**
 Measure the error rate of outbound HTTP calls this service makes to external services or APIs.
-_Why:_ A failing downstream dependency will cascade into this service's errors. This distinguishes "our code is broken" from "something we depend on is broken."
+_Why:_ Compares this service's errors with its downstream calls' errors. A shared onset is a candidate link to test, not a finding.
 _Applicability:_ Only run this check if the service makes external calls. If it does not, mark as N/A.
 _Baseline:_ Compare non-2xx response rate against the same time range 1 week ago (same day of week).
 _Flag if:_ Non-2xx rate is more than 2× the baseline, or it newly appears where the baseline was near zero.
@@ -147,7 +147,7 @@ _Flag if:_ P75 is more than 30% higher than baseline.
 
 **[ ] Check 5 — AJAX Success Requests Drop**
 Measure the count of AJAX requests that completed with a successful (2xx) response.
-_Why:_ A drop can indicate a broken feature preventing users from reaching certain flows, a routing or CDN blockage, or an authentication/session issue causing requests to be rejected upstream.
+_Why:_ Fewer successful AJAX requests. Possible meanings to test, not findings: a feature not reached, a routing or CDN change, rejected requests.
 _Baseline:_ Compare against the same time range exactly 1 week ago (same day of week). **Never compare different days of the week.**
 _Flag if:_ Count is more than 20% lower than the baseline.
 
@@ -197,7 +197,7 @@ Key difference: Transaction only has boolean \`error\`; TransactionError has the
 
 **Log** — Forensic detail. Auto-decorated with trace linking when logs-in-context is enabled.
 Fields: \`message\`, \`level\` / \`log.level\`, \`entity.name\`, \`hostname\`, \`trace.id\`, \`span.id\`, \`entity.guid\`.
-Note: Linking fields (\`trace.id\`, \`span.id\`) require agent logs-in-context. Missing = agent too old or feature not enabled.
+Note: Linking fields (\`trace.id\`, \`span.id\`) require agent logs-in-context. If missing, the data does not link logs to traces; the reason is unknown.
 
 **Span** — Sub-transaction operations (DB, HTTP, method timings). **HEAVILY SAMPLED: ~10 traces/min (120 for Java), max 2000 spans/min.** Never use for aggregate counts/averages — counts will be far too low.
 Fields: \`name\`, \`duration\`, \`category\` (generic/http/datastore/external), \`span.kind\`, \`traceId\`, \`parentId\`, \`nr.entryPoint\`, \`http.url\`, \`http.statusCode\`, \`db.statement\`, \`error.class\`, \`error.message\`.
@@ -220,7 +220,7 @@ const NR_CROSS_SIGNAL = `## Cross-Signal Correlation
 const NR_ALERTS = `## Alerts: Issues, Incidents, Policies
 - A **condition** belongs to a **policy**. A condition opens an **incident**. New Relic groups related incidents into one **issue**.
 - \`list_nr_issues\` gives issue state (CREATED, ACTIVATED, DEACTIVATED, CLOSED) and ids. Use it for "what is open now".
-- \`ack_nr_issue\` and \`close_nr_issue\` change the issue in New Relic. Use them when the user asks, or when the session's evidence supports it. State the action and its result in the answer.
+- \`ack_nr_issue\` and \`close_nr_issue\` change the issue in New Relic. Use them only when the user asks. State the action and its result in the answer.
 - Incident history: NRQL on \`NrAiIncident\`. Fields: \`incidentId\`, \`event\` ('open' or 'close'), \`policyName\`, \`policyId\`, \`conditionName\`, \`conditionId\`.`;
 
 export const NR_DOMAIN_KNOWLEDGE = `${NR_QUERY_DEFAULTS}

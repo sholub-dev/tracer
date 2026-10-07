@@ -14,9 +14,15 @@ test("findingFromMessages takes the last successful valid call", () => {
   assert.deepEqual(findingFromMessages(msgs(call(valid), call({ ...valid, headline: "later" }))), { ...valid, headline: "later" });
 });
 
+test("findingFromMessages reads a root cause without confidence as unverified and accepts no points", () => {
+  const { confidence: _c, ...bare } = valid;
+  assert.deepEqual(findingFromMessages(msgs(call({ ...bare, points: [] }))), { ...bare, points: [], confidence: "unverified" });
+  assert.match(findingMarkdown({ ...bare, points: [] }), /^\*\*Root cause\*\* \(unverified\):/);
+});
+
 test("findingFromMessages skips invalid input and unfinished calls", () => {
   assert.deepEqual(findingFromMessages(msgs(call(valid), call({ headline: "x" }), call({ ...valid, headline: "z" }, "input-available"))), valid);
-  assert.equal(findingFromMessages(msgs(call({ ...valid, points: ["one"] }))), null);
+  assert.equal(findingFromMessages(msgs(call({ ...valid, points: ["1", "2", "3", "4", "5"] }))), null);
   assert.equal(findingFromMessages([]), null);
 });
 

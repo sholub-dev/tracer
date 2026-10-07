@@ -285,7 +285,7 @@ When the user's question spans multiple providers, query each relevant provider 
   }
 
   if (summaryForPrompt) {
-    systemPrompt += `\n\n## Earlier conversation summary\nThe earlier part of this conversation was compacted to save context. The summary below replaces those messages: the work it describes is already done — do NOT redo it. Reuse its recorded results, identifiers and queries as facts. Its conclusions are earlier claims: keep them while the data agrees, and test them again when a new result contradicts them.\n\n<conversation_summary>\n${summaryForPrompt}\n</conversation_summary>`;
+    systemPrompt += `\n\n## Earlier conversation summary\nThe earlier part of this conversation was compacted to save context. The summary below replaces those messages: the work it describes is already done — do NOT redo it. Reuse its identifiers and queries. Its numbers are second-hand: re-run the query before you quote a number in a finding card. Its conclusions are earlier claims: keep them while the data agrees, and test them again when a new result contradicts them.\n\n<conversation_summary>\n${summaryForPrompt}\n</conversation_summary>`;
   }
 
   const cached = withPromptCaching(provider, systemPrompt, providerOptions);

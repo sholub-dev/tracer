@@ -1,16 +1,19 @@
 // ── Helpers ──
 
+// toFixed(2) would turn 0.004 into "0.00"
+const smallOrFixed = (n: number) => Math.abs(n) < 1 ? Number(n.toPrecision(3)).toString() : n.toFixed(2);
+
 function fmtVal(v: unknown): string {
   if (v == null) return "—";
   if (typeof v === "number") {
     if (Number.isInteger(v) || Math.abs(v) > 1000) return v.toLocaleString();
-    return v.toFixed(2);
+    return smallOrFixed(v);
   }
   if (typeof v === "string") {
     const n = Number(v);
     if (!isNaN(n) && v.trim() !== "") {
       if (Number.isInteger(n) || Math.abs(n) > 1000) return n.toLocaleString();
-      return n.toFixed(2);
+      return smallOrFixed(n);
     }
     return v;
   }
@@ -119,6 +122,7 @@ function formatTimeSeries(data: unknown): string {
 
   const MAX_ROWS = 20;
   const rows: string[][] = [];
+  let shown = 0;
 
   for (const ts of series) {
     if (rows.length >= MAX_ROWS) break;
@@ -135,20 +139,39 @@ function formatTimeSeries(data: unknown): string {
     const points = Array.isArray(t.points) ? (t.points as Record<string, unknown>[]) : [];
     if (points.length === 0) {
       rows.push(["—", String(metricName), "no data"]);
+      shown++;
       continue;
     }
 
-    // Downsample to at most 5 points per series
+    // Downsample to about 5 points per series, keeping the peak and low points
     let displayPoints = points;
     let pointNote = "";
     if (points.length > 5) {
       const step = Math.ceil(points.length / 5);
-      displayPoints = points.filter((_, i) => i % step === 0);
-      pointNote = ` (${points.length} pts total)`;
+      const keep = new Set<number>();
+      for (let i = 0; i < points.length; i += step) keep.add(i);
+      let max = -1;
+      let min = -1;
+      const nums = points.map((p) => {
+        const v = (p.value as Record<string, unknown> | undefined);
+        const n = Number(v?.int64Value ?? v?.doubleValue);
+        return Number.isFinite(n) ? n : null;
+      });
+      nums.forEach((n, i) => {
+        if (n === null) return;
+        if (max < 0 || n > nums[max]!) max = i;
+        if (min < 0 || n < nums[min]!) min = i;
+      });
+      if (max >= 0) keep.add(max);
+      if (min >= 0) keep.add(min);
+      displayPoints = points.filter((_, i) => keep.has(i));
+      pointNote = ` (${points.length} pts total, peak and low kept)`;
     }
 
+    // Show a series whole or not at all, so its kept peak is never cut off.
+    if (rows.length > 0 && rows.length + displayPoints.length > MAX_ROWS) break;
+    shown++;
     for (const pt of displayPoints) {
-      if (rows.length >= MAX_ROWS) break;
       const p = pt as Record<string, unknown>;
       const interval = p.interval as Record<string, unknown> | undefined;
       const time = String(interval?.endTime ?? interval?.startTime ?? "—");
@@ -161,7 +184,8 @@ function formatTimeSeries(data: unknown): string {
   }
 
   if (rows.length === 0) return "Time series returned but no data points found.";
-  return mdTable(["Time", "Metric", "Value"], rows);
+  const omitted = series.length - shown;
+  return mdTable(["Time", "Metric", "Value"], rows) + (omitted > 0 ? `\n\n*(${omitted} more series omitted)*` : "");
 }
 
 function formatSpans(spans: unknown[]): string {

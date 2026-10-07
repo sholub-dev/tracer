@@ -6,10 +6,10 @@ export const FINDING_KIND = ["root_cause", "summary"] as const;
 
 export const findingSchema = z.object({
   kind: z.enum(FINDING_KIND).describe("root_cause when the turn explains why something happened; summary for status, counts, trends and lookups"),
-  headline: z.string().describe("One sentence. root_cause: what caused it. summary: the main takeaway with its key number. No \"Root cause:\" or \"Summary:\" prefix."),
-  details: z.string().describe("2 to 5 sentences: the direct, complete answer to the user's question with the key numbers and the time window, from query results. Inline **bold** and `code` allowed; no lists, no headings."),
-  points: z.array(z.string()).min(2).max(4).describe("2 to 4 short facts, each with a number or time taken from a query result"),
-  confidence: z.enum(CONFIDENCE).optional().describe("root_cause only: confirmed only when a query result rules out the strongest alternative. Ignored for summary."),
+  headline: z.string().describe("One sentence. root_cause: what caused it (a change, condition or failing dependency), never the symptom restated with its numbers. summary: the main takeaway with its key number. When the data does not show the cause, state what the data shows and where it stops, and set confidence to unverified. No \"Root cause:\" or \"Summary:\" prefix."),
+  details: z.string().describe("1 to 5 sentences: the first sentence answers the question directly; the rest completes the answer to the user's question with the key numbers and the time window, from query results. Inline **bold** and `code` allowed; no lists, no headings."),
+  points: z.array(z.string()).max(4).describe("0 to 4 facts with a number or time from a query result, only facts not already in details"),
+  confidence: z.enum(CONFIDENCE).optional().describe("root_cause only: confirmed only when a query result shows the cause itself, not only the symptom, and rules out the strongest alternative. Ignored for summary."),
   toConfirm: z.string().optional().describe("root_cause only: one check that would confirm the cause, naming the data and the time window to look at, e.g. \"Gateway pool metrics 14:35-14:45\". Never a fix or an action on the system. Omit when confidence is confirmed."),
 });
 
@@ -33,14 +33,14 @@ export function findingFromMessages(messages: ReadonlyArray<{ parts: ReadonlyArr
       const parsed = findingSchema.safeParse(normalize(p.input));
       if (!parsed.success) continue;
       const { kind, headline, details, points } = parsed.data;
-      return kind === "summary" ? { kind, headline, details, points } : parsed.data;
+      return kind === "summary" ? { kind, headline, details, points } : { ...parsed.data, confidence: parsed.data.confidence ?? "unverified" };
     }
   }
   return null;
 }
 
 export function findingMarkdown(f: Finding): string {
-  const head = f.kind === "summary" ? "**Summary:**" : f.confidence ? `**Root cause** (${f.confidence}):` : "**Root cause:**";
+  const head = f.kind === "summary" ? "**Summary:**" : `**Root cause** (${f.confidence ?? "unverified"}):`;
   const confirm = f.toConfirm ? `\n\n**To confirm:** ${f.toConfirm}` : "";
   const details = f.details ? `${f.details}\n\n` : "";
   return `${head} ${f.headline}\n\n${details}${f.points.map((e) => `- ${e}`).join("\n")}${confirm}`;

@@ -6,10 +6,13 @@ import { buildNewRelicIssueTools, createNewRelicDirectTools } from "./tools.js";
 const stub = (over: Record<string, unknown> = {}) => ({
   ackIssue: async () => ({ error: "ack failed" }),
   resolveIssue: async () => ({ error: "close failed" }),
-  aiIssues: async () => [
-    { issueId: "i1", state: "ACTIVATED", title: ["T1"], conditionName: ["C1"], incidentIds: ["n1"] },
-    { issueId: "i2", state: "CLOSED", title: null, conditionName: null, incidentIds: null },
-  ],
+  aiIssuesPage: async () => ({
+    issues: [
+      { issueId: "i1", state: "ACTIVATED", title: ["T1"], conditionName: ["C1"], incidentIds: ["n1"] },
+      { issueId: "i2", state: "CLOSED", title: null, conditionName: null, incidentIds: null },
+    ],
+    truncated: false,
+  }),
   ...over,
 }) as unknown as NewRelicProvider;
 
@@ -30,6 +33,12 @@ test("list_nr_issues filters by state and returns an error instead of throwing",
   const tools = buildNewRelicIssueTools(stub()) as Record<string, any>;
   const out = await tools.list_nr_issues.execute({ states: ["ACTIVATED"] }, {});
   assert.deepEqual(out.issues, [{ issueId: "i1", state: "ACTIVATED", title: "T1", conditionName: "C1", incidentIds: ["n1"] }]);
-  const failing = buildNewRelicIssueTools(stub({ aiIssues: async () => { throw new Error("boom"); } })) as Record<string, any>;
+  const failing = buildNewRelicIssueTools(stub({ aiIssuesPage: async () => { throw new Error("boom"); } })) as Record<string, any>;
   assert.deepEqual(await failing.list_nr_issues.execute({}, {}), { error: "boom" });
+});
+
+test("list_nr_issues reports the window and truncation", async () => {
+  const tools = buildNewRelicIssueTools(stub({ aiIssuesPage: async () => ({ issues: [], truncated: true }) })) as Record<string, any>;
+  assert.deepEqual(await tools.list_nr_issues.execute({ sinceHours: 24 }, {}), { issues: [], sinceHours: 24, truncated: true });
+  assert.equal((await tools.list_nr_issues.execute({}, {})).sinceHours, 6);
 });

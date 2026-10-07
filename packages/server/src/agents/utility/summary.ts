@@ -34,10 +34,10 @@ Do not re-copy queries or result tables that already appear in the Investigation
 Approaches tried and abandoned, queries that errored or returned empty, hypotheses ruled out — and WHY each failed. This prevents the assistant from repeating them. If nothing failed, write "None."
 
 ## Conclusions & current state
-Each conclusion the assistant reached, stated together with the evidence supporting it, so it is never re-derived. What was communicated or delivered to the user (answers, recommendations, reports), and any artifacts produced.
+Each conclusion the assistant reached, stated together with the evidence supporting it, so it is never re-derived. Keep the confidence label (confirmed, likely, unverified) the assistant gave each conclusion; never raise a label. Write a cause the user suggested as the user's claim unless a result confirmed it. What was communicated or delivered to the user (answers, reports), and any artifacts produced.
 
 ## Open items
-Unresolved questions, pending next steps, anything the user asked for that has not been delivered yet. If none, write "None."
+Unresolved questions, pending checks and unanswered requests, anything the user asked for that has not been delivered yet. If none, write "None."
 
 Rules:
 - Be detailed. Length is not a concern; losing information is. A long, precise summary is always better than a short, vague one.
@@ -99,7 +99,12 @@ export function serializeMessagesForSummary(messages: UIMessage[]): string {
         const name = p.type.startsWith("tool-") ? p.type.slice(5) : p.type;
         // Failed tool calls (state "output-error") carry the failure in
         // errorText, not output — keep the exact error so dead ends survive.
-        const output = p.output !== undefined
+        // The formatted `analysis` CSV is what the model read; raw `parts` come first in the
+        // object and would fill the cut before it.
+        const analysis = (p.output as { analysis?: unknown } | null | undefined)?.analysis;
+        const output = typeof analysis === "string"
+          ? analysis
+          : p.output !== undefined
           ? p.output
           : p.errorText !== undefined ? `error: ${p.errorText}` : undefined;
         lines.push(

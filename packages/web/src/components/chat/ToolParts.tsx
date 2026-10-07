@@ -126,8 +126,11 @@ function rowsOf(output: unknown): unknown[] | null {
   if (isRowResult(output)) return output as unknown[];
   if (!isPlainObject(output) || isSubAgentOutput(output)) return null;
   const values = Object.values(output);
-  const rows = values[0];
-  return values.length === 1 && Array.isArray(rows) && rows.every(isPlainObject) ? rows : null;
+  const lists = values.filter(Array.isArray);
+  const rows = lists[0];
+  const others = values.filter((v) => !Array.isArray(v));
+  const primitive = (v: unknown) => v === null || typeof v !== "object";
+  return lists.length === 1 && rows.every(isPlainObject) && others.every(primitive) ? rows : null;
 }
 
 function inputText(part: ToolPart): string | null {

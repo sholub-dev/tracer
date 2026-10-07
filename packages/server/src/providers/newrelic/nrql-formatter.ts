@@ -2,11 +2,18 @@
 
 const HIDDEN_KEYS = new Set(["beginTimeSeconds", "endTimeSeconds", "inspectedCount"]);
 
+/** Rows of a table or event list that reach the model. */
+const MAX_DISPLAY_ROWS = 50;
+/** What NRQL returns when a query has no LIMIT clause. */
+const DEFAULT_FACET_LIMIT = 10;
+const DEFAULT_EVENT_LIMIT = 100;
+
 function fmtVal(v: unknown): string {
   if (v == null) return "";
   if (typeof v === "number") {
     if (Number.isInteger(v)) return String(v);
-    return v.toFixed(2);
+    // toFixed(2) would turn 0.004 into "0.00"
+    return Math.abs(v) < 1 ? Number(v.toPrecision(3)).toString() : v.toFixed(2);
   }
   if (Array.isArray(v)) return v.length <= 5 ? v.join("; ") : `[${v.length} items]`;
   if (typeof v === "object") return JSON.stringify(v);
@@ -62,7 +69,35 @@ function facetValue(row: Record<string, unknown>): string {
   return fmtVal(f);
 }
 
-export function formatNrqlCsv(rows: Record<string, unknown>[]): string {
+/** Keep every 10th point, plus the max and min row of each numeric column, in time order. */
+function downsample(rows: Record<string, unknown>[], keys: string[]): { rows: Record<string, unknown>[]; step: number } {
+  const step = Math.ceil(rows.length / 10);
+  const keep = new Set<number>();
+  for (let i = 0; i < rows.length; i += step) keep.add(i);
+  for (const k of keys) {
+    let max = -1;
+    let min = -1;
+    rows.forEach((r, i) => {
+      const v = r[k];
+      if (typeof v !== "number" || !Number.isFinite(v)) return;
+      if (max < 0 || v > (rows[max][k] as number)) max = i;
+      if (min < 0 || v < (rows[min][k] as number)) min = i;
+    });
+    if (max >= 0) keep.add(max);
+    if (min >= 0) keep.add(min);
+  }
+  return { rows: rows.filter((_, i) => keep.has(i)), step };
+}
+
+// A result that fills the query's row limit, explicit or default, can be cut short.
+function limitNote(rows: number, query: string | undefined, defaultLimit: number): string {
+  if (query === undefined) return "";
+  const m = /\bLIMIT\s+(\d+|MAX)\b/i.exec(query);
+  const limit = !m ? defaultLimit : /^max$/i.test(m[1]) ? null : Number(m[1]);
+  return rows === limit ? `\n(The result fills the query's row limit of ${limit}; there can be more. This is not a total.)` : "";
+}
+
+export function formatNrqlCsv(rows: Record<string, unknown>[], query?: string): string {
   if (rows.length === 0) return "No results.";
 
   const sample = rows[0];
@@ -73,17 +108,18 @@ export function formatNrqlCsv(rows: Record<string, unknown>[]): string {
     let displayRows = rows;
     let note = "";
     if (rows.length > 10) {
-      const step = Math.ceil(rows.length / 10);
-      displayRows = rows.filter((_, i) => i % step === 0);
-      note = `\n(Showing every ${step}th of ${rows.length} points)`;
+      const sampled = downsample(rows, keys);
+      displayRows = sampled.rows;
+      note = `\n(Showing every ${sampled.step}th of ${rows.length} points, plus the peak and low points)`;
     }
-    const headers = ["Time", ...keys];
+    const faceted = "facet" in sample;
+    const headers = ["Time", ...(faceted ? [facetLabel(sample)] : []), ...keys];
     const body = displayRows.map((r) => {
       // formatTimestamps already converts these to human-readable strings
       const time = r.endTimeSeconds != null ? String(r.endTimeSeconds)
         : r.beginTimeSeconds != null ? String(r.beginTimeSeconds)
         : "—";
-      return [time, ...keys.map((k) => fmtVal(r[k]))];
+      return [time, ...(faceted ? [facetValue(r)] : []), ...keys.map((k) => fmtVal(r[k]))];
     });
     return csvBlock(headers, body) + note;
   }
@@ -161,10 +197,11 @@ export function formatNrqlCsv(rows: Record<string, unknown>[]): string {
     const fLabel = facetLabel(sample);
     let displayRows = rows;
     let note = "";
-    if (rows.length > 10) {
-      displayRows = rows.slice(0, 10);
-      note = `\n(${rows.length - 10} more rows omitted)`;
+    if (rows.length > MAX_DISPLAY_ROWS) {
+      displayRows = rows.slice(0, MAX_DISPLAY_ROWS);
+      note = `\n(${rows.length - MAX_DISPLAY_ROWS} more rows omitted)`;
     }
+    note += limitNote(rows.length, query, DEFAULT_FACET_LIMIT);
     const headers = [fLabel, ...keys];
     const body = displayRows.map((r) => [facetValue(r), ...keys.map((k) => fmtVal(r[k]))]);
     return csvBlock(headers, body) + note;
@@ -174,10 +211,11 @@ export function formatNrqlCsv(rows: Record<string, unknown>[]): string {
   const keys = visibleKeys(sample);
   let displayRows = rows;
   let note = "";
-  if (rows.length > 10) {
-    displayRows = rows.slice(0, 10);
-    note = `\n(${rows.length - 10} more rows omitted)`;
+  if (rows.length > MAX_DISPLAY_ROWS) {
+    displayRows = rows.slice(0, MAX_DISPLAY_ROWS);
+    note = `\n(${rows.length - MAX_DISPLAY_ROWS} more rows omitted)`;
   }
+  note += limitNote(rows.length, query, DEFAULT_EVENT_LIMIT);
   const headers = keys.length > 0 ? keys : Object.keys(sample);
   const body = displayRows.map((r) => headers.map((k) => fmtVal(r[k])));
   return csvBlock(headers, body) + note;

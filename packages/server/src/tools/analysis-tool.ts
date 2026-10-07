@@ -11,6 +11,7 @@ const ledgerSchema = z.object({
     ruledOutBy: z.string().describe("The query result, with its numbers, that eliminates this explanation. Empty when no result eliminates it."),
   })).describe("Competing explanations. For a cause, include normal background noise when it applies."),
   baseline: z.string().describe("For a cause: the suspected cause in a normal window against the incident window, with numbers. Empty when not checked."),
+  causeEvidence: z.string().optional().describe("The query result, with its numbers, that shows the cause itself, not only the symptom. Empty when no result shows it."),
   contradictions: z.string().describe("Results that do not fit the conclusion. Empty when none."),
 });
 
@@ -36,6 +37,9 @@ export function challengeLedger(input: Ledger): string[] {
       if (!filled(alt.ruledOutBy)) {
         challenges.push(`"${alt.explanation}" is not eliminated by any result, so the conclusion is not confirmed.`);
       }
+    }
+    if (!filled(input.causeEvidence ?? "")) {
+      challenges.push("No result shows the cause itself, only the symptom. Lower the confidence.");
     }
     if (!filled(input.baseline)) {
       challenges.push("The suspected cause is not compared with a normal window, so it can be background noise.");

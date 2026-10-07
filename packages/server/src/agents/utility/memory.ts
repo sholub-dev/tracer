@@ -45,7 +45,7 @@ Review the full session timeline for patterns where the agent struggled — mult
 - Trial-and-error discovery of entity names, field names, or event types
 - Queries that had to be restructured after returning no data
 
-Extract GENERALIZED learnings from these patterns — naming conventions, field mappings, entity structures. NOT per-query corrections.
+Extract GENERALIZED learnings from these patterns — naming conventions, field mappings, entity structures. NOT per-query corrections. A convention needs at least two different names in successful results. A note states only what results showed and never a cause of an incident.
 Examples: "Services use prefix qa-, stage-, prod-", "Browser app names match APM names with ' Browser' suffix"
 
 Only save if there is a genuine generalized learning. Skip if results were legitimately empty (e.g. no errors exist in a healthy service).

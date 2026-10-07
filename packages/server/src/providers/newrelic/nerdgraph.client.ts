@@ -63,6 +63,11 @@ export class NerdGraphClient {
   }
 
   async aiIssues(filter: AiIssuesFilter, startMs: number, endMs: number): Promise<AiIssue[]> {
+    return (await this.aiIssuesPage(filter, startMs, endMs)).issues;
+  }
+
+  /** `truncated` is true when the page cap stopped the read before the last issue. */
+  async aiIssuesPage(filter: AiIssuesFilter, startMs: number, endMs: number): Promise<{ issues: AiIssue[]; truncated: boolean }> {
     const query = `query($accountId: Int!, $filter: AiIssuesFilterIssues, $tw: TimeWindowInput, $cursor: String) {
       actor {
         account(id: $accountId) {
@@ -86,7 +91,7 @@ export class NerdGraphClient {
       if (!cursor) break;
     }
     if (cursor) console.warn(`[newrelic] aiIssues stopped after ${AI_ISSUES_MAX_PAGES} pages; later issues were not read`);
-    return issues;
+    return { issues, truncated: cursor !== null };
   }
 
   ackIssue(issueId: string): Promise<{ ok: true } | { error: string }> {

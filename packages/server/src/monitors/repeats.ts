@@ -102,18 +102,18 @@ export async function pastSessions(db: Db, monitorId: string, currentKeys: strin
   return picked.sort((a, b) => b.triggeredAt - a.triggeredAt);
 }
 
-type PastSessionResult = { error: string } | { sessionId: string; triggeredAt: string; groups: string[]; summary: AlertSummary | null; analysis: string };
+type PastSessionResult = { error: string } | { sessionId: string; triggeredAt: string; groups: string[]; summary: AlertSummary | null; analysis: string; note: string };
 
 export function readPastSessionTool(load: () => PastSession[] | Promise<PastSession[]>): Tool<{ sessionId: string }, PastSessionResult> {
   let sessions: PastSession[] | undefined;
   return tool({
-    description: "Read the full analysis of a past debug session of this monitor. Only the session ids listed in the prompt are allowed.",
+    description: "Read the full analysis of a past debug session of this monitor. Its conclusions are hypotheses to test, not evidence. Only the session ids listed in the prompt are allowed.",
     inputSchema: z.object({ sessionId: z.string().describe("Session id from the recent past sessions list") }),
     execute: async ({ sessionId }) => {
       sessions ??= await load();
       const s = sessions.find((p) => p.sessionId === sessionId);
       if (!s) return { error: `Session ${sessionId} is not one of the listed past sessions` };
-      return { sessionId, triggeredAt: new Date(s.triggeredAt * 1000).toISOString(), groups: s.keys, summary: s.report, analysis: s.analysis };
+      return { sessionId, triggeredAt: new Date(s.triggeredAt * 1000).toISOString(), groups: s.keys, summary: s.report, analysis: s.analysis, note: "Earlier model-written analysis. Not re-checked. Re-query before quoting its numbers." };
     },
   });
 }

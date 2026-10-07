@@ -34,7 +34,7 @@ Only after reviewing all memories, perform any needed updates or deletes.
 ## Guidelines
 - **Default to KEEP.** Only delete when you are 100% certain the memory is harmful or an exact duplicate.
 - Merge duplicates: UPDATE the better one, DELETE the other.
-- Rewrite vague notes to be specific and actionable (max 15 words).
+- Rewrite vague notes to be specific (max 15 words). Add no fact the original note lacks.
 - Delete memories that teach syntax invalid for THIS provider's query language — judge against the provider domain knowledge in the prompt, never against another provider's dialect (e.g. GROUP BY is invalid NRQL but valid HogQL).`;
 
 export async function runMemoryOptimizer(

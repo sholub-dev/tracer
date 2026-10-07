@@ -54,7 +54,7 @@ function buildExecuteNrqlTool(
         });
 
         const formatted = formatTimestamps(raw, timezone);
-        const csv = formatNrqlCsv(formatted as Record<string, unknown>[]);
+        const csv = formatNrqlCsv(formatted as Record<string, unknown>[], query);
         return { parts: [{ type: "query" as const, query, results: cleaned }], analysis: csv };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -71,7 +71,7 @@ const ISSUE_STATES = ["CREATED", "ACTIVATED", "DEACTIVATED", "CLOSED"] as const;
 
 function buildListIssuesTool(provider: NewRelicProvider) {
   return tool({
-    description: "List New Relic alert issues with their state, title, condition and incident ids. Use it to see which alerts are open or closed.",
+    description: "List New Relic alert issues with their state, title, condition and incident ids. It covers only the last sinceHours hours (default 6), not all time. Pass a larger sinceHours to look further back. The result has truncated: true when more issues exist than were read.",
     inputSchema: z.object({
       states: z.array(z.enum(ISSUE_STATES)).optional().describe("Keep only these states. Omit for all states."),
       issueIds: z.array(z.string()).optional().describe("Only these issue ids"),
@@ -87,11 +87,14 @@ function buildListIssuesTool(provider: NewRelicProvider) {
           ...(conditionIds?.length ? { conditionIds } : {}),
         };
         const now = Date.now();
-        const issues = await provider.aiIssues(filter, now - (sinceHours ?? ISSUE_LOOKBACK_HOURS) * 3_600_000, now);
+        const hours = sinceHours ?? ISSUE_LOOKBACK_HOURS;
+        const { issues, truncated } = await provider.aiIssuesPage(filter, now - hours * 3_600_000, now);
         return {
           issues: issues
             .filter((i) => !states?.length || states.includes(i.state))
             .map((i) => ({ issueId: i.issueId, state: i.state, title: i.title?.[0] ?? null, conditionName: i.conditionName?.[0] ?? null, incidentIds: i.incidentIds ?? [] })),
+          sinceHours: hours,
+          truncated,
         };
       } catch (err) {
         return { error: err instanceof Error ? err.message : String(err) };
@@ -112,11 +115,11 @@ export function buildNewRelicIssueTools(provider: NewRelicProvider): Record<"lis
   return {
     list_nr_issues: buildListIssuesTool(provider),
     ack_nr_issue: buildIssueActionTool(
-      "Acknowledge an issue in New Relic. Use it when the user asks, or when the session's evidence supports it. State the action and its result in the answer.",
+      "Acknowledge an issue in New Relic. Use it only when the user asks. State the action and its result in the answer.",
       (id) => provider.ackIssue(id),
     ),
     close_nr_issue: buildIssueActionTool(
-      "Close an issue in New Relic. Use it when the user asks, or when the session's evidence supports it. State the action and its result in the answer.",
+      "Close an issue in New Relic. Use it only when the user asks. State the action and its result in the answer.",
       (id) => provider.resolveIssue(id),
     ),
   };

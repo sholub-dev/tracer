@@ -8,6 +8,7 @@ const clean: Ledger = {
   confidence: "confirmed",
   alternatives: [{ explanation: "Traffic spike", ruledOutBy: "Requests flat at 100/s" }],
   baseline: "0 errors yesterday, 500 today",
+  causeEvidence: "Pool in use 50 of 50 from 14:35",
   contradictions: "",
 };
 
@@ -32,6 +33,15 @@ test("a confirmed cause with an open alternative names it", () => {
   const c = challengeLedger({ ...clean, alternatives: [{ explanation: "Cache miss", ruledOutBy: " " }] });
   assert.equal(c.length, 1);
   assert.match(c[0], /Cache miss/);
+});
+
+test("a confirmed cause without cause evidence gets a challenge", () => {
+  for (const causeEvidence of ["", undefined]) {
+    const c = challengeLedger({ ...clean, causeEvidence });
+    assert.equal(c.length, 1);
+    assert.match(c[0], /only the symptom/);
+  }
+  assert.deepEqual(challengeLedger({ ...clean, confidence: "likely", causeEvidence: "" }), []);
 });
 
 test("a confirmed cause without a baseline gets a challenge", () => {

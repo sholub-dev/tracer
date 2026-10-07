@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CONFIDENCE } from "@tracer-sh/shared";
 import { tool, type Tool, type UIMessage } from "ai";
 
 export const SEVERITIES = ["high", "medium", "low"] as const;
@@ -7,7 +8,8 @@ const alertSummarySchema = z.object({
   severity: z.enum(SEVERITIES)
     .describe("high: outage, users blocked or a key flow degraded; medium: limited impact; low: noise or no user impact"),
   tldr: z.string().describe("One sentence: what broke and its impact, with the key number. Not a restatement of the monitor."),
-  rootCause: z.string().describe("Two or three sentences: why it happened, the chain from cause to errors, proven by query results. Start with the confidence label: confirmed (a result eliminates the strongest alternative), likely or unverified."),
+  rootCause: z.string().describe("Two or three sentences: why it happened, the chain from cause to errors, proven by query results."),
+  confidence: z.enum(CONFIDENCE).optional().describe("confirmed: a query result shows the cause itself and eliminates the strongest alternative. likely: the data points to it. unverified: the data does not show it."),
   policy: z.string().describe("The alert policy or condition that fired"),
   started: z.string().describe("The first bad minute in the data, with time zone"),
   status: z.string().describe("One of: stopped (last error at <time>); ongoing (errors in the latest minutes up to now); recurring (the repeat pattern, e.g. every hour since 06:00). Check the data up to now."),

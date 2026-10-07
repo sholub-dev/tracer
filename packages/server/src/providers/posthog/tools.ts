@@ -51,7 +51,7 @@ function buildExecuteHogqlTool(
         // The model reads the CSV built from the ORIGINAL rows: HogQL already returns time buckets
         // as readable strings under their own alias, so there is nothing to humanize — and using
         // `raw` avoids relabeling/dropping the user's columns or mangling numeric metrics.
-        const csv = formatHogqlCsv(raw);
+        const csv = formatHogqlCsv(raw, query);
         return { parts: [{ type: "query" as const, query, results: rows }], analysis: csv };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

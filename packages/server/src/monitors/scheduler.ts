@@ -86,7 +86,7 @@ function buildMessage(
   lines.push(
     "",
     "If this looks like a past issue, its past cause is only a hypothesis. Read the most relevant past session, then check in this window that the same cause appears, starts before this firing and explains its groups and size. If it does, say which session; if any part differs, investigate fully.",
-    `${dismissible ? "Unless you dismissed the alert, find" : "Find"} the root cause. When done, call report_alert_summary once; it is what gets posted to Slack. Do not repeat its fields as labeled lines in your answer.`,
+    `${dismissible ? "Unless you dismissed the alert, find" : "Find"} the root cause, or state where the data stops. When done, call report_alert_summary once; it is what gets posted to Slack. Do not repeat its fields as labeled lines in your answer.`,
   );
   return lines.join("\n");
 }
@@ -99,12 +99,11 @@ async function notifySlack(
   try {
     const slack = await readSlackConfig(context.db);
     if (!slack) return;
-    const { analysis, report } = outcome ?? await readOutcome(context.db, sessionId);
+    const { report } = outcome ?? await readOutcome(context.db, sessionId);
     const result = await postSlack(slack.webhookUrl, monitorAlert({
       name: monitor.name,
       triggeredAt,
       summary: report,
-      analysis,
       timeZone: await getTimezone(context.db),
       mentions: slack.mentions,
       ...triage,

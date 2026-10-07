@@ -3,7 +3,7 @@ import type { Db } from "../db/driver.js";
 import { appSettings } from "../db/schema.js";
 import { fetchWithRetry } from "../lib/fetch-retry.js";
 import { formatLocalTime } from "../lib/current-context.js";
-import { firstSentence, type AlertSummary } from "../monitors/alert-summary.js";
+import { type AlertSummary } from "../monitors/alert-summary.js";
 import { readAppSetting, writeAppSetting } from "../db/config-reader.js";
 
 export const SLACK_CONFIG_KEY = "integration:slack";
@@ -102,6 +102,7 @@ export interface Verdict {
   severity: string;
   summary: string;
   rootCause: string;
+  confidence: string;
   facts: [string, string][];
   /** Each issue: service, endpoint, errors, user impact, journey step ("" when unknown). */
   issues: string[][];
@@ -109,13 +110,14 @@ export interface Verdict {
 }
 
 /** The agent's reported summary, redacted and clipped, with unknowns hidden. */
-export function verdictOf(summary: AlertSummary | null, analysis = ""): Verdict {
-  if (!summary) return { severity: "unknown", summary: tidy(firstSentence(analysis), SUMMARY_MAX_CHARS), rootCause: "", facts: [], issues: [], seenBefore: "" };
+export function verdictOf(summary: AlertSummary | null): Verdict {
+  if (!summary) return { severity: "unknown", summary: "", rootCause: "", confidence: "", facts: [], issues: [], seenBefore: "" };
   const field = (s: string, max?: number) => known(tidy(s, max));
   return {
     severity: summary.severity,
     summary: tidy(summary.tldr, SUMMARY_MAX_CHARS),
     rootCause: field(summary.rootCause, ROOT_CAUSE_MAX_CHARS),
+    confidence: summary.confidence ?? "unverified",
     facts: ([["Policy", summary.policy], ["Started", summary.started], ["Status", summary.status]] as [string, string][])
       .map(([l, v]): [string, string] => [l, field(v)]).filter(([, v]) => v),
     issues: summary.issues.map((i) => [i.service, i.endpoint, i.errors, i.userImpact, i.journeyStep].map((v) => field(v)))
@@ -128,8 +130,6 @@ export interface MonitorAlert {
   name: string;
   triggeredAt: number;
   summary: AlertSummary | null;
-  /** Fallback text when the agent reported no summary. */
-  analysis?: string;
   timeZone: string;
   mentions?: string;
   /** Triage outcome, shown after the facts. */
@@ -153,12 +153,12 @@ function issueLine([service = "", endpoint = "", error = "", experience = "", fu
 
 export function monitorAlert(a: MonitorAlert): Required<SlackPayload> {
   const time = formatLocalTime(a.triggeredAt, a.timeZone);
-  const { severity, summary, rootCause, facts, issues, seenBefore } = verdictOf(a.summary, a.analysis);
+  const { severity, summary, rootCause, confidence, facts, issues, seenBefore } = verdictOf(a.summary);
   const mentions = mentionsFor(a.mentions, a.ping);
   const name = redact(a.name);
   const text = `${mentions}*[${[severity.toUpperCase(), SEVERITY_DOTS[severity]].filter(Boolean).join(" ")}] ${escape(summary || `Monitor "${name}" fired; no root cause found`)}*`;
   const lines = [text];
-  if (rootCause) lines.push(`*Root cause:* ${escape(rootCause)}`);
+  if (rootCause) lines.push(`*Root cause (${confidence}):* ${escape(rootCause)}`);
   lines.push(...facts.map(([l, v]) => `*${l}:* ${escape(v)}`));
   lines.push(...issues.slice(0, MAX_ISSUES).map(issueLine));
   if (issues.length > MAX_ISSUES) lines.push(`+${issues.length - MAX_ISSUES} more`);

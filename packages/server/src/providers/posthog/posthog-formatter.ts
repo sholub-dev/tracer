@@ -93,9 +93,12 @@ export function toChartRows(rows: Record<string, unknown>[]): Record<string, unk
 // the cost compounds. The UI still gets the full untruncated rows via the query `parts`.
 const MAX_CELL_CHARS = 200;
 
+/** Rows that reach the model. */
+const MAX_DISPLAY_ROWS = 50;
+
 function fmtVal(v: unknown): string {
   if (v == null) return "";
-  if (typeof v === "number") return Number.isInteger(v) ? String(v) : v.toFixed(2);
+  if (typeof v === "number") return Number.isInteger(v) ? String(v) : Math.abs(v) < 1 ? Number(v.toPrecision(3)).toString() : v.toFixed(2);
   if (Array.isArray(v)) return v.length <= 5 ? v.join("; ") : `[${v.length} items]`;
   if (typeof v === "object") {
     const json = JSON.stringify(v);
@@ -115,21 +118,27 @@ function csvEscape(val: string): string {
   return val;
 }
 
+/** What the HogQL API returns when a query has no LIMIT clause. */
+const DEFAULT_LIMIT = 100;
+
 /**
  * Format HogQL row objects as CSV for the LLM. PostHog already returns columnar
  * data, so this is a flat table — no facet/timeseries/comparison branches needed.
  */
-export function formatHogqlCsv(rows: Record<string, unknown>[]): string {
+export function formatHogqlCsv(rows: Record<string, unknown>[], query?: string): string {
   if (rows.length === 0) return "No results.";
 
   const headers = Object.keys(rows[0]);
 
   let displayRows = rows;
   let note = "";
-  if (rows.length > 10) {
-    displayRows = rows.slice(0, 10);
-    note = `\n(${rows.length - 10} more rows omitted)`;
+  if (rows.length > MAX_DISPLAY_ROWS) {
+    displayRows = rows.slice(0, MAX_DISPLAY_ROWS);
+    note = `\n(${rows.length - MAX_DISPLAY_ROWS} more rows omitted)`;
   }
+  // A result that fills the query's row limit, explicit or default, can be cut short.
+  const limit = query === undefined ? null : Number(/\bLIMIT\s+(\d+)/i.exec(query)?.[1] ?? DEFAULT_LIMIT);
+  if (rows.length === limit) note += `\n(The result fills the query's row limit of ${limit}; there can be more. This is not a total.)`;
 
   const hdr = headers.map(csvEscape).join(",");
   const body = displayRows

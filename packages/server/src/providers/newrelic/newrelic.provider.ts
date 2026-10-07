@@ -71,6 +71,10 @@ export class NewRelicProvider extends BaseProvider {
     return this.client.aiIssues(filter, startMs, endMs);
   }
 
+  aiIssuesPage(filter: AiIssuesFilter, startMs: number, endMs: number): Promise<{ issues: AiIssue[]; truncated: boolean }> {
+    return this.client.aiIssuesPage(filter, startMs, endMs);
+  }
+
   ackIssue(issueId: string): Promise<{ ok: true } | { error: string }> {
     return this.client.ackIssue(issueId);
   }

@@ -44,7 +44,7 @@ Tracer updates only when you click the version in the sidebar and select **Updat
 - **Create in chat.** For example: *"Alert me when checkout errors go above 20 in 5 minutes."* The agent tests the query, then saves it.
 - **Investigates on its own.** A firing starts a normal investigation. Its result shows in the sidebar under **Alerts**.
 - **Skips repeats.** With `FACET`, a group that was investigated in the last 24 hours is marked as a repeat and linked to that session.
-- **Posts to Slack.** Add an incoming webhook in **Settings > Integrations**. Tracer posts the severity, the root cause and the next step, and tags the people you set.
+- **Posts to Slack.** Add an incoming webhook in **Settings > Integrations**. Tracer posts the severity, the root cause with its confidence label and what it did to the New Relic issue, and tags the people you set.
 - **Never misses a window.** Checks run on round clock times over back-to-back windows, so no event counts twice.
 
 ## iPhone app

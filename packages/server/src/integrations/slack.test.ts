@@ -24,23 +24,24 @@ test("parseMentions maps IDs and specials, rejects names", () => {
   assert.ok("error" in parseMentions("@sholub"));
 });
 
-test("verdictOf hides unknowns and falls back to the first sentence without a summary", () => {
+test("verdictOf hides unknowns and shows no summary text without a report", () => {
   assert.deepEqual(
     verdictOf(summary({
       severity: "high", tldr: "**DB** timeouts after the 1.2 deploy.", rootCause: "Pool size dropped to 5 in 1.2.", policy: "Errors", started: "unknown",
       issues: [issue("`pay-api`", "/pay", "3 × Timeout", "unknown", "Checkout"), issue("unknown", "/cart", "1 × Timeout"), issue("n/a", "", "")],
       seenBefore: "No.",
-    }), "ignored"),
+    })),
     {
       severity: "high",
       summary: "DB timeouts after the 1.2 deploy.",
       rootCause: "Pool size dropped to 5 in 1.2.",
+      confidence: "unverified",
       facts: [["Policy", "Errors"]],
       issues: [["pay-api", "/pay", "3 × Timeout", "", "Checkout"], ["", "/cart", "1 × Timeout", "", ""]],
       seenBefore: "No.",
     },
   );
-  assert.deepEqual(verdictOf(null, "## Root cause\nThe `db` pool ran out. More text."), { severity: "unknown", summary: "The db pool ran out.", rootCause: "", facts: [], issues: [], seenBefore: "" });
+  assert.deepEqual(verdictOf(null), { severity: "unknown", summary: "", rootCause: "", confidence: "", facts: [], issues: [], seenBefore: "" });
 });
 
 test("redact masks personal data, keeps normal text", () => {
@@ -61,7 +62,7 @@ test("monitorAlert builds one compact section and a footer, escapes", () => {
     name: "Errors <prod>",
     triggeredAt: 1_767_225_600,
     summary: summary({
-      severity: "high", tldr: "Checkout is down & failing.", rootCause: "pay-db ran out of connections.", policy: "Errors", started: "10:02 UTC",
+      severity: "high", tldr: "Checkout is down & failing.", rootCause: "pay-db ran out of connections.", confidence: "likely", policy: "Errors", started: "10:02 UTC",
       status: "stopped (last error at 10:09 UTC)", issues: [issue("pay-api", "/pay", "40 × Timeout", "Pay fails", "Checkout"), issue("unknown", "/cart", "1 × <Err>")],
       seenBefore: "No.",
     }),
@@ -72,7 +73,7 @@ test("monitorAlert builds one compact section and a footer, escapes", () => {
   assert.deepEqual(blocks, [
     { type: "section", text: { type: "mrkdwn", text: [
       text,
-      "*Root cause:* pay-db ran out of connections.",
+      "*Root cause (likely):* pay-db ran out of connections.",
       "*Policy:* Errors",
       "*Started:* 10:02 UTC",
       "*Status:* stopped (last error at 10:09 UTC)",
@@ -84,6 +85,11 @@ test("monitorAlert builds one compact section and a footer, escapes", () => {
   ]);
 });
 
+test("monitorAlert without a summary posts the no-root-cause fallback", () => {
+  const { text } = monitorAlert({ name: "m", triggeredAt: 0, summary: null, timeZone: "UTC" });
+  assert.match(text, /Monitor "m" fired; no root cause found/);
+});
+
 test("monitorAlert stays under Slack's section limit", () => {
   const long = "x".repeat(400);
   const s = summary({ tldr: long, rootCause: long.repeat(2), issues: Array.from({ length: 5 }, () => issue(long, long, long, long, long)), seenBefore: long });
@@ -92,7 +98,7 @@ test("monitorAlert stays under Slack's section limit", () => {
 });
 
 test("verdictOf redacts before clipping", () => {
-  const service = verdictOf(summary({ issues: [issue(`${"x".repeat(290)} jo.doe@corp.com`, "", "")] }), "").issues[0][0];
+  const service = verdictOf(summary({ issues: [issue(`${"x".repeat(290)} jo.doe@corp.com`, "", "")] })).issues[0][0];
   assert.ok(service.endsWith("[email]"), service);
 });
 

@@ -4,6 +4,7 @@ import { trpc } from "./trpc";
 import { AVAILABLE_MODELS } from "./models";
 import { WEB_CONFIG } from "./config";
 import { IS_IOS } from "./platform";
+import { RESUME_EVENT } from "./resume";
 
 /** Chat scroll that follows content growth; any upward scroll pauses it until the bottom is reached again. A new `mountKey` re-attaches to a swapped container. */
 export function useChatScroll(mountKey?: unknown) {
@@ -142,6 +143,7 @@ export function useSessionLiveUpdates() {
   const utils = trpc.useUtils();
   const pending = useRef(new Set<string>());
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const connected = useRef(false);
 
   const invalidateLists = useCallback(() => {
     utils.sessions.list.invalidate();
@@ -155,9 +157,13 @@ export function useSessionLiveUpdates() {
   trpc.sessions.onChange.useSubscription(undefined, {
     // Also fires on every reconnect, covering changes missed while disconnected.
     onStarted: () => {
+      // A reconnect means the server may have restarted: a run's own connection can hang without ending, so open views re-check.
+      if (connected.current) window.dispatchEvent(new Event(RESUME_EVENT));
+      connected.current = true;
       invalidateLists();
       utils.sessions.getTitle.invalidate();
       utils.sessions.timer.invalidate();
+      utils.sessions.getCost.invalidate();
     },
     onData: ({ id }) => {
       pending.current.add(id);
@@ -167,6 +173,7 @@ export function useSessionLiveUpdates() {
         for (const sessionId of pending.current) {
           utils.sessions.getTitle.invalidate({ id: sessionId });
           utils.sessions.timer.invalidate({ id: sessionId });
+          utils.sessions.getCost.invalidate({ id: sessionId });
         }
         pending.current.clear();
       }, WEB_CONFIG.sessionEventCoalesceMs);

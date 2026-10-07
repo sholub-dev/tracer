@@ -1,9 +1,8 @@
-import { eq } from "drizzle-orm";
-import { FEATURES, unixNow } from "@tracer-sh/shared";
+import { FEATURES } from "@tracer-sh/shared";
 import type { Db, SetupDriver } from "./db/driver.js";
 import { runSetup } from "./db/setup.js";
 import { repairChats } from "./db/repair-chats.js";
-import { chatSessions } from "./db/schema.js";
+import { settleInterruptedRuns, resumeRuns } from "./agents/resume.js";
 import { ProviderRegistry } from "./providers/registry.js";
 import { registerDefaultProviders } from "./providers/register-defaults.js";
 import { createContext } from "./trpc/context.js";
@@ -19,23 +18,19 @@ export async function startRuntime(
   await runSetup(setupDriver);
   await repairChats(db, setupDriver);
 
-  // Mark stale "streaming" sessions from a previous crash as done
-  await db.update(chatSessions)
-    .set({ status: "done", updatedAt: unixNow() })
-    .where(eq(chatSessions.status, "streaming"))
-    .run();
+  const interrupted = await settleInterruptedRuns(db);
 
   const providers = new ProviderRegistry();
   registerDefaultProviders(providers, registerPlatformProviders);
 
-  // Non-blocking — don't delay server startup for provider connections
+  const context = createContext({ db, providers });
+
+  // Non-blocking — don't delay server startup for provider connections; resumed runs need the provider tools
   providers.initializeFromDb(db).then(() => {
     console.log("Providers initialized:", providers.getAllProviders().map((p) => p.name));
   }).catch((err) => {
     console.warn("Provider initialization error:", err);
-  });
-
-  const context = createContext({ db, providers });
+  }).then(() => resumeRuns(context, interrupted));
   const app = createApp(context);
 
   const scheduler = FEATURES.monitors ? new MonitorScheduler(context) : null;

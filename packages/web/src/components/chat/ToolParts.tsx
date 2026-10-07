@@ -119,6 +119,22 @@ function isRowResult(results: unknown): boolean {
   return Array.isArray(results) && results.length > 0 && results.every((r) => r !== null && typeof r === "object");
 }
 
+const isPlainObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+// A tool that returns its records as rows, or as one `{ key: rows }` field, shows them like a query result.
+function rowsOf(output: unknown): unknown[] | null {
+  if (isRowResult(output)) return output as unknown[];
+  if (!isPlainObject(output) || isSubAgentOutput(output)) return null;
+  const values = Object.values(output);
+  const rows = values[0];
+  return values.length === 1 && Array.isArray(rows) && rows.every(isPlainObject) ? rows : null;
+}
+
+function inputText(part: ToolPart): string | null {
+  if (typeof part.input?.query === "string") return part.input.query;
+  return part.input && Object.keys(part.input).length ? JSON.stringify(part.input, null, 2) : null;
+}
+
 export const QueryBlock = memo(function QueryBlock({ query }: { query: string }) {
   return (
     <div className="relative">
@@ -312,12 +328,12 @@ function StepBody({ part, progressStore, resultsOnly = false }: { part: ToolPart
     );
   }
 
-  // Raw outputs: GCP MCP results and pre-progress sessions.
-  const query = typeof part.input?.query === "string" ? part.input.query : part.input && Object.keys(part.input).length ? JSON.stringify(part.input, null, 2) : null;
+  // Raw outputs: GCP MCP results, New Relic issue actions and pre-progress sessions. A folded step hides a plain status object.
+  const query = inputText(part);
   return (
     <>
       {query && !resultsOnly && <QueryBlock query={query} />}
-      {output != null && <ResultView data={output} />}
+      {output != null && !(resultsOnly && isPlainObject(output)) && <ResultView data={output} />}
     </>
   );
 }
@@ -337,7 +353,7 @@ function stepPropsEqual(prev: StepProps, next: StepProps): boolean {
 }
 
 // A finished step with one chart or table result sits in a card, with its query behind the chevron.
-function ChartStep({ part, query, results, totalRows }: { part: ToolPart; query: string; results: unknown; totalRows?: number }) {
+function ChartStep({ part, query, results, totalRows }: { part: ToolPart; query: string | null; results: unknown; totalRows?: number }) {
   const [open, setOpen] = useState(false);
   const provider = providerOf(part.type);
   const title = stepTitle(part, provider);
@@ -346,8 +362,9 @@ function ChartStep({ part, query, results, totalRows }: { part: ToolPart; query:
       <Collapsible open={open} onOpenChange={setOpen} className="rounded-xl border bg-card p-4 shadow-sm max-sm:px-3">
         <FoldTrigger
           chevronEnd
-          chevronClassName="text-muted-foreground"
-          aria-label={`${title}: show query`}
+          disabled={!query}
+          chevronClassName={cn("text-muted-foreground", !query && "hidden")}
+          aria-label={query ? `${title}: show query` : title}
           className="flex w-full items-start justify-between gap-3 rounded-md text-left"
         >
           <span className="flex min-w-0 items-center gap-2">
@@ -356,9 +373,11 @@ function ChartStep({ part, query, results, totalRows }: { part: ToolPart; query:
             <span className="truncate text-sm font-semibold text-foreground">{title}</span>
           </span>
         </FoldTrigger>
-        <CollapsibleContent className="mt-3">
-          <QueryBlock query={query} />
-        </CollapsibleContent>
+        {query && (
+          <CollapsibleContent className="mt-3">
+            <QueryBlock query={query} />
+          </CollapsibleContent>
+        )}
         <div className="mt-2">
           <ResultView data={results} totalRows={totalRows} />
         </div>
@@ -375,6 +394,8 @@ export const ProviderStep = memo(function ProviderStep({ part, progressStore }: 
   const queries = running || stepError(part) ? [] : stepParts(part, progress?.parts).filter((p) => p.type === "query");
   const only = queries.length === 1 && queries[0].type === "query" && queries[0].query && isRowResult(queries[0].results) ? queries[0] : null;
   if (only) return <ChartStep part={part} query={only.query} results={only.results} totalRows={only.totalRows} />;
+  const rows = running || stepError(part) ? null : rowsOf(part.output);
+  if (rows) return <ChartStep part={part} query={inputText(part)} results={rows} />;
   const error = open ? null : stepError(part);
   return (
     <li className="animate-in fade-in duration-200">

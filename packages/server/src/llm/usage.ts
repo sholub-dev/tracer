@@ -2,6 +2,7 @@ import type { LanguageModelUsage } from "ai";
 import type { TokenUsage } from "@tracer-sh/shared";
 import type { Db } from "../db/driver.js";
 import { agentRuns } from "../db/schema.js";
+import { sessionChanged } from "../lib/session-events.js";
 
 /** Extract a normalized TokenUsage from an AI SDK LanguageModelUsage. */
 export function extractUsage(usage: LanguageModelUsage, model: string): TokenUsage {
@@ -44,6 +45,7 @@ export async function recordAgentRun(db: Db, opts: {
       cacheWriteTokens: opts.usage.cacheWriteTokens,
       durationMs: opts.durationMs,
     }).run();
+    sessionChanged(opts.sessionId);
   } catch (err) {
     console.warn(`[agent-runs] Failed to record ${opts.agentType} run:`, err);
   }

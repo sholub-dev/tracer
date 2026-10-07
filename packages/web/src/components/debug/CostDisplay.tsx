@@ -37,8 +37,12 @@ export function computeCostBreakdown(agents: Array<{ label: string; model: strin
 
 const compact = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 2 });
 
+export function costLabel(breakdown: CostBreakdown): string {
+  const tokens = `${compact.format(breakdown.totalInput + breakdown.totalOutput)} tokens`;
+  return breakdown.totalCost > 0 ? `${tokens} · ${formatCost(breakdown.totalCost)}` : tokens;
+}
+
 export function CostDisplay({ breakdown }: { breakdown: CostBreakdown }) {
-  const tokens = compact.format(breakdown.totalInput + breakdown.totalOutput);
   return (
     <HoverCard openDelay={150} closeDelay={100}>
       <HoverCardTrigger asChild>
@@ -46,7 +50,7 @@ export function CostDisplay({ breakdown }: { breakdown: CostBreakdown }) {
           type="button"
           className="hidden h-7 shrink-0 rounded-md px-1.5 text-xs text-muted-foreground tabular-nums transition-colors outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 sm:inline-flex sm:items-center"
         >
-          {tokens} tokens{breakdown.totalCost > 0 && <> · {formatCost(breakdown.totalCost)}</>}
+          {costLabel(breakdown)}
         </button>
       </HoverCardTrigger>
       <HoverCardContent side="top" align="end" className="w-80">

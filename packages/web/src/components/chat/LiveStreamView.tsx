@@ -91,7 +91,7 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
         let ended = false;
         try {
           const res = await serverFetch(`/api/chat/subscribe/${sessionId}`, { headers: { Accept: "text/event-stream" }, cache: "no-store", signal: controller.signal });
-          // Only a 404 means the run ended; any other failure is retried.
+          // Only a 404 means the server has no run; any other failure is retried.
           if (res.status === 404) {
             ended = true;
           } else if (res.ok && res.body && res.headers.get("content-type")?.startsWith("text/event-stream")) {
@@ -117,7 +117,9 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
           // onComplete fires after the last flush so the final content renders first.
           await reading;
           if (!cancelled) onCompleteRef.current();
-          return;
+          // With no run the session is not streaming and the parent unmounts this view; if it still reads streaming,
+          // a restart is about to resume the run, so subscribe again.
+          if (finished) return;
         }
         if (!woken) {
           await new Promise<void>((resolve) => {

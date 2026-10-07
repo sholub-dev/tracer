@@ -20,7 +20,7 @@ import { MessageActionButton, copyText } from "../components/chat/MessageActions
 import { SessionSummaryBlock } from "../components/chat/SessionSummaryBlock";
 import { SourcesToggle } from "../components/chat/SourcesToggle";
 import { SessionHeader } from "../components/debug/SessionHeader";
-import { CostDisplay, computeCostBreakdown } from "../components/debug/CostDisplay";
+import { CostDisplay, computeCostBreakdown, costLabel } from "../components/debug/CostDisplay";
 import { EditMessageForm } from "../components/debug/EditMessageForm";
 import { NewInvestigation } from "../components/debug/NewInvestigation";
 import { ConfirmDialog } from "../components/common/ConfirmDialog";
@@ -75,7 +75,9 @@ export function Debug({ sessionId, isNew, onDeleted }: { sessionId: string; isNe
     const updatedAt = sessionQuery.data?.updatedAt;
     return computeCostBreakdown(d.agents, updatedAt ? updatedAt * 1000 : undefined);
   }, [costQuery.data, sessionQuery.data?.updatedAt]);
-  const cost = costBreakdown && (costBreakdown.totalInput > 0 || costBreakdown.totalOutput > 0) ? <CostDisplay breakdown={costBreakdown} /> : null;
+  const hasCost = !!costBreakdown && (costBreakdown.totalInput > 0 || costBreakdown.totalOutput > 0);
+  const cost = hasCost ? <CostDisplay breakdown={costBreakdown} /> : null;
+  const costText = hasCost ? costLabel(costBreakdown) : undefined;
   const sources = <SourcesToggle activeProvider={activeProvider} onToggle={setActiveProvider} />;
 
   let body: React.ReactNode;
@@ -105,6 +107,7 @@ export function Debug({ sessionId, isNew, onDeleted }: { sessionId: string; isNe
             chatId={sessionId}
             title={live.title === DEFAULT_SESSION_TITLE ? undefined : live.title}
             meta={sessionMeta(live.kind, liveMsgs, live.updatedAt)}
+            cost={costText}
             streaming
             onPostMortem={() => {}}
             onCopyText={() => copyText(transcriptOf(live.title, liveMsgs), "Copied as text")}
@@ -138,6 +141,7 @@ export function Debug({ sessionId, isNew, onDeleted }: { sessionId: string; isNe
         initialMessages={initialMessages}
         sources={sources}
         cost={cost}
+        costText={costText}
         activeProvider={activeProvider}
         sessionTitle={sessionQuery.data?.title}
         sessionKind={sessionQuery.data?.kind}
@@ -198,6 +202,7 @@ interface DebugChatProps {
   initialMessages?: UIMessage[];
   sources: React.ReactNode;
   cost: React.ReactNode;
+  costText?: string;
   activeProvider: string | null;
   sessionTitle?: string;
   sessionKind?: string | null;
@@ -208,7 +213,7 @@ interface DebugChatProps {
   onDelete: () => void;
 }
 
-function DebugChat({ chatId, initialMessages, sources, cost, activeProvider, sessionTitle, sessionKind, sessionUpdatedAt, summary, summaryUpTo, summaryCreatedAt, onDelete }: DebugChatProps) {
+function DebugChat({ chatId, initialMessages, sources, cost, costText, activeProvider, sessionTitle, sessionKind, sessionUpdatedAt, summary, summaryUpTo, summaryCreatedAt, onDelete }: DebugChatProps) {
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
@@ -235,9 +240,13 @@ function DebugChat({ chatId, initialMessages, sources, cost, activeProvider, ses
     prevListStatus.current = listStatus;
     if (started && !isStreaming) utils.sessions.get.fetch({ id: chatId }, { staleTime: 0 }).catch(() => {});
   }, [listStatus]); // eslint-disable-line react-hooks/exhaustive-deps
-  // The app was suspended: a run may have started or ended meanwhile. Skip while this view streams itself.
+  // The app was suspended or the server connection came back: a run may have started or ended meanwhile.
+  // A run the server still has swaps this view for the live stream; one it lost ends the local stream, which can hang open.
   useOnResume(() => {
-    if (!isStreaming && hasMessages) utils.sessions.get.fetch({ id: chatId }, { staleTime: 0 }).catch(() => {});
+    if (!hasMessages) return;
+    utils.sessions.get.fetch({ id: chatId }, { staleTime: 0 })
+      .then((session) => { if (session?.status !== "streaming" && coreRef.current?.streaming) coreRef.current.stop(); })
+      .catch(() => {});
   });
   const markViewed = trpc.sessions.markViewed.useMutation();
   const truncateMessages = trpc.sessions.truncateMessages.useMutation();
@@ -429,6 +438,7 @@ function DebugChat({ chatId, initialMessages, sources, cost, activeProvider, ses
       chatId={chatId}
       title={headerTitle}
       meta={sessionMeta(sessionKind, initialMessages ?? [], sessionUpdatedAt ?? startedAt)}
+      cost={costText}
       streaming={isStreaming}
       // Post-mortem sends directly, bypassing the disabled composer, so it is blocked mid-compaction too.
       busy={isStreaming || isCompacting}

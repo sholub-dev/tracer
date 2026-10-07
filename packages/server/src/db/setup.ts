@@ -22,7 +22,7 @@ export const SYNC_KEYS: Record<string, { key: string; time?: string }> = {
 // unread session writes its status. A write to only these must not count as a change to sync.
 const UNSYNCED_COLUMNS: Record<string, string[]> = {
   monitors: ["enabled", "last_checked_at", "last_status", "last_error", "updated_at"],
-  chat_sessions: ["status"],
+  chat_sessions: ["status", "run_scope", "resumed"],
 };
 
 // ROUND, not CAST: the float math lands just under the millisecond, behind the JS clock that sync marks use.
@@ -59,6 +59,8 @@ export async function runSetup(sqlite: SetupDriver): Promise<void> {
       summary TEXT,
       summary_up_to INTEGER,
       summary_created_at INTEGER,
+      run_scope TEXT,
+      resumed INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
@@ -198,6 +200,8 @@ export async function runSetup(sqlite: SetupDriver): Promise<void> {
     ["chat_sessions", "summary", "TEXT"],
     ["chat_sessions", "summary_up_to", "INTEGER"],
     ["chat_sessions", "summary_created_at", "INTEGER"],
+    ["chat_sessions", "run_scope", "TEXT"],
+    ["chat_sessions", "resumed", "INTEGER NOT NULL DEFAULT 0"],
     ["monitors", "last_error", "TEXT"],
     ["monitors", "sort_order", "INTEGER"],
     ["monitors", "card_width", "INTEGER"],

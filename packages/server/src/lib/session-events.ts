@@ -1,7 +1,7 @@
 // A plain listener set instead of EventTarget: Node's EventTarget warns past 10 listeners, one per open subscription.
 const listeners = new Set<(id: string) => void>();
 
-/** Notifies with a session id whenever its chat_sessions row is created, changed (status/title/order) or deleted. */
+/** Notifies with a session id whenever its chat_sessions row is created, changed (status/title/order) or deleted, and after each model call it pays for. */
 export function sessionChanged(...ids: string[]): void {
   for (const id of ids) for (const listener of listeners) listener(id);
 }

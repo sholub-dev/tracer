@@ -1,5 +1,5 @@
 import type { UIMessage } from "ai";
-import { CLIENT_TOOL_NAMES } from "@tracer-sh/shared";
+import { CLIENT_TOOL_NAMES, findingFromMessages, findingMarkdown } from "@tracer-sh/shared";
 
 interface MessagePart {
   type: string;
@@ -120,5 +120,9 @@ export function extractAnalysis(messages: UIMessage[]): { analysis: string; quer
     }
   }
 
+  // Only the latest turn: an earlier question's finding does not belong to this answer.
+  const lastUser = messages.map((m) => m.role).lastIndexOf("user");
+  const finding = findingFromMessages(messages.slice(lastUser + 1));
+  if (finding) segments.unshift(findingMarkdown(finding));
   return { analysis: segments.join("\n\n").trim(), queries };
 }

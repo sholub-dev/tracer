@@ -38,6 +38,7 @@ const SMALL_TOOLS: Record<string, { done: string; loading: string; errorLabel: s
   [CLIENT_TOOL_NAMES.UPDATE_WIDGET]: { done: "Widget updated", loading: "Updating widget", errorLabel: "Widget error", icon: LayoutGrid },
   [CLIENT_TOOL_NAMES.DELETE_WIDGET]: { done: "Widget deleted", loading: "Deleting widget", errorLabel: "Widget error", icon: LayoutGrid },
   "tool-read_past_session": { done: "Read a past investigation", loading: "Reading a past investigation", errorLabel: "Past investigation not available", icon: History },
+  "tool-report_finding": { done: "Finding reported", loading: "Reporting finding", errorLabel: "Finding not recorded", icon: ClipboardCheck },
   "tool-report_issue_status": { done: "Reported alert status", loading: "Reporting alert status", errorLabel: "Alert status not recorded", icon: ClipboardCheck },
   "tool-report_alert_summary": { done: "Reported alert summary", loading: "Reporting alert summary", errorLabel: "Alert summary not recorded", icon: ClipboardCheck },
   "tool-dismiss_alert": { done: "Alert already closed, not posted", loading: "Dismissing alert", errorLabel: "Alert not dismissed", icon: ClipboardCheck },
@@ -51,6 +52,9 @@ const PROVIDER_BY_TOOL: Record<string, string> = {
   "tool-execute_nrql": "newrelic",
   "tool-nrql": "newrelic",
   "tool-newrelic": "newrelic",
+  "tool-list_nr_issues": "newrelic",
+  "tool-ack_nr_issue": "newrelic",
+  "tool-close_nr_issue": "newrelic",
   "tool-execute_hogql": "posthog",
   "tool-hogql": "posthog",
   "tool-posthog": "posthog",
@@ -62,13 +66,13 @@ export const isMonitorTool = (type: string) => MONITOR_TOOLS.has(type);
 
 export const providerOf = (type: string) => PROVIDER_BY_TOOL[type] ?? "gcp";
 
-/** Parts that never render: the analysis marker, removed propose_monitor drafts, and a recorded alert summary (shown as the panel). */
+/** Parts that never render: the analysis marker, removed propose_monitor drafts, and a recorded alert summary or finding (shown as a panel or card). */
 export function isHiddenPart(part: { type: string; state?: string }) {
   return (
     part.type === CLIENT_TOOL_NAMES.BEGIN_ANALYSIS ||
     part.type === "tool-propose_monitor" ||
     part.type === "step-start" ||
-    (part.type === "tool-report_alert_summary" && part.state === "output-available")
+    ((part.type === "tool-report_alert_summary" || part.type === "tool-report_finding") && part.state === "output-available")
   );
 }
 
@@ -100,12 +104,19 @@ export function stepQueryCount(part: ToolPart, store: ProgressStore): number {
 }
 
 function stepTitle(part: ToolPart, provider: string): string {
-  const task = part.input?.task;
-  if (typeof task === "string" && task) return task;
+  const title = part.input?.title ?? part.input?.task;
+  if (typeof title === "string" && title.trim()) return title.trim();
   if (part.type === "tool-get_jira_issue") return `Jira issue ${String(part.input?.issueKey ?? "")}`.trim();
   if (part.type === "tool-add_jira_comment") return `Comment on ${String(part.input?.issueKey ?? "Jira")}`;
+  if (part.type === "tool-list_nr_issues") return "Alert issues";
+  if (part.type === "tool-ack_nr_issue") return `Acknowledge issue ${String(part.input?.issueId ?? "")}`.trim();
+  if (part.type === "tool-close_nr_issue") return `Close issue ${String(part.input?.issueId ?? "")}`.trim();
   if (provider === "gcp") return part.type.slice(5).replace(/_/g, " ");
-  return `${providerLabel(provider)} query`;
+  return "Query";
+}
+
+function isRowResult(results: unknown): boolean {
+  return Array.isArray(results) && results.length > 0 && results.every((r) => r !== null && typeof r === "object");
 }
 
 export const QueryBlock = memo(function QueryBlock({ query }: { query: string }) {
@@ -322,13 +333,48 @@ function stepPropsEqual(prev: StepProps, next: StepProps): boolean {
   if (a === b) return true;
   if (a.toolCallId !== b.toolCallId || a.type !== b.type || a.state !== b.state) return false;
   if (a.state === "output-available" || a.state === "output-error") return true;
-  return a.output === b.output && a.errorText === b.errorText && a.input?.task === b.input?.task && a.input?.query === b.input?.query;
+  return a.output === b.output && a.errorText === b.errorText && a.input?.task === b.input?.task && a.input?.query === b.input?.query && a.input?.title === b.input?.title;
+}
+
+// A finished step with one chart or table result sits in a card, with its query behind the chevron.
+function ChartStep({ part, query, results, totalRows }: { part: ToolPart; query: string; results: unknown; totalRows?: number }) {
+  const [open, setOpen] = useState(false);
+  const provider = providerOf(part.type);
+  const title = stepTitle(part, provider);
+  return (
+    <li className="animate-in fade-in duration-200">
+      <Collapsible open={open} onOpenChange={setOpen} className="rounded-xl border bg-card p-4 shadow-sm max-sm:px-3">
+        <FoldTrigger
+          chevronEnd
+          chevronClassName="text-muted-foreground"
+          aria-label={`${title}: show query`}
+          className="flex w-full items-start justify-between gap-3 rounded-md text-left"
+        >
+          <span className="flex min-w-0 items-center gap-2">
+            <ProviderDot provider={provider} />
+            <span className="sr-only">{providerLabel(provider)}:</span>
+            <span className="truncate text-sm font-semibold text-foreground">{title}</span>
+          </span>
+        </FoldTrigger>
+        <CollapsibleContent className="mt-3">
+          <QueryBlock query={query} />
+        </CollapsibleContent>
+        <div className="mt-2">
+          <ResultView data={results} totalRows={totalRows} />
+        </div>
+      </Collapsible>
+    </li>
+  );
 }
 
 export const ProviderStep = memo(function ProviderStep({ part, progressStore }: StepProps) {
   const [open, setOpen] = useState(false);
+  const progress = useProgress(progressStore, part.toolCallId);
   const provider = providerOf(part.type);
   const running = part.state !== "output-available" && part.state !== "output-error";
+  const queries = running || stepError(part) ? [] : stepParts(part, progress?.parts).filter((p) => p.type === "query");
+  const only = queries.length === 1 && queries[0].type === "query" && queries[0].query && isRowResult(queries[0].results) ? queries[0] : null;
+  if (only) return <ChartStep part={part} query={only.query} results={only.results} totalRows={only.totalRows} />;
   const error = open ? null : stepError(part);
   return (
     <li className="animate-in fade-in duration-200">

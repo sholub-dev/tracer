@@ -2,7 +2,7 @@ import type { ReactNode, RefObject } from "react";
 import type { UIMessage } from "ai";
 import { Copy, Download, ImageIcon, Share } from "lucide-react";
 import { toast } from "sonner";
-import { ANALYSIS_MARKER, findAnalysisMarker } from "@tracer-sh/shared";
+import { ANALYSIS_MARKER, findAnalysisMarker, findingFromMessages, findingMarkdown } from "@tracer-sh/shared";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { IS_IOS } from "../../lib/platform";
@@ -34,6 +34,8 @@ function stripMarkdown(text: string): string {
 /** Plain text of a message: text and tool inputs; reasoning and tool results are skipped. */
 export function extractMessageText(parts: UIMessage["parts"]): string {
   const chunks: string[] = [];
+  const finding = findingFromMessages([{ parts }]);
+  if (finding) chunks.push(stripMarkdown(findingMarkdown(finding)));
   for (const part of parts) {
     if (part.type === "text") {
       chunks.push(stripMarkdown(part.text.replace(ANALYSIS_MARKER, "")));

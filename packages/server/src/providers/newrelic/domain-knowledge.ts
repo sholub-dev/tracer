@@ -161,18 +161,7 @@ _Flag if:_ Count is more than 20% lower than the baseline.
 ---
 
 ### Reporting Format
-After completing all applicable checks, report results as a table. (This verdict summary is the ONE permitted markdown table — each check's underlying data must still be shown via tool calls.)
-
-| Check | Current | Baseline (1w ago) | Delta | Status |
-|-------|---------|-------------------|-------|--------|
-| Response Time P99 | ... | ... | +X% | Pass / FLAGGED |
-| Transaction Error Rate | ... | ... | +X% | Pass / FLAGGED |
-| External Services Errors | ... | ... | ... | Pass / FLAGGED / N/A |
-| Success Transactions | ... | ... | -X% | Pass / FLAGGED |
-
-End with an overall verdict on its own line:
-- \`Service appears healthy.\` — all checks pass
-- \`X check(s) flagged: [list check names].\` — one or more checks flagged
+Do not write a results table or a verdict line. Put the result in the finding card: the headline gives the overall verdict (all checks pass, or the flagged check names), and the details give each check's current value against its baseline. Show the checks that matter most with queries (for example \`COMPARE WITH 1 week ago\` for current against baseline).
 
 **If 2 or more checks are flagged, plot them over the same window (TIMESERIES) and compare onsets before reporting.** A shared onset likely means ONE incident across several checks.
 
@@ -228,6 +217,12 @@ const NR_CROSS_SIGNAL = `## Cross-Signal Correlation
 - **\`entity.guid\`**: Universal cross-type linker across Transaction, Span, Log, Metric, Infrastructure.
 - **Diagnostic shortcut**: Health → Transaction | Error cause → TransactionError | Slow? → Transaction FACET name, then Span for breakdown | Which service? → Transaction WHERE traceId | Infra → SystemSample WHERE hostname = '...'`;
 
+const NR_ALERTS = `## Alerts: Issues, Incidents, Policies
+- A **condition** belongs to a **policy**. A condition opens an **incident**. New Relic groups related incidents into one **issue**.
+- \`list_nr_issues\` gives issue state (CREATED, ACTIVATED, DEACTIVATED, CLOSED) and ids. Use it for "what is open now".
+- \`ack_nr_issue\` and \`close_nr_issue\` change the issue in New Relic. Use them when the user asks, or when the session's evidence supports it. State the action and its result in the answer.
+- Incident history: NRQL on \`NrAiIncident\`. Fields: \`incidentId\`, \`event\` ('open' or 'close'), \`policyName\`, \`policyId\`, \`conditionName\`, \`conditionId\`.`;
+
 export const NR_DOMAIN_KNOWLEDGE = `${NR_QUERY_DEFAULTS}
 
 ${NR_EVENT_TYPES}
@@ -238,4 +233,6 @@ ${NRQL_QUICK_REFERENCE}
 
 ${NR_ANTI_PATTERNS}
 
-${NR_SERVICE_HEALTH_RUNBOOK}`;
+${NR_SERVICE_HEALTH_RUNBOOK}
+
+${NR_ALERTS}`;

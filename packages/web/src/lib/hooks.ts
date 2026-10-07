@@ -10,12 +10,15 @@ export function useChatScroll(mountKey?: unknown) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const shouldAutoScroll = useRef(true);
+  // Set when the view stops at an answer card; only the user's own input clears it.
+  const pinned = useRef(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
 
   const scrollToBottom = useCallback((opts?: { animation?: "instant" | "smooth" }) => {
     const el = scrollRef.current;
     if (!el) return;
     shouldAutoScroll.current = true;
+    pinned.current = false;
     el.scrollTo({ top: el.scrollHeight, behavior: opts?.animation === "smooth" ? "smooth" : "instant" });
   }, []);
 
@@ -39,20 +42,43 @@ export function useChatScroll(mountKey?: unknown) {
       const atBottom = height - top - el.clientHeight < 50;
       setIsAtBottom(atBottom);
       if (top < lastTop && height >= lastHeight) shouldAutoScroll.current = false;
-      else if (atBottom) shouldAutoScroll.current = true;
+      else if (atBottom && !pinned.current) shouldAutoScroll.current = true;
       lastTop = top;
       lastHeight = height;
     };
+    const onUser = () => { pinned.current = false; };
+    // pointerdown, not touchmove: charts stop touchmove propagation, and a scrollbar drag sends no wheel event.
+    const inputs = ["wheel", "pointerdown", "keydown"];
     el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
+    for (const type of inputs) el.addEventListener(type, onUser, { passive: true });
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      for (const type of inputs) el.removeEventListener(type, onUser);
+    };
   }, [mountKey]);
 
   // ResizeObserver on inner content div — auto-scrolls on any content growth
   useEffect(() => {
     const el = contentRef.current;
     if (!el) return;
+    // A new answer card stops the follow at the card, so the answer stays in view while its charts load below.
+    // Opening a session stops at the last reply's card; older cards, and cards that appear (or remount) while the
+    // follow is paused, never stop it later.
+    const cardsNow = () => [...el.querySelectorAll("[data-answer-card]")];
+    const lastRow = [...el.querySelectorAll("[data-role]")].at(-1);
+    const openCard = lastRow?.getAttribute("data-role") === "assistant" ? [...lastRow.querySelectorAll("[data-answer-card]")].at(-1) : undefined;
+    const seen = new WeakSet<Element>(cardsNow().filter((c) => c !== openCard));
     const ro = new ResizeObserver(() => {
-      if (shouldAutoScroll.current) scrollToBottom();
+      const fresh = cardsNow().filter((c) => !seen.has(c));
+      fresh.forEach((c) => seen.add(c));
+      if (!shouldAutoScroll.current) return;
+      const scroller = scrollRef.current;
+      const card = fresh.at(-1);
+      if (!card || !scroller) return scrollToBottom();
+      const header = scroller.querySelector("[data-page-header]")?.getBoundingClientRect().height ?? 0;
+      shouldAutoScroll.current = false;
+      pinned.current = true;
+      scroller.scrollTo({ top: scroller.scrollTop + card.getBoundingClientRect().top - scroller.getBoundingClientRect().top - header - 16 });
     });
     ro.observe(el);
     return () => ro.disconnect();

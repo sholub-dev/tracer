@@ -1,11 +1,11 @@
 import { z } from "zod";
 import { tool, type ModelMessage, type Tool } from "ai";
-import { TOOL_NAMES } from "@tracer-sh/shared";
+import { CONFIDENCE, TOOL_NAMES } from "@tracer-sh/shared";
 
 const ledgerSchema = z.object({
   question: z.enum(["lookup", "cause"]).describe("lookup = a count, list or value. cause = why something happens, or what is wrong or healthy."),
   conclusion: z.string().describe("The answer in one sentence, or the gap that blocks one."),
-  confidence: z.enum(["confirmed", "likely", "unverified"]),
+  confidence: z.enum(CONFIDENCE),
   alternatives: z.array(z.object({
     explanation: z.string(),
     ruledOutBy: z.string().describe("The query result, with its numbers, that eliminates this explanation. Empty when no result eliminates it."),
@@ -19,7 +19,7 @@ export type Ledger = z.infer<typeof ledgerSchema>;
 export type ConclusionReview = (ledger: Ledger, messages: ModelMessage[], abortSignal: AbortSignal | undefined) => Promise<string | null>;
 
 const STATUS = "Analysis mode active. Follow the analysis rules from your system prompt.";
-const NEXT = "Settle each challenge before you write the conclusion: make the query that settles it your first visual and state its result, or lower the confidence label. Do not call begin_analysis again.";
+const NEXT = "Settle each challenge in the finding card: lower the confidence label or name it in toConfirm, and make a query that settles it your first visual. Do not call begin_analysis again.";
 
 // Models often write "None" or "N/A" where the schema asks for an empty string.
 const filled = (text: string) => !/^\W*(none|n\/?a|nothing|not checked|not ruled out|not eliminated)?\W*$/i.test(text);

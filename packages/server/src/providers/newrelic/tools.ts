@@ -3,7 +3,7 @@
  */
 
 import { z } from "zod";
-import { tool } from "ai";
+import { tool, type Tool } from "ai";
 import type { NewRelicProvider } from "./newrelic.provider.js";
 import { formatTimestamps, type AfterCompleteParams, type ChatToolMemoryContext, type ChatToolWriter } from "@tracer-sh/shared";
 import {
@@ -39,6 +39,7 @@ function buildExecuteNrqlTool(
     description: "Execute a NRQL query against New Relic.",
     inputSchema: z.object({
       query: z.string().describe("The NRQL query to execute"),
+      title: z.string().optional().describe("Short chart title in plain words, e.g. \"Checkout p95 latency\""),
     }),
     execute: async ({ query }, { toolCallId }) => {
       try {
@@ -65,6 +66,62 @@ function buildExecuteNrqlTool(
   });
 }
 
+const ISSUE_LOOKBACK_HOURS = 6;
+const ISSUE_STATES = ["CREATED", "ACTIVATED", "DEACTIVATED", "CLOSED"] as const;
+
+function buildListIssuesTool(provider: NewRelicProvider) {
+  return tool({
+    description: "List New Relic alert issues with their state, title, condition and incident ids. Use it to see which alerts are open or closed.",
+    inputSchema: z.object({
+      states: z.array(z.enum(ISSUE_STATES)).optional().describe("Keep only these states. Omit for all states."),
+      issueIds: z.array(z.string()).optional().describe("Only these issue ids"),
+      policyIds: z.array(z.number()).optional().describe("Only issues of these alert policy ids"),
+      conditionIds: z.array(z.number()).optional().describe("Only issues of these alert condition ids"),
+      sinceHours: z.number().positive().optional().describe(`How far back to look, in hours. Default ${ISSUE_LOOKBACK_HOURS}.`),
+    }),
+    execute: async ({ states, issueIds, policyIds, conditionIds, sinceHours }) => {
+      try {
+        const filter = {
+          ...(issueIds?.length ? { ids: issueIds } : {}),
+          ...(policyIds?.length ? { policyIds } : {}),
+          ...(conditionIds?.length ? { conditionIds } : {}),
+        };
+        const now = Date.now();
+        const issues = await provider.aiIssues(filter, now - (sinceHours ?? ISSUE_LOOKBACK_HOURS) * 3_600_000, now);
+        return {
+          issues: issues
+            .filter((i) => !states?.length || states.includes(i.state))
+            .map((i) => ({ issueId: i.issueId, state: i.state, title: i.title?.[0] ?? null, conditionName: i.conditionName?.[0] ?? null, incidentIds: i.incidentIds ?? [] })),
+        };
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+  });
+}
+
+function buildIssueActionTool(description: string, run: (issueId: string) => Promise<{ ok: true } | { error: string }>) {
+  return tool({
+    description,
+    inputSchema: z.object({ issueId: z.string().describe("The New Relic issue id, from list_nr_issues") }),
+    execute: ({ issueId }) => run(issueId),
+  });
+}
+
+export function buildNewRelicIssueTools(provider: NewRelicProvider): Record<"list_nr_issues" | "ack_nr_issue" | "close_nr_issue", Tool> {
+  return {
+    list_nr_issues: buildListIssuesTool(provider),
+    ack_nr_issue: buildIssueActionTool(
+      "Acknowledge an issue in New Relic. Use it when the user asks, or when the session's evidence supports it. State the action and its result in the answer.",
+      (id) => provider.ackIssue(id),
+    ),
+    close_nr_issue: buildIssueActionTool(
+      "Close an issue in New Relic. Use it when the user asks, or when the session's evidence supports it. State the action and its result in the answer.",
+      (id) => provider.resolveIssue(id),
+    ),
+  };
+}
+
 // ── Tool factories ──
 
 export function createNewRelicDirectTools(
@@ -78,6 +135,7 @@ export function createNewRelicDirectTools(
   return {
     tools: {
       execute_nrql: buildExecuteNrqlTool(provider, collectedQueries, writer, db as Db | undefined),
+      ...buildNewRelicIssueTools(provider),
       [ANALYSIS_TOOL_NAME]: beginAnalysisTool,
     },
     systemPrompt: injectMemories(directModeSystemPrompt, memoryContext),

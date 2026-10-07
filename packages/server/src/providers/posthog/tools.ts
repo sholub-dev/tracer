@@ -33,6 +33,7 @@ function buildExecuteHogqlTool(
     description: "Execute a HogQL query against PostHog.",
     inputSchema: z.object({
       query: z.string().describe("The HogQL query to execute"),
+      title: z.string().optional().describe("Short chart title in plain words, e.g. \"Checkout p95 latency\""),
     }),
     execute: async ({ query }, { toolCallId }) => {
       try {

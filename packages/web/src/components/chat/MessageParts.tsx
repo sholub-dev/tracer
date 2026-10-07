@@ -1,12 +1,13 @@
 import React from "react";
 import type { UIMessage } from "ai";
 import { Download, FileText, Loader2 } from "lucide-react";
-import { ANALYSIS_MARKER, findAnalysisMarker } from "@tracer-sh/shared";
+import { ANALYSIS_MARKER, findAnalysisMarker, findingFromMessages } from "@tracer-sh/shared";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Markdown } from "../../lib/markdown";
 import type { ProgressStore } from "../../lib/progress-store";
+import { FindingCard } from "./FindingCard";
 import { ReasoningBlock } from "./ReasoningBlock";
 import { Narration, OtherToolPart, ProviderStep, isHiddenPart, isMonitorTool, isProviderTool, providerOf, stepQueryCount, type ToolPart } from "./ToolParts";
 import { providerLabel } from "../../lib/providers";
@@ -93,7 +94,9 @@ export const MessageParts = React.memo(
         }
         return;
       }
-      if (i >= workEnd) answer.push({ part, key: `${i}` });
+      if (i >= workEnd) {
+        if (!(marker && part.type === "reasoning")) answer.push({ part, key: `${i}` });
+      }
       else if (part.type === "file" || isMonitorTool(part.type)) aside.push({ part, key: `${i}` });
       else work.push({ part, key: `${i}` });
     });
@@ -122,6 +125,9 @@ export const MessageParts = React.memo(
       return <OtherToolPart key={key} part={part as ToolPart} />;
     };
 
+    const finding = findingFromMessages([{ parts }]);
+    const card = finding && <FindingCard key="finding" finding={finding} compact={compact} />;
+
     let investigation: React.ReactNode = null;
     if (steps.length > 0) {
       const providers = [...new Set(steps.map((s) => providerLabel(providerOf(s.part.type))))].join(", ");
@@ -149,12 +155,20 @@ export const MessageParts = React.memo(
         {marker && answer.length > 0 ? (
           <section
             aria-label="Analysis"
-            className={cn("space-y-4 rounded-lg border border-primary/20 bg-primary-tint px-5 py-4", compact && "space-y-3 px-4 py-3")}
+            // On a phone the box runs edge to edge, so the cards inside are as wide as the chat input.
+            className={cn(
+              "space-y-4 rounded-lg border border-primary/20 bg-primary-tint px-5 py-4",
+              compact ? "space-y-3 px-4 py-3" : "max-sm:-mx-4 max-sm:rounded-none max-sm:border-x-0 max-sm:px-4",
+            )}
           >
+            {card}
             {answer.map(renderAnswer)}
           </section>
         ) : (
-          answer.map(renderAnswer)
+          <>
+            {card}
+            {answer.map(renderAnswer)}
+          </>
         )}
       </div>
     );

@@ -5,11 +5,14 @@ export const MAX_CONCURRENT_READS = 4;
 /** Tools that change state: each runs alone, in call order. Every other tool is a read. */
 export const WRITE_TOOLS: ReadonlySet<string> = new Set([
   ...Object.values(TOOL_NAMES),
+  "report_finding",
   "report_issue_status",
   "report_alert_summary",
   "dismiss_alert",
   "set_timer",
   "add_jira_comment",
+  "ack_nr_issue",
+  "close_nr_issue",
   "create_memory",
   "update_memory",
   "delete_memory",

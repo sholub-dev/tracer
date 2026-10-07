@@ -1,15 +1,14 @@
 import type { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { createUIMessageStreamResponse, type UIMessage } from "ai";
-import { dashboardSessionId, FEATURES, SESSION_PREFIX, UNIFIED_SCOPE, type ChatMode } from "@tracer-sh/shared";
+import { dashboardSessionId, FEATURES, SESSION_KIND, SESSION_PREFIX, UNIFIED_SCOPE, type ChatMode } from "@tracer-sh/shared";
 import type { Context } from "../../trpc/context.js";
 import { firstUserMessageTitle, loadSessionMessages, runChatAgent } from "../../agents/base-agent.js";
-import { collectChatTools } from "../../tools/chat-tools.js";
+import { collectChatTools, withSessionTools } from "../../tools/chat-tools.js";
 import { collectDashboardTools } from "../../tools/dashboard-tools.js";
 import { collectMonitorTools } from "../../tools/monitor-tools.js";
 import { generateSessionTitle } from "../../agents/utility/title.js";
 import { pastSessionToolFor } from "../../monitors/repeats.js";
-import { setTimerTool } from "../../tools/timer-tool.js";
 import { firingRerun } from "../../monitors/scheduler.js";
 import { CONFIG } from "../../config.js";
 
@@ -51,7 +50,7 @@ export function registerChatRoutes(app: Hono, context: Context): void {
         const readPast = await pastSessionToolFor(context.db, id);
         return {
           ...collected,
-          tools: { ...collected.tools, set_timer: setTimerTool(context.db, id), ...(readPast ? { read_past_session: readPast } : {}), ...rerun?.tools },
+          tools: withSessionTools(collected.tools, context.db, id, rerun ? SESSION_KIND.MONITOR : undefined, { ...(readPast ? { read_past_session: readPast } : {}), ...rerun?.tools }),
           afterComplete,
         };
       },

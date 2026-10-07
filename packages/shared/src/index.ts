@@ -4,3 +4,4 @@ export * from "./constants.js";
 export * from "./chat.types.js";
 export * from "./feature-flags.js";
 export * from "./condition.js";
+export * from "./finding.js";

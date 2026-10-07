@@ -55,7 +55,7 @@ test("unified prompt sections appear in the intended order", () => {
 test("prompts allow batching only independent reads and keep writes alone", () => {
   for (const [name, prompt] of allPrompts) {
     assert.ok(prompt.includes("**Batch only independent reads.** You may make up to 4 tool calls in one step"), `${name}: missing batch rule`);
-    assert.ok(prompt.includes("Never batch begin_analysis, report_issue_status, report_alert_summary, dismiss_alert, set_timer, add_jira_comment"), `${name}: missing write rule`);
+    assert.ok(prompt.includes("Never batch begin_analysis, report_finding, report_issue_status, report_alert_summary, dismiss_alert, set_timer, add_jira_comment, ack_nr_issue, close_nr_issue"), `${name}: missing write rule`);
     assert.ok(!prompt.includes("ONE tool call per step"), `${name}: stale one-call rule`);
   }
 });
@@ -67,6 +67,20 @@ test("prompts require competing explanations and a challenge check, and never fo
       assert.ok(prompt.includes(phrase), `${name}: missing "${phrase}"`);
     }
     for (const stale of ["never run extra investigation queries for it", "they cost thought, not extra steps", "or \"to confirm\""]) {
+      assert.ok(!prompt.includes(stale), `${name}: stale rule "${stale}"`);
+    }
+  }
+});
+
+test("prompts tell the agent to report a finding in every turn that ran at least one query", () => {
+  for (const [name, prompt] of allPrompts) {
+    assert.ok(prompt.includes("call `report_finding` once, alone in its step, in every turn that ran at least one query"), `${name}: missing report_finding rule`);
+    assert.ok(prompt.includes("`kind: \"root_cause\"`") && prompt.includes("`kind: \"summary\"`"), `${name}: missing finding kinds`);
+    assert.ok(prompt.includes("the one check that would confirm it") && !prompt.includes("only place you may name an action"), `${name}: finding card must not allow an action`);
+    assert.ok(prompt.includes("Skip it only when no query ran"), `${name}: missing skip rule`);
+    assert.ok(prompt.includes("`details`: 2 to 5 sentences") && prompt.includes("The card is the whole written answer"), `${name}: missing details rule`);
+    assert.ok(prompt.includes("at most 3 tool calls") && prompt.includes("Nothing after the last visual"), `${name}: missing visuals rule`);
+    for (const stale of ["Visual-first narrative", "End with a concise conclusion", "It does not replace the written answer"]) {
       assert.ok(!prompt.includes(stale), `${name}: stale rule "${stale}"`);
     }
   }

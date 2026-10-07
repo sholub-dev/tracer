@@ -10,9 +10,8 @@ import type { Context } from "../trpc/context.js";
 import { chatSessions } from "../db/schema.js";
 import { sessionChanged } from "../lib/session-events.js";
 import { firstUserMessageTitle, loadSessionMessages, runChatAgent } from "./base-agent.js";
-import { collectChatTools } from "../tools/chat-tools.js";
+import { collectChatTools, withSessionTools } from "../tools/chat-tools.js";
 import { generateSessionTitle } from "./utility/title.js";
-import { setTimerTool } from "../tools/timer-tool.js";
 import { CONFIG } from "../config.js";
 
 export interface StartSessionOptions {
@@ -76,7 +75,7 @@ export async function startAgentSession(
       const orig = collected.afterComplete;
       return {
         ...collected,
-        tools: collected.tools && { ...collected.tools, set_timer: setTimerTool(context.db, sessionId), ...tools },
+        tools: collected.tools && withSessionTools(collected.tools, context.db, sessionId, kind, tools),
         afterComplete: (params) => {
           orig?.(params);
           onComplete?.({});

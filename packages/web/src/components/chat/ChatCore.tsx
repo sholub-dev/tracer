@@ -12,6 +12,7 @@ import {
 } from "react";
 import { useChat, Chat } from "@ai-sdk/react";
 import { DefaultChatTransport, type FileUIPart, type UIMessage } from "ai";
+import { findingFromMessages } from "@tracer-sh/shared";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -121,7 +122,7 @@ const MessageRow = memo(function MessageRow({
   );
   // Off-screen replies skip layout/paint. The last row stays live for streaming; user rows stay unclipped for their floating actions.
   return (
-    <div className={isLast || msg.role === "user" ? undefined : "[content-visibility:auto] [contain-intrinsic-size:auto_600px]"}>
+    <div data-role={msg.role} className={isLast || msg.role === "user" ? undefined : "[content-visibility:auto] [contain-intrinsic-size:auto_600px]"}>
       <ErrorBoundary resetKey={msg}>{renderMessage ? renderMessage(msg, msgIndex, view) : view()}</ErrorBoundary>
     </div>
   );
@@ -285,7 +286,9 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   // The server saves the reason a run ended on its last reply; a returning viewer sees it here.
   const savedError = !isLoading && lastMessage?.role === "assistant" ? (lastMessage.metadata as { error?: unknown } | undefined)?.error : undefined;
   const savedErrorText = typeof savedError === "string" ? savedError : null;
-  const needsContinue = !isLoading && !error && !savedErrorText && messages.length > collapse && lastMessage?.role === "assistant" && lastPart?.type.startsWith("tool-");
+  // A reply with a finding card ends on its last supporting visual, so a finished tool part there is a complete answer.
+  const endsOnVisual = !!lastMessage && (lastPart as { state?: string } | undefined)?.state === "output-available" && !!findingFromMessages([lastMessage]);
+  const needsContinue = !isLoading && !error && !savedErrorText && messages.length > collapse && lastMessage?.role === "assistant" && lastPart?.type.startsWith("tool-") && !endsOnVisual;
 
   // A step can run several tools at once, so any unsettled tool part of the reply counts, not only the last part.
   const isSubAgentRunning = lastMessage?.role === "assistant" && lastMessage.parts.some((p) => {

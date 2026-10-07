@@ -3,7 +3,7 @@
  */
 
 import { z } from "zod";
-import { tool } from "ai";
+import { jsonSchema, tool } from "ai";
 import type { AfterCompleteParams, ChatToolMemoryContext, ChatToolWriter } from "@tracer-sh/shared";
 import {
   injectMemories,
@@ -26,6 +26,16 @@ import {
 export { GCP_DIRECT_MODE_MAX_STEPS, buildGcpUnifiedFragment };
 
 // ── Direct mode tool factory ──
+
+// Adds the chart-title field to an MCP tool's schema; the field is dropped again before the call.
+function withTitleField(schema: any) {
+  const base = schema?.jsonSchema;
+  if (!base?.properties || "title" in base.properties) return schema ?? z.object({});
+  return jsonSchema({
+    ...base,
+    properties: { ...base.properties, title: { type: "string", description: 'Short chart title in plain words, e.g. "Checkout p95 latency"' } },
+  });
+}
 
 export function createGcpDirectTools(
   provider: McpProvider,
@@ -50,11 +60,14 @@ export function createGcpDirectTools(
 
   for (const [name, mcpTool] of Object.entries(rawMcpTools)) {
     const originalExecute = (mcpTool as any).execute.bind(mcpTool);
+    const ownsTitle = "title" in ((mcpTool as any).inputSchema?.jsonSchema?.properties ?? {});
 
     directTools[name] = tool({
       description: (mcpTool as any).description ?? name,
-      inputSchema: (mcpTool as any).inputSchema ?? z.object({}),
-      execute: async (input: any, { toolCallId }: { toolCallId: string }) => {
+      inputSchema: withTitleField((mcpTool as any).inputSchema),
+      execute: async (rawInput: any, { toolCallId }: { toolCallId: string }) => {
+        const { title: _title, ...rest } = rawInput && typeof rawInput === "object" ? rawInput : ({} as Record<string, unknown>);
+        const input = ownsTitle || !rawInput || typeof rawInput !== "object" ? rawInput : rest;
         const queryStr = typeof input === "string" ? input : JSON.stringify(input).slice(0, 500);
 
         const auth = await getGcpAuth();

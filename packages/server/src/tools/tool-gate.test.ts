@@ -92,3 +92,9 @@ test("abort reaches a running tool through its options", async () => {
   ac.abort();
   await assert.rejects(run, /aborted/);
 });
+
+test("the New Relic issue actions are write tools", async () => {
+  const { WRITE_TOOLS } = await import("./tool-gate.js");
+  assert.ok(WRITE_TOOLS.has("ack_nr_issue") && WRITE_TOOLS.has("close_nr_issue"));
+  assert.ok(!WRITE_TOOLS.has("list_nr_issues"));
+});

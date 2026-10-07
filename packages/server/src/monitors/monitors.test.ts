@@ -7,7 +7,7 @@ import { substituteWindow } from "@tracer-sh/shared";
 import * as schema from "../db/schema.js";
 import type { Db } from "../db/driver.js";
 import { evaluateCondition, extractGroups, parseCondition, sumGroups } from "./condition.js";
-import { byRelevance, classifyGroups, readPastSessionTool } from "./repeats.js";
+import { byRelevance, classifyGroups, outcomeSummary, readPastSessionTool } from "./repeats.js";
 import { isFailedWindow, nextWindow } from "./scheduler.js";
 import { validateMonitor } from "./validate.js";
 import { summaryFromMessages } from "./alert-summary.js";
@@ -202,7 +202,7 @@ test("readPastSessionTool loads the past-session list lazily, once, and only all
   let loads = 0;
   const t = readPastSessionTool(() => {
     loads++;
-    return [{ sessionId: "s1", triggeredAt: 0, keys: ["a"], analysis: "x", report: null }];
+    return [{ sessionId: "s1", triggeredAt: 0, keys: ["a"], analysis: "x", report: null, finding: null }];
   });
   assert.equal(loads, 0);
   const run = (sessionId: string) => t.execute!({ sessionId }, { toolCallId: "c", messages: [] } as never);
@@ -212,12 +212,18 @@ test("readPastSessionTool loads the past-session list lazily, once, and only all
 });
 
 test("summaryFromMessages takes the last successful report_alert_summary call", () => {
-  const base = { severity: "low", tldr: "a", rootCause: "b", policy: "", started: "", status: "", issues: [], seenBefore: "" };
+  const base = { severity: "low", policy: "", started: "", status: "", issues: [], seenBefore: "" };
   const call = (input: object, state = "output-available") => ({ type: "tool-report_alert_summary", toolCallId: "c", state, input, output: {} });
   const messages = [
-    { id: "1", role: "assistant", parts: [call(base), call({ ...base, tldr: "latest" }), { type: "text", text: "done" }] },
-    { id: "2", role: "assistant", parts: [call({ ...base, tldr: "failed" }, "output-error")] },
+    { id: "1", role: "assistant", parts: [call(base), call({ ...base, policy: "latest" }), { type: "text", text: "done" }] },
+    { id: "2", role: "assistant", parts: [call({ ...base, policy: "failed" }, "output-error")] },
   ] as unknown as UIMessage[];
-  assert.deepEqual(summaryFromMessages(messages), { ...base, tldr: "latest" });
+  assert.deepEqual(summaryFromMessages(messages), { ...base, policy: "latest" });
   assert.equal(summaryFromMessages([]), null);
+});
+
+test("outcomeSummary prefers the finding headline over the first analysis sentence", () => {
+  const finding = { kind: "summary" as const, headline: "Checkout is healthy.", details: "", points: [] };
+  assert.equal(outcomeSummary({ analysis: "Errors rose. Then fell.", finding }), "Checkout is healthy.");
+  assert.equal(outcomeSummary({ analysis: "Errors rose. Then fell.", finding: null }), "Errors rose.");
 });

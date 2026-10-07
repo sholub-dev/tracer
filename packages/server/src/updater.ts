@@ -29,7 +29,6 @@ interface UpdateStatus {
 }
 
 let cachedStatus: UpdateStatus | null = null;
-let lastCheckAtMs = 0;
 let checkInFlight = false;
 let installInFlight = false;
 
@@ -114,17 +113,8 @@ function fetchLatestNpmVersion(): Promise<string | null> {
   });
 }
 
-/**
- * Returns the cached update status (or a safe default before the first check
- * completes). Long-running servers would otherwise never learn about releases
- * published after startup, so a stale cache re-triggers the background check.
- */
+/** Returns the cached update status, or a safe default before the first check completes. */
 export function getUpdateStatus(): UpdateStatus {
-  // Never start an `npm view` while an install runs — concurrent npm processes
-  // on the shared cache are a known source of truncated-download failures.
-  if (!installInFlight && Date.now() - lastCheckAtMs > CONFIG.updateCheckTtlMs) {
-    checkForUpdateBackground();
-  }
   if (cachedStatus) return cachedStatus;
   return {
     available: false,
@@ -134,25 +124,21 @@ export function getUpdateStatus(): UpdateStatus {
   };
 }
 
-/** Fire-and-forget background update check. Populates cachedStatus for tRPC queries. */
-export function checkForUpdateBackground(): void {
-  if (checkInFlight) return;
+/**
+ * Query npm and update cachedStatus. A failed lookup keeps the last known
+ * status, so an offline moment never hides an update that was already found.
+ */
+export async function checkForUpdate(fetchLatest: () => Promise<string | null> = fetchLatestNpmVersion): Promise<void> {
+  // Never start an `npm view` while an install runs — concurrent npm processes
+  // on the shared cache are a known source of truncated-download failures.
+  if (checkInFlight || installInFlight) return;
   checkInFlight = true;
-  lastCheckAtMs = Date.now();
-
-  const current = readCurrentVersion();
-  const method = getInstallMethod();
-  const unavailable = (): UpdateStatus => ({ available: false, currentVersion: current, latestVersion: null, method });
-
-  if (current === "unknown") {
-    cachedStatus = unavailable();
-    checkInFlight = false;
-    return;
-  }
-
-  fetchLatestNpmVersion().then((latest) => {
+  try {
+    const current = readCurrentVersion();
+    const method = getInstallMethod();
+    const latest = current === "unknown" ? null : await fetchLatest().catch(() => null);
     if (!latest) {
-      cachedStatus = unavailable();
+      cachedStatus ??= { available: false, currentVersion: current, latestVersion: null, method };
       return;
     }
     const available = isNewerVersion(latest, current);
@@ -163,11 +149,15 @@ export function checkForUpdateBackground(): void {
         : "click the version in the sidebar to update from the app";
       console.log(`Update available: v${current} → v${latest} (${hint})`);
     }
-  }).catch(() => {
-    cachedStatus = unavailable();
-  }).finally(() => {
+  } finally {
     checkInFlight = false;
-  });
+  }
+}
+
+/** Check now, then re-check on a timer so a long-running server learns of new releases without client traffic. */
+export function startUpdateChecks(): void {
+  void checkForUpdate();
+  setInterval(() => void checkForUpdate(), CONFIG.updateCheckIntervalMs).unref();
 }
 
 export interface SelfUpdateResult {

@@ -1,5 +1,5 @@
 import { tool, type Tool } from "ai";
-import { SESSION_KIND, findingSchema, type Finding, type SessionKind } from "@tracer-sh/shared";
+import { findingSchema, type Finding } from "@tracer-sh/shared";
 
 // Read back from the saved tool call, like the alert summary.
 export function reportFindingTool(): Tool<Finding, { recorded: true }> {
@@ -9,9 +9,4 @@ export function reportFindingTool(): Tool<Finding, { recorded: true }> {
     inputSchema: findingSchema,
     execute: async () => ({ recorded: true }),
   });
-}
-
-/** Monitor runs report through report_alert_summary instead. */
-export function findingTools(kind?: SessionKind): Record<string, unknown> {
-  return kind === SESSION_KIND.MONITOR ? {} : { report_finding: reportFindingTool() };
 }

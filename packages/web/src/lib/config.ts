@@ -9,6 +9,7 @@ export const WEB_CONFIG = {
   /** How often a failed data-source check repeats. */
   providerRetryMs: 15_000,
   updateCheckStaleTimeMs: 5 * 60 * 1000,
+  updateCheckIntervalMs: 15 * 60 * 1000,
   gcpProjectsStaleTimeMs: 5 * 60 * 1000,
   /** Grace period before probing a self-updating server, so the old one exits first. */
   updateRestartProbeDelayMs: 1_500,

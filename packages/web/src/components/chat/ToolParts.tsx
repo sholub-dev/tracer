@@ -66,13 +66,13 @@ export const isMonitorTool = (type: string) => MONITOR_TOOLS.has(type);
 
 export const providerOf = (type: string) => PROVIDER_BY_TOOL[type] ?? "gcp";
 
-/** Parts that never render: the analysis marker, removed propose_monitor drafts, and a recorded alert summary or finding (shown as a panel or card). */
+/** Parts that never render: the analysis marker, removed propose_monitor drafts, and a recorded finding (shown as a card). */
 export function isHiddenPart(part: { type: string; state?: string }) {
   return (
     part.type === CLIENT_TOOL_NAMES.BEGIN_ANALYSIS ||
     part.type === "tool-propose_monitor" ||
     part.type === "step-start" ||
-    ((part.type === "tool-report_alert_summary" || part.type === "tool-report_finding") && part.state === "output-available")
+    (part.type === "tool-report_finding" && part.state === "output-available")
   );
 }
 

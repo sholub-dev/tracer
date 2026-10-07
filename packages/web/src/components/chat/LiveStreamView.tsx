@@ -7,7 +7,6 @@ import { WEB_CONFIG } from "../../lib/config";
 import { readEventStream } from "../../lib/sse";
 import { serverFetch } from "../../lib/server-fetch";
 import { useOnResume } from "../../lib/resume";
-import { AlertSummaryPanel, alertSummaryOf } from "./AlertSummaryPanel";
 import { WorkingIndicator } from "./ChatIndicators";
 import { Composer } from "./Composer";
 import { FollowUpTimerBar } from "./FollowUpTimerBar";
@@ -142,7 +141,6 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
 
   useEscapeToStop(true, () => void stopChat(sessionId));
 
-  const alert = useMemo(() => alertSummaryOf(messages), [messages]);
   const lastIdx = messages.length - 1;
   const waiting = messages[lastIdx]?.role === "user";
   const { collapse, analysisOnlyMsg } = useCompactedMessages(messages, collapseCount, analysisOnlyIndex);
@@ -173,7 +171,6 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
           </>
         }
       >
-        {alert && <AlertSummaryPanel summary={alert.summary} triage={alert.triage} />}
         {beforeMessages}
         {messages.map((message, index) => index < collapse ? null : (
           <MessageView

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { detectInstallMethod, isNewerVersion, withRetries, PERMANENT_NPM_ERROR } from "./updater.js";
+import { detectInstallMethod, isNewerVersion, withRetries, PERMANENT_NPM_ERROR, checkForUpdate, getUpdateStatus } from "./updater.js";
 
 test("detectInstallMethod classifies npx cache, global install, and source checkout", () => {
   assert.equal(detectInstallMethod(join("/home/u/.npm/_npx/d56038afd552885c", "node_modules", "tracer-sh")), "npx");
@@ -59,4 +59,14 @@ test("permanent-error pattern matches install-blocking codes but not transient n
   ]) {
     assert.ok(!PERMANENT_NPM_ERROR.test(transient), `should not match ${transient}`);
   }
+});
+
+test("a failed check keeps an earlier available status", async () => {
+  await checkForUpdate(async () => "999.0.0");
+  assert.equal(getUpdateStatus().available, true);
+  await checkForUpdate(async () => null);
+  assert.equal(getUpdateStatus().available, true);
+  assert.equal(getUpdateStatus().latestVersion, "999.0.0");
+  await checkForUpdate(async () => { throw new Error("offline"); });
+  assert.equal(getUpdateStatus().latestVersion, "999.0.0");
 });

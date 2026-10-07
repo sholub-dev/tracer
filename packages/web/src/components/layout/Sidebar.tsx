@@ -138,6 +138,8 @@ function VersionStatus() {
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const updateCheck = trpc.update.check.useQuery(undefined, {
     staleTime: WEB_CONFIG.updateCheckStaleTimeMs,
+    refetchInterval: WEB_CONFIG.updateCheckIntervalMs,
+    refetchOnWindowFocus: true,
     enabled: !IS_IOS,
   });
   const version = updateCheck.data?.currentVersion ?? __APP_VERSION__;

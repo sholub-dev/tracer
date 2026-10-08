@@ -7,6 +7,7 @@ import { ProviderRegistry } from "./providers/registry.js";
 import { registerDefaultProviders } from "./providers/register-defaults.js";
 import { createContext } from "./trpc/context.js";
 import { createApp } from "./http/app.js";
+import { maintainMemories } from "./agents/utility/memory-maintenance.js";
 import { MonitorScheduler } from "./monitors/scheduler.js";
 
 /** Starts everything the desktop server and the in-app server share: schema, providers, context, routes, monitors. */
@@ -17,6 +18,7 @@ export async function startRuntime(
 ) {
   await runSetup(setupDriver);
   await repairChats(db, setupDriver);
+  void maintainMemories(db);
 
   const settled: string[] = [];
   const interrupted = await settleInterruptedRuns(db, settled);

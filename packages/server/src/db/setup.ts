@@ -23,6 +23,7 @@ export const SYNC_KEYS: Record<string, { key: string; time?: string }> = {
 const UNSYNCED_COLUMNS: Record<string, string[]> = {
   monitors: ["last_checked_at", "last_status", "last_error", "updated_at"],
   chat_sessions: ["status", "run_scope", "resumed"],
+  tool_memories: ["last_used_at"],
 };
 
 // ROUND, not CAST: the float math lands just under the millisecond, behind the JS clock that sync marks use.
@@ -199,6 +200,9 @@ export async function runSetup(sqlite: SetupDriver): Promise<void> {
   const claimFirings = !(await columns("monitor_triggers")).has("device_id");
   for (const [table, column, type] of [
     ["tool_memories", "review_note", "TEXT"],
+    ["tool_memories", "source_session_id", "TEXT"],
+    ["tool_memories", "source", "TEXT NOT NULL DEFAULT 'agent'"],
+    ["tool_memories", "last_used_at", "INTEGER"],
     ["chat_sessions", "kind", "TEXT"],
     ["chat_sessions", "summary", "TEXT"],
     ["chat_sessions", "summary_up_to", "INTEGER"],

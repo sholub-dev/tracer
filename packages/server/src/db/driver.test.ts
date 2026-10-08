@@ -7,7 +7,7 @@ import { runInTransaction, type Db } from "./driver.js";
 
 function memoryDb(): Db {
   const sqlite = new Database(":memory:");
-  sqlite.exec("CREATE TABLE tool_memories (id INTEGER PRIMARY KEY AUTOINCREMENT, uid TEXT, tool_name TEXT NOT NULL, note TEXT NOT NULL, review_note TEXT, created_at INTEGER NOT NULL DEFAULT (unixepoch()))");
+  sqlite.exec("CREATE TABLE tool_memories (id INTEGER PRIMARY KEY AUTOINCREMENT, uid TEXT, tool_name TEXT NOT NULL, note TEXT NOT NULL, review_note TEXT, source_session_id TEXT, source TEXT NOT NULL DEFAULT 'agent', last_used_at INTEGER, created_at INTEGER NOT NULL DEFAULT (unixepoch()))");
   return drizzle(sqlite, { schema }) as unknown as Db;
 }
 

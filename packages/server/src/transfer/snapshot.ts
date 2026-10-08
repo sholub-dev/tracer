@@ -22,7 +22,7 @@ export const TABLES: [string, SQLiteTable][] = [
   ["agent_runs", schema.agentRuns],
 ];
 
-export const FORMAT = 3;
+export const FORMAT = 4;
 
 export interface Snapshot {
   format: number;

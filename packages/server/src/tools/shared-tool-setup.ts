@@ -1,7 +1,8 @@
 import type { Db } from "../db/driver.js";
 import type { ProviderRegistry } from "../providers/registry.js";
-import type { ChatToolWriter as StreamWriter, AfterCompleteParams, ChatMode } from "@tracer-sh/shared";
+import type { ChatToolWriter as StreamWriter, AfterCompleteParams, ChatMode, MemoryInjection } from "@tracer-sh/shared";
 import { toolMemories } from "../db/schema.js";
+import { combineSets, memorySetFor } from "./memory-notes.js";
 import { applyStepBudget, buildNoProviderPrompt, buildUnifiedModePrompt } from "../lib/shared-prompts.js";
 import { injectMemories } from "../agents/chat/sub-agent.js";
 import { getJiraChatTools } from "../integrations/jira/tools.js";
@@ -29,6 +30,7 @@ export async function collectBaseTools(
   includeIntegrations = false,
 ): Promise<BaseToolSetup> {
   const memories = await db.select().from(toolMemories).all();
+  const sessionId = writer?.sessionId;
   const tools: Record<string, unknown> = {};
   const promptFragments: string[] = [];
   const systemPrompts: string[] = [];
@@ -43,6 +45,14 @@ export async function collectBaseTools(
     connectedProviders = connectedProviders.filter((p) => p.type === activeProvider);
   }
 
+  // Chosen once per session, in connected order, so the prompt text stays the same on later turns.
+  // Notes of the "unified" source are general: every run carries them within the same budget.
+  const general = memories.filter((m) => m.toolName === "unified");
+  const injected = new Map<string, MemoryInjection>();
+  for (const p of connectedProviders) {
+    injected.set(p.type, await memorySetFor(db, sessionId, p.type, [...memories.filter((m) => m.toolName === p.type), ...general]));
+  }
+
   // Collect tools from all connected providers
   for (const provider of connectedProviders) {
     if (provider.getChatTools) {
@@ -52,6 +62,7 @@ export async function collectBaseTools(
           memoryContext: {
             toolName: provider.type,
             existingMemories: memories.filter((m) => m.toolName === provider.type),
+            injected: injected.get(provider.type),
           },
           db,
           mode,
@@ -96,6 +107,7 @@ export async function collectBaseTools(
           {
             toolName: "unified",
             existingMemories: memories.filter((m) => connectedProviders.some((p) => p.type === m.toolName)),
+            injected: combineSets(connectedProviders.map((p) => injected.get(p.type)!)),
           },
         )
       : undefined;

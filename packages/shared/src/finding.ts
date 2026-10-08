@@ -6,24 +6,26 @@ export const FINDING_KIND = ["root_cause", "summary"] as const;
 
 export const VERDICT = ["problem", "no_problem", "unclear"] as const;
 
+const INLINE = "Inline markdown only: **bold** for the one or two key facts (a number, a time window, the failing component), `code` for identifiers (exception classes, endpoints, error messages, query fragments). Sparing; no headings, lists, links or HTML.";
+
 const NO_IDS = "No ids (incident, issue, session, UUIDs) anywhere in the card: name the service, endpoint or condition instead. Nothing repeated across fields.";
 
 export const findingSchema = z.object({
   kind: z.enum(FINDING_KIND).describe("root_cause when the turn explains why something happened; summary for status, counts, trends and lookups"),
   verdict: z.enum(VERDICT).optional().describe("root_cause only, required for it: problem when something is broken or degraded; no_problem when the signal is expected, normal or noise; unclear when the data stops short."),
   headline: z.string().describe(`One plain sentence. root_cause: what happened and why (the change, condition or failing dependency), never the symptom restated. summary: the main takeaway with its key number. ${NO_IDS} No "Root cause:" or "Summary:" prefix.`),
-  happened: z.string().optional().describe("root_cause only: 1 to 2 sentences on what was observed, where, when and how much (numbers and the time window). Inline **bold** and `code` allowed. " + NO_IDS),
-  cause: z.string().optional().describe("root_cause only: 1 to 3 sentences on the mechanism that explains it, or why it is not a fault. Never the symptom restated. When the data does not show the cause, say where it stops and label any candidate as a candidate. " + NO_IDS),
+  happened: z.string().optional().describe("root_cause only: 1 to 2 sentences on what was observed, where, when and how much (numbers and the time window). " + INLINE + " " + NO_IDS),
+  cause: z.string().optional().describe("root_cause only: 1 to 3 sentences on the mechanism that explains it, or why it is not a fault. Never the symptom restated. When the data does not show the cause, say where it stops and label any candidate as a candidate. " + INLINE + " " + NO_IDS),
   evidence: z.array(z.object({
-    fact: z.string().describe("One fact with a number or time from a query result"),
+    fact: z.string().describe("One fact with a number or time from a query result. " + INLINE),
     query: z.string().optional().describe("The exact title you gave the query whose result shows this fact"),
   })).max(5).optional().describe("root_cause only: 1 to 5 facts from query results, only facts not already in happened or cause. " + NO_IDS),
-  impact: z.string().optional().describe("root_cause only: who or what is affected and how much. \"none\" is allowed for no_problem. " + NO_IDS),
-  action: z.string().optional().describe("root_cause only: an action you performed in this turn, stated as a fact (for example that you closed the issue). Never a fix for the user to make."),
+  impact: z.string().optional().describe("root_cause only: who or what is affected and how much. \"none\" is allowed for no_problem. " + INLINE + " " + NO_IDS),
+  action: z.string().optional().describe("root_cause only: an action you performed in this turn, stated as a fact (for example that you closed the issue). Never a fix for the user to make. " + INLINE),
   confidence: z.enum(CONFIDENCE).optional().describe("root_cause only: confirmed only when a query result shows the cause itself, not only the symptom, and rules out the strongest alternative. Ignored for summary."),
-  toConfirm: z.string().optional().describe("root_cause only: one check that would confirm the cause, naming the data and the time window to look at, e.g. \"Gateway pool metrics 14:35-14:45\". Never a fix or an action on the system. Omit when confidence is confirmed."),
-  details: z.string().optional().describe("summary only: 1 to 5 sentences; the first answers the question directly, the rest give the key numbers and the time window from query results. Inline **bold** and `code` allowed; no lists, no headings. " + NO_IDS),
-  points: z.array(z.string()).max(4).optional().describe("summary only: 0 to 4 facts with a number or time from a query result, only facts not already in details"),
+  toConfirm: z.string().optional().describe("root_cause only: one check that would confirm the cause, naming the data and the time window to look at, e.g. \"Gateway pool metrics 14:35-14:45\". Never a fix or an action on the system. Omit when confidence is confirmed. " + INLINE),
+  details: z.string().optional().describe("summary only: 1 to 5 sentences; the first answers the question directly, the rest give the key numbers and the time window from query results. " + INLINE + " " + NO_IDS),
+  points: z.array(z.string()).max(4).optional().describe("summary only: 0 to 4 facts with a number or time from a query result, only facts not already in details. " + INLINE),
 });
 
 export type Finding = z.infer<typeof findingSchema>;

@@ -2,6 +2,7 @@ import { Check } from "lucide-react";
 import type { Finding } from "@tracer-sh/shared";
 import { cn } from "@/lib/utils";
 import { Markdown } from "../../lib/markdown";
+import { Inline, stripInline } from "../../lib/inline-markdown";
 import { flashStep } from "./ToolParts";
 
 type QueryRef = { title: string; toolCallId: string };
@@ -28,7 +29,7 @@ function Section({ label, compact, children }: { label: string; compact: boolean
 }
 
 function Body({ text, compact }: { text: string; compact: boolean }) {
-  return <Markdown text={text} className={cn("text-[15px]/[1.6] text-ink-2 [&_strong]:text-foreground [&_code]:break-words", compact && "text-sm/[1.55]")} />;
+  return <p className={cn("text-[15px]/[1.6] text-ink-2 [overflow-wrap:anywhere]", compact && "text-sm/[1.55]")}><Inline text={text} /></p>;
 }
 
 function Checks({ items, verified, compact }: { items: { fact: string; toolCallId?: string; title?: string }[]; verified: boolean; compact: boolean }) {
@@ -40,7 +41,7 @@ function Checks({ items, verified, compact }: { items: { fact: string; toolCallI
             {verified ? <Check className="size-3" strokeWidth={3} aria-hidden="true" /> : <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />}
           </span>
           <span className="min-w-0 [overflow-wrap:anywhere]">
-            {fact}
+            <Inline text={fact} />
             {toolCallId && (
               <button
                 type="button"
@@ -84,7 +85,7 @@ export function FindingCard({ finding, compact = false, queries = [] }: { findin
         )}
         {isCause && <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-medium", PILL[confidence])}>{confidence}</span>}
       </div>
-      <h3 className={cn("mt-1.5 text-xl/[1.25] font-semibold tracking-tight text-foreground", compact && "text-base/[1.25]")}>{finding.headline}</h3>
+      <h3 className={cn("mt-1.5 text-xl/[1.25] font-semibold tracking-tight text-foreground", compact && "text-base/[1.25]")}>{stripInline(finding.headline)}</h3>
       {isCause ? (
         <>
           {finding.happened && <Section label="What happened" compact={compact}><Body text={finding.happened} compact={compact} /></Section>}
@@ -98,7 +99,7 @@ export function FindingCard({ finding, compact = false, queries = [] }: { findin
           {finding.action && <Section label="Action taken" compact={compact}><Body text={finding.action} compact={compact} /></Section>}
           {finding.toConfirm && (
             <p className={cn("mt-5 rounded-[10px] bg-secondary px-4 py-3 text-sm text-ink-2 [overflow-wrap:anywhere]", compact && "mt-4 px-3 py-2.5")}>
-              <b className="font-semibold text-foreground">To confirm:</b> {finding.toConfirm}
+              <b className="font-semibold text-foreground">To confirm:</b> <Inline text={finding.toConfirm} />
             </p>
           )}
         </>

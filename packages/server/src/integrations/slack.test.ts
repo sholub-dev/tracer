@@ -53,6 +53,11 @@ test("verdictOf takes the headline, verdict, happened, cause and confidence from
   assert.deepEqual([s.severity, s.summary, s.happened, s.cause], ["high", "Checkout is healthy.", "", ""]);
 });
 
+test("verdictOf strips inline markdown from happened and cause, then redacts", () => {
+  const v = verdictOf(null, finding({ headline: "Pool full.", verdict: "problem", happened: "**50 of 50** held; `PoolTimeoutError` for jo.d@corp.com today.", cause: "Retry loop in **checkout**.", confidence: "likely" }));
+  assert.deepEqual([v.happened, v.cause], ["50 of 50 held; PoolTimeoutError for [email] today.", "Retry loop in checkout."]);
+});
+
 test("redact masks personal data, keeps normal text", () => {
   assert.equal(
     redact("jo.d+x@corp.com 123-45-6789 (415) 555-1234 loan 1234567890 at 10:05 in svc-a v1.2"),

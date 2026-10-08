@@ -23,6 +23,12 @@ test("findingFromMessages reads a root cause without confidence as unverified an
   assert.match(findingMarkdown(bare), /^\*\*Problem\*\* \(unverified\):/);
 });
 
+test("findingFromMessages keeps inline markdown and findingMarkdown passes it through", () => {
+  const card = { ...valid, happened: "**50 of 50** connections held; `PoolTimeoutError` from 10:05." };
+  assert.equal(findingFromMessages(msgs(call(card)))?.happened, card.happened);
+  assert.ok(findingMarkdown(card).includes(card.happened));
+});
+
 test("findingFromMessages skips invalid input and unfinished calls", () => {
   assert.deepEqual(findingFromMessages(msgs(call(valid), call({ headline: "x" }), call({ ...valid, headline: "z" }, "input-available"))), valid);
   assert.equal(findingFromMessages(msgs(call({ ...valid, evidence: ["1", "2", "3", "4", "5", "6"].map((fact) => ({ fact })) }))), null);

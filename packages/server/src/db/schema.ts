@@ -25,6 +25,9 @@ export const toolMemories = sqliteTable("tool_memories", {
   toolName: text("tool_name").notNull(),
   note: text("note").notNull(),
   reviewNote: text("review_note"),
+  sourceSessionId: text("source_session_id"), // the session may not exist on another device
+  source: text("source").notNull().default("agent"), // "agent" | "user"
+  lastUsedAt: integer("last_used_at"), // device state: never synced
   createdAt: integer("created_at")
     .notNull()
     .$defaultFn(() => unixNow()),

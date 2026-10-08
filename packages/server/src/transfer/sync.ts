@@ -151,8 +151,9 @@ export async function mergeSyncPayload(db: Db, remote: SyncPayload): Promise<{ a
           values = { ...values, memoryId: local?.id ?? null };
         }
         let insert = values;
-        // The toggles sync; the check state stays on its device.
+        // The toggles sync; the check state and a note's last use stay on their device.
         if (name === "monitors") values = insert = omit(values, MONITOR_RUNTIME);
+        if (name === "tool_memories") values = insert = omit(values, ["lastUsedAt"]);
         if (name === "chat_sessions") {
           // A new session arrives idle; an existing one keeps the run state of this device.
           insert = { ...values, ...SESSION_RUN_STATE };

@@ -32,6 +32,14 @@ export interface ChatToolWriter {
 export interface ChatToolMemoryContext {
   toolName: string;
   existingMemories: Array<{ id: number; toolName: string; note: string | null }>;
+  /** The notes the prompt carries; when absent, they are picked from `existingMemories`. */
+  injected?: MemoryInjection;
+}
+
+/** The notes chosen for a prompt, and how many the budget left out. */
+export interface MemoryInjection {
+  notes: Array<{ id: number; toolName: string; note: string }>;
+  omitted: number;
 }
 
 /**

@@ -107,7 +107,7 @@ const SECTION_MAX_CHARS = 2900; // Slack rejects section text over 3000.
 
 export const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max)} …` : s);
 // Redact before clipping: a cut value may no longer match the redact patterns.
-const tidy = (s: string, max = DETAIL_MAX_CHARS) => clip(redact(s.replace(/\*\*|`/g, "").trim()), max);
+const tidy = (s: string, max = DETAIL_MAX_CHARS) => clip(redact(s.replace(/\*\*|`/g, "").replace(/^[ \t]*[-*][ \t]+/gm, "• ").trim()), max);
 const known = (s: string) => (/^(unknown|n\/a|none)?\.?$/i.test(s) ? "" : s);
 
 export interface Verdict {

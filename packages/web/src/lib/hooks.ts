@@ -37,16 +37,23 @@ export function useChatScroll(mountKey?: unknown) {
     if (!el) return;
     let lastTop = el.scrollTop;
     let lastHeight = el.scrollHeight;
-    // Any upward move pauses (even near the bottom); a drop from content shrinking is not the user.
+    // Distance is clamped at 0 so iOS bounce does not count. A resize (keyboard, toolbar) clamps scrollTop down
+    // without moving the view away from the bottom, so only a growing distance means the user scrolled up.
+    const gap = (top: number) => Math.max(0, el.scrollHeight - top - el.clientHeight);
+    let lastGap = gap(lastTop);
     const onScroll = () => {
       const top = el.scrollTop;
       const height = el.scrollHeight;
-      const atBottom = height - top - el.clientHeight < 50;
+      const distance = gap(top);
+      const atBottom = distance < 50;
       setIsAtBottom(atBottom);
-      if (top < lastTop && height >= lastHeight) shouldAutoScroll.current = false;
-      else if (atBottom && !pinned.current) shouldAutoScroll.current = true;
+      if (top >= 0) {
+        if (top < lastTop && distance > lastGap && height >= lastHeight) shouldAutoScroll.current = false;
+        else if (atBottom && !pinned.current) shouldAutoScroll.current = true;
+      }
       lastTop = top;
       lastHeight = height;
+      lastGap = distance;
     };
     const onUser = () => { pinned.current = false; };
     // pointerdown, not touchmove: charts stop touchmove propagation, and a scrollbar drag sends no wheel event.

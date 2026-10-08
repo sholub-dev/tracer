@@ -79,7 +79,7 @@ export class ProviderRegistry {
   async reconnectDisconnected(): Promise<void> {
     const now = Date.now();
     const due = this.getAllProviders().filter((p) => {
-      if (p.connected || now - (this.lastReconnectAt.get(p.name) ?? -Infinity) < CONFIG.providerReconnectCooldownMs) return false;
+      if ((p.connected && !p.idle) || now - (this.lastReconnectAt.get(p.name) ?? -Infinity) < CONFIG.providerReconnectCooldownMs) return false;
       this.lastReconnectAt.set(p.name, now);
       return true;
     });

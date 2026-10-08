@@ -3,6 +3,8 @@ import { fromBase64Url as decode, toBase64Url as encode } from "../lib/base64.js
 
 /** Larger data does not fit in memory on the phone. The limit applies to the compressed data. */
 export const MAX_SYNC_BYTES = 100 * 1024 * 1024;
+/** The sealed form is base64, a third larger than the compressed data. */
+export const MAX_BODY_BYTES = Math.ceil((MAX_SYNC_BYTES * 4) / 3) + 1024;
 /** A JS string holds about 512 MB; the unpacked text must stay well below that. */
 export const MAX_UNPACKED_BYTES = 400 * 1024 * 1024;
 

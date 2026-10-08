@@ -6,8 +6,9 @@ import { CONFIG } from "../config.js";
 
 export function applyMiddleware(app: Hono): void {
   app.use("*", logger((msg: string, ...rest: string[]) => {
-    let line = msg;
-    try { line = decodeURIComponent(msg); } catch { /* keep the raw line */ }
+    // The query string can carry credentials, so the log keeps the path only.
+    let line = msg.replace(/\?\S*/, "");
+    try { line = decodeURIComponent(line); } catch { /* keep the raw line */ }
     console.log(line, ...rest);
   }));
   app.use("*", secureHeaders({

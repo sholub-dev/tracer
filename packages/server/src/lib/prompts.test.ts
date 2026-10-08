@@ -78,7 +78,7 @@ test("prompts tell the agent to report a finding in every turn that ran at least
     assert.ok(prompt.includes("`kind: \"root_cause\"`") && prompt.includes("`kind: \"summary\"`"), `${name}: missing finding kinds`);
     assert.ok(prompt.includes("the one check that would confirm it") && !prompt.includes("only place you may name an action"), `${name}: finding card must not allow an action`);
     assert.ok(prompt.includes("Skip it only when no query ran"), `${name}: missing skip rule`);
-    assert.ok(prompt.includes("`details`: 1 to 5 sentences") && prompt.includes("The card is the whole written answer"), `${name}: missing details rule`);
+    assert.ok(prompt.includes("`happened`: 1 to 2 sentences") && prompt.includes("`cause`: 1 to 3 sentences") && prompt.includes("No ids (incident, issue, session, UUIDs)") && prompt.includes("The card is the whole written answer"), `${name}: missing details rule`);
     assert.ok(prompt.includes("at most 3 tool calls") && prompt.includes("Nothing after the last visual"), `${name}: missing visuals rule`);
     for (const stale of ["Visual-first narrative", "End with a concise conclusion", "It does not replace the written answer"]) {
       assert.ok(!prompt.includes(stale), `${name}: stale rule "${stale}"`);
@@ -91,5 +91,27 @@ test("the evidence rule and the no-fixes principle each appear once in the assem
     for (const phrase of ["Only the literal text of tool results from this session is evidence", "Never state an action anyone should take on the system", "**Never say you cannot do something that a tool covers.**"]) {
       assert.equal(prompt.split(phrase).length - 1, 1, `${name}: expected one "${phrase}"`);
     }
+  }
+});
+
+test("supporting visuals name no provider query keyword, and the stale skip example is gone", () => {
+  for (const [name, prompt] of allPrompts) {
+    assert.ok(prompt.includes("a single value for a key number, a grouped table for a comparison"), `${name}: missing neutral visuals`);
+    assert.ok(!/FACET|COMPARE WITH|TIMESERIES/.test(prompt.slice(prompt.indexOf("## Response Format"))), `${name}: provider keyword in the answer format`);
+    assert.ok(prompt.includes("a greeting or a question answered from the conversation") && !prompt.includes("list my monitors"), `${name}: stale skip example`);
+  }
+});
+
+test("investigation-only rules say so and the answer format owns the answer", () => {
+  for (const [name, prompt] of allPrompts) {
+    assert.ok(prompt.includes("During the investigation, after the results arrive, write one brief summary"), `${name}: rule 1 not scoped`);
+    assert.ok(prompt.includes("For the investigation phase of multi-step work"), `${name}: discipline not scoped`);
+  }
+});
+
+test("provider domain text names no tool that may be absent", () => {
+  for (const [name, prompt] of allPrompts) {
+    assert.ok(!prompt.includes("ack_nr_issue") && !prompt.includes("close_nr_issue"), `${name}: names an issue tool`);
+    assert.ok(!prompt.includes("Unlike NRQL"), `${name}: compares with NRQL`);
   }
 });

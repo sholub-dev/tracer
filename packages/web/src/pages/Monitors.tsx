@@ -3,6 +3,7 @@ import { SESSION_PREFIX } from "@tracer-sh/shared";
 import { usePersistedState, usePolling } from "../lib/hooks";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { trpc } from "../lib/trpc";
 import { PageSidebarButton } from "../components/layout/Shell";
 import { BuilderSheet } from "../components/monitors/BuilderSheet";
@@ -163,6 +164,19 @@ export function Monitors({ builderSessionId, onNavigate: navigate, onOpenBuilder
           {newButton}
         </div>
       </header>
+
+      {listQuery.isPending && (
+        <div role="status" aria-label="Loading monitors" className="mx-auto grid max-w-[1400px] gap-4 px-4 py-6 sm:px-6 min-[1100px]:grid-cols-4">
+          {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-48 rounded-xl min-[1100px]:col-span-2" />)}
+        </div>
+      )}
+
+      {listQuery.isError && !listQuery.data && (
+        <div role="alert" className="flex flex-col items-center gap-3 px-4 py-24 text-center">
+          <p className="text-sm text-muted-foreground">Couldn't load monitors.</p>
+          <Button variant="outline" size="sm" onClick={() => void listQuery.refetch()}>Retry</Button>
+        </div>
+      )}
 
       {listQuery.isSuccess && !hasMonitors && (
         <div className="flex flex-col items-center gap-4 px-4 py-24 text-center">

@@ -85,8 +85,11 @@ export function renderToolPart(p: MessagePart, queries: QueryRecord[]): string {
  * structured array for programmatic consumers.
  */
 export function extractAnalysis(messages: UIMessage[]): { analysis: string; queries: QueryRecord[] } {
+  // Only the latest turn: an earlier question's marker and finding do not belong to this answer.
+  const lastUser = messages.map((m) => m.role).lastIndexOf("user");
+  const turn = messages.slice(lastUser + 1);
   const assistantParts: MessagePart[] = [];
-  for (const m of messages) {
+  for (const m of turn) {
     if (m.role !== "assistant") continue;
     for (const p of m.parts as MessagePart[]) assistantParts.push(p);
   }
@@ -94,7 +97,7 @@ export function extractAnalysis(messages: UIMessage[]): { analysis: string; quer
   // The first marker of the last message that has one, as findAnalysisMarker picks it for compaction.
   let markerIdx = -1;
   let offset = 0;
-  for (const m of messages) {
+  for (const m of turn) {
     if (m.role !== "assistant") continue;
     const idx = m.parts.findIndex((p) => p.type === CLIENT_TOOL_NAMES.BEGIN_ANALYSIS);
     if (idx >= 0) markerIdx = offset + idx;
@@ -120,9 +123,7 @@ export function extractAnalysis(messages: UIMessage[]): { analysis: string; quer
     }
   }
 
-  // Only the latest turn: an earlier question's finding does not belong to this answer.
-  const lastUser = messages.map((m) => m.role).lastIndexOf("user");
-  const finding = findingFromMessages(messages.slice(lastUser + 1));
+  const finding = findingFromMessages(turn);
   if (finding) segments.unshift(findingMarkdown(finding));
   return { analysis: segments.join("\n\n").trim(), queries };
 }

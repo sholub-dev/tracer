@@ -17,7 +17,7 @@ export async function collectChatTools(
   activeProvider?: string,
   mode: ChatMode = DEFAULT_CHAT_MODE,
 ): Promise<ChatToolsResult> {
-  const { tools, promptFragments, systemPrompt, maxSteps, afterComplete, connectedProviders } =
+  const { tools, promptFragments, systemPrompt, maxSteps, afterComplete, connectedProviders, providerTypes } =
     await collectBaseTools(registry, db, writer, mode, activeProvider, true);
 
   // Debug chat returns undefined tools when no providers are connected,
@@ -27,14 +27,16 @@ export async function collectChatTools(
     return { tools: undefined, promptFragments: [] };
   }
 
-  return { tools, promptFragments, systemPrompt, maxSteps, afterComplete };
+  return { tools, promptFragments, systemPrompt, maxSteps, afterComplete, providerTypes };
 }
 
 // Triage acts on New Relic issues in monitor runs, so the triage setting decides what gets closed.
-const TRIAGE_TOOLS = new Set(["ack_nr_issue", "close_nr_issue"]);
+// A run with no person present gets no other write tool that reaches outside its own scoped extras.
+const UNATTENDED_DROPPED = new Set(["ack_nr_issue", "close_nr_issue", "add_jira_comment"]);
 
-/** The provider tools plus the tools every chat session gets. */
-export function withSessionTools(tools: Record<string, unknown>, db: Db, sessionId: string, kind?: SessionKind, extras: Record<string, unknown> = {}): Record<string, unknown> {
-  const own = kind === SESSION_KIND.MONITOR ? Object.fromEntries(Object.entries(tools).filter(([name]) => !TRIAGE_TOOLS.has(name))) : tools;
+/** The provider tools plus the tools every chat session gets. `unattended` marks a run no person watches: monitor, API, wake-up or resumed run. */
+export function withSessionTools(tools: Record<string, unknown>, db: Db, sessionId: string, kind?: SessionKind, extras: Record<string, unknown> = {}, unattended = false): Record<string, unknown> {
+  const noHuman = unattended || kind === SESSION_KIND.MONITOR || kind === SESSION_KIND.API;
+  const own = noHuman ? Object.fromEntries(Object.entries(tools).filter(([name]) => !UNATTENDED_DROPPED.has(name))) : tools;
   return { ...own, set_timer: setTimerTool(db, sessionId), report_finding: reportFindingTool(), ...extras };
 }

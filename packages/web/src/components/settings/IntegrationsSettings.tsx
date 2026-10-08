@@ -54,6 +54,7 @@ export function IntegrationsSettings() {
               tone={slackOn ? "ok" : "off"}
               status={slackOn ? "Connected" : "Not connected"}
               connected={slackOn}
+              keepsMaskedSecrets
               fields={SLACK_FIELDS}
               existingConfig={slack.data?.config ?? null}
               note={SLACK_NOTE}
@@ -65,15 +66,14 @@ export function IntegrationsSettings() {
                 description: "Monitors stop posting their findings to Slack.",
                 onConfirm: () => removeSlack.mutateAsync(),
               }}
-            >
-              {slackOn && <AlertTriageRow />}
-            </ConnectionRow>
+            />
             <ConnectionRow
               name="Jira"
               detail={jiraDomain ? (jiraDomain.includes(".") ? jiraDomain : `${jiraDomain}.atlassian.net`) : "Read issues and post comments"}
               tone={jiraOn ? "ok" : "off"}
               status={jiraOn ? "Connected" : "Not connected"}
               connected={jiraOn}
+              keepsMaskedSecrets
               fields={JIRA_FIELDS}
               existingConfig={jira.data?.config ?? null}
               note={JIRA_NOTE}
@@ -86,6 +86,7 @@ export function IntegrationsSettings() {
                 onConfirm: () => removeJira.mutateAsync(),
               }}
             />
+            <AlertTriageRow />
           </>
         )}
       </Group>
@@ -97,31 +98,32 @@ export function IntegrationsSettings() {
 function AlertTriageRow() {
   const utils = trpc.useUtils();
   const { data: enabled } = trpc.settings.getAlertTriage.useQuery();
+  const { data: providers } = trpc.provider.list.useQuery();
   const save = trpc.settings.setAlertTriage.useMutation({ onSettled: () => utils.settings.getAlertTriage.invalidate() });
-  if (enabled === undefined) return null;
+  if (enabled === undefined || !providers?.some((p) => p.type === "newrelic" && p.connected)) return null;
   return (
-    <div className="flex items-start gap-4 border-t py-3 pr-4 pl-8">
+    <div className="flex items-start gap-4 px-4 py-3">
       <div className="min-w-0 flex-1 text-[13px]/[18px] text-muted-foreground">
         <label htmlFor="alert-triage" className="text-sm font-medium text-foreground">
           Alert triage
         </label>
         <p className="mt-0.5">
-          <strong className="font-semibold text-ink-2">Off:</strong> monitors post their analysis to Slack as usual.
+          <strong className="font-semibold text-ink-2">Off:</strong> monitors post their analysis as usual.
           Nothing changes in New Relic.
         </p>
         <p>
           <strong className="font-semibold text-ink-2">On:</strong> Tracer acts on the New Relic issue behind each alert
-          of monitors on NrAiIncident:
+          of monitors on NrAiIncident. Notifications go to Slack when it is connected.
         </p>
         <ul className="mt-1 ml-4 list-disc space-y-0.5">
-          <li>Stopped: acks, then closes it (JSM closes its alert). Pings you if severity is high.</li>
+          <li>Stopped: acks, then closes it (JSM closes its alert). Notifies you if severity is high.</li>
           <li>
-            Ongoing or recurring: no ack, no close, so JSM keeps escalating. Pings you; the agent sets its own follow-up
+            Ongoing or recurring: no ack, no close, so JSM keeps escalating. Notifies you; the agent sets its own follow-up
             timer and acks and closes it once it stops.
           </li>
-          <li>Status unknown or close failed: leaves it open, pings you.</li>
-          <li>Closed 3 times in 24h and it keeps coming back: stops closing, pings you.</li>
-          <li>Still ongoing after 24h: stops following up, pings you.</li>
+          <li>Status unknown or close failed: leaves it open, notifies you.</li>
+          <li>Closed 3 times in 24h and it keeps coming back: stops closing, notifies you.</li>
+          <li>Still ongoing after 24h: stops following up, notifies you.</li>
         </ul>
       </div>
       <Switch
@@ -130,7 +132,10 @@ function AlertTriageRow() {
         disabled={save.isPending}
         onCheckedChange={(v) => {
           utils.settings.getAlertTriage.setData(undefined, v);
-          save.mutate({ enabled: v }, { onSuccess: () => toast(v ? "Alert triage is on" : "Alert triage is off") });
+          save.mutate({ enabled: v }, {
+            onSuccess: () => toast(v ? "Alert triage is on" : "Alert triage is off"),
+            onError: (e) => toast.error(e.message),
+          });
         }}
         className="mt-0.5"
       />

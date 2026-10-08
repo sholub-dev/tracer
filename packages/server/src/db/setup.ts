@@ -18,10 +18,10 @@ export const SYNC_KEYS: Record<string, { key: string; time?: string }> = {
   agent_runs: { key: "id", time: "created_at" },
 };
 
-// Device state, not content: scheduler ticks and pausing write the monitor columns, and opening an
+// Device state, not content: scheduler ticks write the monitor columns, and opening an
 // unread session writes its status. A write to only these must not count as a change to sync.
 const UNSYNCED_COLUMNS: Record<string, string[]> = {
-  monitors: ["enabled", "last_checked_at", "last_status", "last_error", "updated_at"],
+  monitors: ["last_checked_at", "last_status", "last_error", "updated_at"],
   chat_sessions: ["status", "run_scope", "resumed"],
 };
 
@@ -117,7 +117,8 @@ export async function runSetup(sqlite: SetupDriver): Promise<void> {
       status TEXT NOT NULL,
       groups TEXT NOT NULL,
       session_id TEXT,
-      reported TEXT
+      reported TEXT,
+      device_id TEXT
     );
 
     CREATE TABLE IF NOT EXISTS alert_issues (
@@ -145,6 +146,7 @@ export async function runSetup(sqlite: SetupDriver): Promise<void> {
     );
 
     DROP INDEX IF EXISTS idx_alert_issues_due;
+    CREATE INDEX IF NOT EXISTS idx_session_timers_fire ON session_timers(fire_at);
     CREATE INDEX IF NOT EXISTS idx_alert_issues_state ON alert_issues(state);
     CREATE INDEX IF NOT EXISTS idx_widgets_dashboard ON dashboard_widgets(dashboard_id);
     CREATE INDEX IF NOT EXISTS idx_memories_tool ON tool_memories(tool_name);
@@ -194,6 +196,7 @@ export async function runSetup(sqlite: SetupDriver): Promise<void> {
     }
     return names;
   };
+  const claimFirings = !(await columns("monitor_triggers")).has("device_id");
   for (const [table, column, type] of [
     ["tool_memories", "review_note", "TEXT"],
     ["chat_sessions", "kind", "TEXT"],
@@ -208,6 +211,8 @@ export async function runSetup(sqlite: SetupDriver): Promise<void> {
     ["monitors", "alert_enabled", "INTEGER NOT NULL DEFAULT 1"],
     ["monitors", "chart_query", "TEXT"],
     ["alert_issues", "reason", "TEXT"],
+    ["monitor_triggers", "device_id", "TEXT"],
+    ["monitor_triggers", "outcome", "TEXT"],
   ]) {
     const names = await columns(table);
     if (names.has(column)) continue;
@@ -242,10 +247,10 @@ export async function runSetup(sqlite: SetupDriver): Promise<void> {
   // SQLite doesn't support ALTER TABLE ADD FOREIGN KEY, so we recreate tables.
   await migrateForeignKeys(sqlite);
 
-  await setupSync(sqlite);
+  await setupSync(sqlite, claimFirings);
 }
 
-async function setupSync(sqlite: SetupDriver): Promise<void> {
+async function setupSync(sqlite: SetupDriver, claimFirings: boolean): Promise<void> {
   // Uids come after the foreign-key migration, which copies memory_operations column by column.
   for (const table of ["tool_memories", "memory_operations"]) {
     const names = (await sqlite.all(`PRAGMA table_info(${table})`) as { name: string }[]).map((c) => c.name);
@@ -270,6 +275,8 @@ async function setupSync(sqlite: SetupDriver): Promise<void> {
       BEGIN UPDATE memory_operations SET uid = lower(hex(randomblob(16))) WHERE id = NEW.id; END;
     INSERT OR IGNORE INTO app_settings (key, value) VALUES ('device_id', '${crypto.randomUUID()}');
   `);
+  // Firings from before this column ran on this device. Only once: a later NULL comes from a peer that lacks the column.
+  if (claimFirings) await sqlite.exec(`UPDATE monitor_triggers SET device_id = (SELECT value FROM app_settings WHERE key = 'device_id') WHERE device_id IS NULL`);
 
   // local_at is this device's own clock for the change; changed_at can carry another device's time after a merge.
   const logColumns = (await sqlite.all(`PRAGMA table_info(sync_rows)`) as { name: string }[]).map((c) => c.name);
@@ -277,6 +284,7 @@ async function setupSync(sqlite: SetupDriver): Promise<void> {
     await sqlite.exec(`ALTER TABLE sync_rows ADD COLUMN local_at INTEGER NOT NULL DEFAULT 0`);
     await sqlite.exec(`UPDATE sync_rows SET local_at = changed_at`);
   }
+  await sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_sync_rows_local ON sync_rows(local_at)`);
 
   const local = LOCAL_SETTING_KEYS.map((k) => `'${k}'`).join(", ");
   const columns = new Map<string, string[]>();

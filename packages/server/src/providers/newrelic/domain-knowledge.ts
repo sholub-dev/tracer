@@ -219,8 +219,7 @@ const NR_CROSS_SIGNAL = `## Cross-Signal Correlation
 
 const NR_ALERTS = `## Alerts: Issues, Incidents, Policies
 - A **condition** belongs to a **policy**. A condition opens an **incident**. New Relic groups related incidents into one **issue**.
-- \`list_nr_issues\` gives issue state (CREATED, ACTIVATED, DEACTIVATED, CLOSED) and ids. Use it for "what is open now".
-- \`ack_nr_issue\` and \`close_nr_issue\` change the issue in New Relic. Use them only when the user asks. State the action and its result in the answer.
+- Issue states are CREATED, ACTIVATED, DEACTIVATED and CLOSED. Read them from the issue tools for "what is open now".
 - Incident history: NRQL on \`NrAiIncident\`. Fields: \`incidentId\`, \`event\` ('open' or 'close'), \`policyName\`, \`policyId\`, \`conditionName\`, \`conditionId\`.`;
 
 export const NR_DOMAIN_KNOWLEDGE = `${NR_QUERY_DEFAULTS}

@@ -1,10 +1,34 @@
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { publicProcedure, router } from "../trpc.js";
+import type { Db } from "../../db/driver.js";
 import { providerConfigs } from "../../db/schema.js";
 import { readProviderConfig, readAppSetting, readAppSettings, writeAppSetting } from "../../db/config-reader.js";
-import { isValidTimezone } from "../../lib/current-context.js";
+import { getTimezone, isValidTimezone } from "../../lib/current-context.js";
+import { ANTHROPIC_MIN_THINKING_BUDGET } from "../../llm/resolve.js";
 import { CONFIG, DEFAULTS, SETTINGS_KEYS, type ModelConfig } from "../../config.js";
+
+const agentConfigInput = z.object({
+  timezone: z.string().refine(isValidTimezone, "Invalid time zone").optional(),
+  directModeMaxSteps: z.number().int().min(1).max(500).optional(),
+  thinkingBudgetGoogle: z.number().int().min(0).max(100_000).optional(),
+  thinkingBudgetAnthropic: z.number().int().max(100_000)
+    .refine((n) => n === 0 || n >= ANTHROPIC_MIN_THINKING_BUDGET, `Use 0 or at least ${ANTHROPIC_MIN_THINKING_BUDGET}`)
+    .optional(),
+});
+
+async function readStepAndBudgetSettings(db: Db) {
+  const vals = await readAppSettings(db, [
+    SETTINGS_KEYS.directModeMaxSteps,
+    SETTINGS_KEYS.thinkingBudgetGoogle,
+    SETTINGS_KEYS.thinkingBudgetAnthropic,
+  ]);
+  return {
+    directModeMaxSteps: (vals[SETTINGS_KEYS.directModeMaxSteps] as number) ?? DEFAULTS.directModeMaxSteps,
+    thinkingBudgetGoogle: (vals[SETTINGS_KEYS.thinkingBudgetGoogle] as number) ?? DEFAULTS.thinkingBudgetGoogle,
+    thinkingBudgetAnthropic: (vals[SETTINGS_KEYS.thinkingBudgetAnthropic] as number) ?? DEFAULTS.thinkingBudgetAnthropic,
+  };
+}
 
 export const settingsRouter = router({
   getApiKey: publicProcedure
@@ -23,7 +47,7 @@ export const settingsRouter = router({
     .input(
       z.object({
         type: z.string().min(1),
-        apiKey: z.string().min(1),
+        apiKey: z.string().trim().min(1),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -116,42 +140,25 @@ export const settingsRouter = router({
       return { success: true };
     }),
 
-  getAgentConfig: publicProcedure.query(async ({ ctx }) => {
-    const keys = [
-      SETTINGS_KEYS.timezone,
-      SETTINGS_KEYS.directModeMaxSteps,
-      SETTINGS_KEYS.subAgentMaxSteps,
-      SETTINGS_KEYS.thinkingBudgetGoogle,
-      SETTINGS_KEYS.thinkingBudgetAnthropic,
-    ];
-    const vals = await readAppSettings(ctx.db, keys);
-    return {
-      timezone: (vals[SETTINGS_KEYS.timezone] as string) ?? DEFAULTS.timezone,
-      directModeMaxSteps: (vals[SETTINGS_KEYS.directModeMaxSteps] as number) ?? DEFAULTS.directModeMaxSteps,
-      subAgentMaxSteps: (vals[SETTINGS_KEYS.subAgentMaxSteps] as number) ?? DEFAULTS.subAgentMaxSteps,
-      thinkingBudgetGoogle: (vals[SETTINGS_KEYS.thinkingBudgetGoogle] as number) ?? DEFAULTS.thinkingBudgetGoogle,
-      thinkingBudgetAnthropic: (vals[SETTINGS_KEYS.thinkingBudgetAnthropic] as number) ?? DEFAULTS.thinkingBudgetAnthropic,
-    };
-  }),
+  getAgentConfig: publicProcedure.query(async ({ ctx }) => ({
+    timezone: await getTimezone(ctx.db),
+    ...(await readStepAndBudgetSettings(ctx.db)),
+  })),
 
   saveAgentConfig: publicProcedure
-    .input(z.object({
-      timezone: z.string().refine(isValidTimezone, "Invalid time zone").optional(),
-      directModeMaxSteps: z.number().min(1).max(500).optional(),
-      subAgentMaxSteps: z.number().min(1).max(500).optional(),
-      thinkingBudgetGoogle: z.number().min(0).max(100_000).optional(),
-      thinkingBudgetAnthropic: z.number().min(0).max(100_000).optional(),
-    }))
+    .input(agentConfigInput)
     .mutation(async ({ ctx, input }) => {
-      const entries: [string, unknown][] = [
-        [SETTINGS_KEYS.timezone, input.timezone],
-        [SETTINGS_KEYS.directModeMaxSteps, input.directModeMaxSteps],
-        [SETTINGS_KEYS.subAgentMaxSteps, input.subAgentMaxSteps],
-        [SETTINGS_KEYS.thinkingBudgetGoogle, input.thinkingBudgetGoogle],
-        [SETTINGS_KEYS.thinkingBudgetAnthropic, input.thinkingBudgetAnthropic],
+      // The UI sends the whole form; writing only changed values keeps untouched defaults unpinned.
+      const current = { timezone: await getTimezone(ctx.db), ...(await readStepAndBudgetSettings(ctx.db)) };
+      const entries: [string, keyof typeof current][] = [
+        [SETTINGS_KEYS.timezone, "timezone"],
+        [SETTINGS_KEYS.directModeMaxSteps, "directModeMaxSteps"],
+        [SETTINGS_KEYS.thinkingBudgetGoogle, "thinkingBudgetGoogle"],
+        [SETTINGS_KEYS.thinkingBudgetAnthropic, "thinkingBudgetAnthropic"],
       ];
-      for (const [key, val] of entries) {
-        if (val !== undefined) await writeAppSetting(ctx.db, key, val);
+      for (const [key, field] of entries) {
+        const val = input[field];
+        if (val !== undefined && val !== current[field]) await writeAppSetting(ctx.db, key, val);
       }
       return { success: true };
     }),

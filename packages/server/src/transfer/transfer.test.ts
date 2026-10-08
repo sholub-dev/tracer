@@ -146,13 +146,13 @@ test("send serves one copy, once; receive imports it", async (t) => {
   await assert.rejects(receiveCopy(target, link), /does not answer|used or expired/);
 });
 
-test("receiveCopy pauses the imported monitors; the source stays active", async (t) => {
+test("receiveCopy keeps the monitor toggles; the source stays active", async (t) => {
   t.after(stopSend);
   const source = await seededDb();
   const target = await freshDb();
   const { link } = await startSend(source, () => 0);
   await receiveWithApproval(target, link);
-  assert.equal((await target.select().from(monitors).all())[0].enabled, 0);
+  assert.equal((await target.select().from(monitors).all())[0].enabled, 1);
   assert.equal((await source.select().from(monitors).all())[0].enabled, 1);
 });
 

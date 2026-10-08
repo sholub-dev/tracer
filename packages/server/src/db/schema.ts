@@ -132,6 +132,10 @@ export const monitorTriggers = sqliteTable("monitor_triggers", {
   sessionId: text("session_id"),
   /** Null until the session's run is reported to Slack; "failed" when every attempt failed, "done" after a finished run. */
   reported: text("reported"),
+  /** The device whose scheduler fired it; synced rows keep the sender's id. */
+  deviceId: text("device_id"),
+  /** JSON of the finished run's analysis, report, finding and dismissal; null until the run ends. */
+  outcome: text("outcome"),
 }, (t) => [
   index("idx_triggers_monitor").on(t.monitorId, t.triggeredAt),
   index("idx_triggers_session").on(t.sessionId),
@@ -164,7 +168,9 @@ export const sessionTimers = sqliteTable("session_timers", {
   fireAt: integer("fire_at"),
   note: text("note").notNull(),
   setAt: integer("set_at").notNull(),
-});
+}, (t) => [
+  index("idx_session_timers_fire").on(t.fireAt),
+]);
 
 export const memoryOperations = sqliteTable("memory_operations", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -208,4 +214,5 @@ export const syncRows = sqliteTable("sync_rows", {
   deleted: integer("deleted").notNull().default(0),
 }, (t) => [
   primaryKey({ columns: [t.tbl, t.rowKey] }),
+  index("idx_sync_rows_local").on(t.localAt),
 ]);

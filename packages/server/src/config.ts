@@ -26,6 +26,12 @@ export const CONFIG = {
   /** HTTP server bind address. Loopback by default; set TRACER_HOST=0.0.0.0 to expose externally. */
   host: ENV.TRACER_HOST || "127.0.0.1",
 
+  /** Bearer token every /api request must carry. Required when the server binds to a non-loopback address. */
+  token: ENV.TRACER_TOKEN || null as string | null,
+
+  /** Cap on one /api request body; fits several inline image attachments. */
+  maxRequestBodyBytes: 64 * 1024 * 1024,
+
   /** CORS origin. null = derive from port at runtime as http://localhost:{port}. */
   corsOrigin: ENV.TRACER_CORS_ORIGIN ?? null as string | null,
 
@@ -135,6 +141,11 @@ export const CONFIG = {
   widgetDefaultWidth: 6,
   widgetDefaultHeight: 6,
   gridColumns: 12,
+
+  /** MCP subprocesses close after this long without a tool call, and restart on the next ping. */
+  mcpIdleCloseMs: 15 * 60_000,
+  /** Most sessions the session list returns, newest first. */
+  sessionListLimit: 200,
 } as const;
 
 // ── User-controllable defaults (fallback when no DB value set) ──
@@ -142,7 +153,6 @@ export const CONFIG = {
 export const DEFAULTS = {
   timezone: "America/Los_Angeles",
   directModeMaxSteps: 100,
-  subAgentMaxSteps: 50,
   thinkingBudgetGoogle: 1024,
   thinkingBudgetAnthropic: 10_000,
 } as const;
@@ -152,7 +162,6 @@ export const SETTINGS_KEYS = {
   chatModel: "chat_model",
   timezone: "timezone",
   directModeMaxSteps: "direct_mode_max_steps",
-  subAgentMaxSteps: "sub_agent_max_steps",
   thinkingBudgetGoogle: "thinking_budget_google",
   thinkingBudgetAnthropic: "thinking_budget_anthropic",
   alertTriage: "alert_triage",

@@ -69,6 +69,22 @@ interface ResolvedModel {
   providerOptions?: ProviderOptions;
 }
 
+/** Anthropic rejects a thinking budget between 1 and 1023 tokens. */
+export const ANTHROPIC_MIN_THINKING_BUDGET = 1024;
+
+/** Gemini Pro models cannot turn thinking off, so utility calls ask for the smallest budget they accept. */
+const UTILITY_GOOGLE_THINKING_BUDGET = 128;
+
+/** Provider options for titles, reviews and memory calls: minimal thinking, no streamed thoughts. */
+export function utilityProviderOptions(resolved: Pick<ResolvedModel, "provider" | "modelId">): ProviderOptions | undefined {
+  const { provider, modelId } = resolved;
+  if ((provider === "google" || provider === "google-vertex") && CONFIG.thinkingModels.has(modelId)) {
+    const thinkingConfig = { thinkingBudget: UTILITY_GOOGLE_THINKING_BUDGET, includeThoughts: false };
+    return provider === "google-vertex" ? { vertex: { thinkingConfig } } : { google: { thinkingConfig } };
+  }
+  return undefined;
+}
+
 async function getProviderOptions(db: Db, provider: string, modelId: string): Promise<ProviderOptions | undefined> {
   // Vertex serves the same Gemini models; it reads provider options under the `vertex`
   // namespace rather than `google`.
@@ -81,7 +97,7 @@ async function getProviderOptions(db: Db, provider: string, modelId: string): Pr
     const budget = await readAppSetting<number>(db, SETTINGS_KEYS.thinkingBudgetAnthropic) ?? DEFAULTS.thinkingBudgetAnthropic;
     // A zero budget means thinking off — "enabled with 0 tokens" is rejected by the API.
     if (budget <= 0) return undefined;
-    return { anthropic: { thinking: { type: "enabled", budgetTokens: budget } } };
+    return { anthropic: { thinking: { type: "enabled", budgetTokens: Math.max(ANTHROPIC_MIN_THINKING_BUDGET, budget) } } };
   }
   return undefined;
 }

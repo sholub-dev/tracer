@@ -3,7 +3,8 @@ import { useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { SearchableOptions } from "@/components/common/SearchableSelect";
 import { cn } from "@/lib/utils";
-import { useGcpProjectOptions } from "../../lib/hooks";
+import { toast } from "sonner";
+import { useGcpProjectOptions, useInvalidateProviders } from "../../lib/hooks";
 import { trpc } from "../../lib/trpc";
 
 interface GcpProjectPickerProps {
@@ -14,10 +15,10 @@ interface GcpProjectPickerProps {
 export function GcpProjectPicker({ projectId, existingConfig }: GcpProjectPickerProps) {
   const [open, setOpen] = useState(false);
 
-  const utils = trpc.useUtils();
   const { options, isLoading } = useGcpProjectOptions(open);
   const saveConfig = trpc.provider.saveConfig.useMutation({
-    onSuccess: () => utils.provider.getConfigs.invalidate(),
+    onSuccess: useInvalidateProviders(),
+    onError: (e) => toast.error(e.message),
   });
 
   return (

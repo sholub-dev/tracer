@@ -10,6 +10,7 @@ import {
   EXECUTION_DISCIPLINE,
   buildAnalysisSection,
 } from "./shared-prompts.js";
+import { DEFAULTS } from "../config.js";
 
 export interface ProviderPromptConfig {
   providerName: string;
@@ -20,7 +21,6 @@ export interface ProviderPromptConfig {
   /** Extra sections appended after domain knowledge (e.g. cross-signal, tool reference). */
   extraSections?: string[];
   directModeRoleIntro: string;
-  directModeMaxSteps: number;
 }
 
 /**
@@ -62,5 +62,5 @@ ${EXECUTION_DISCIPLINE}
 
 ${config.domainKnowledge}${extra}
 
-${buildAnalysisSection(config.directModeMaxSteps)}`;
+${buildAnalysisSection(DEFAULTS.directModeMaxSteps)}`;
 }

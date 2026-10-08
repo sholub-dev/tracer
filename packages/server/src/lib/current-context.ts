@@ -32,14 +32,16 @@ function formatNow(timezone: string, withTime: boolean): string {
 }
 
 /** System-prompt block with today's date and the user's timezone rules; no clock time, so the prompt prefix stays cacheable all day. */
-export async function getCurrentDateBlock(db?: Db): Promise<string> {
+export async function getCurrentDateBlock(db?: Db, providerTypes: readonly string[] = []): Promise<string> {
   const timezone = await getTimezone(db);
+  const lines = [
+    providerTypes.includes("newrelic") && `\n- New Relic: queries run WITH TIMEZONE '${timezone}' automatically, so literal times (SINCE '2026-01-15 14:00') and results are in the user's timezone.`,
+    providerTypes.includes("posthog") && `\n- PostHog: filter and show times in the user's timezone with toTimeZone(timestamp, '${timezone}').`,
+  ].filter(Boolean).join("");
   return `## Current Date
 ${formatNow(timezone, false)}. The exact current time is given with the user's latest message.
 
-The user's timezone is ${timezone}. Always report times in it, with the zone label (e.g. "14:00 PDT"); convert any UTC ("Z") times first.
-- New Relic: queries run WITH TIMEZONE '${timezone}' automatically, so literal times (SINCE '2026-01-15 14:00') and results are in the user's timezone.
-- PostHog: filter and show times in the user's timezone with toTimeZone(timestamp, '${timezone}').`;
+The user's timezone is ${timezone}. Always report times in it, with the zone label (e.g. "14:00 PDT"); convert any UTC ("Z") times first.${lines}`;
 }
 
 export async function getCurrentTimeText(db?: Db): Promise<string> {

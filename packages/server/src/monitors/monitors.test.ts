@@ -20,7 +20,7 @@ function memoryDb(): Db {
   sqlite.exec(`
     CREATE TABLE monitor_triggers (
       id TEXT PRIMARY KEY, monitor_id TEXT NOT NULL, triggered_at INTEGER NOT NULL, value REAL NOT NULL,
-      window_start INTEGER NOT NULL, window_end INTEGER NOT NULL, status TEXT NOT NULL, groups TEXT NOT NULL, session_id TEXT, reported TEXT
+      window_start INTEGER NOT NULL, window_end INTEGER NOT NULL, status TEXT NOT NULL, groups TEXT NOT NULL, session_id TEXT, reported TEXT, device_id TEXT, outcome TEXT
     );
   `);
   return drizzle(sqlite, { schema }) as unknown as Db;
@@ -156,7 +156,9 @@ test("nextWindow ends windows on clock boundaries, runs them after the lag, and 
   // An unaligned end from before this change catches up at the next boundary.
   assert.deepEqual(nextWindow(t(10, 44), 300, t(10, 46, 2), lag), { start: t(10, 44), end: t(10, 45) });
   // After sleep, one window covers the whole gap.
-  assert.deepEqual(nextWindow(t(10, 45), 300, t(12, 1), lag), { start: t(10, 45), end: t(12, 0) });
+  // A long sleep is not summed into one check: the window covers at most two periods.
+  assert.deepEqual(nextWindow(t(10, 45), 300, t(12, 1), lag), { start: t(11, 50), end: t(12, 0) });
+  assert.deepEqual(nextWindow(t(11, 55), 300, t(12, 1), lag), { start: t(11, 55), end: t(12, 0) });
 });
 
 test("isFailedWindow skips only the window end that failed", () => {
@@ -212,7 +214,7 @@ test("readPastSessionTool loads the past-session list lazily, once, and only all
 });
 
 test("summaryFromMessages takes the last successful report_alert_summary call", () => {
-  const base = { severity: "low", policy: "", started: "", status: "", issues: [], seenBefore: "" };
+  const base = { severity: "low", policy: "", started: "", status: "", issues: [] };
   const call = (input: object, state = "output-available") => ({ type: "tool-report_alert_summary", toolCallId: "c", state, input, output: {} });
   const messages = [
     { id: "1", role: "assistant", parts: [call(base), call({ ...base, policy: "latest" }), { type: "text", text: "done" }] },

@@ -17,7 +17,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ProgressStore } from "../../lib/progress-store";
-import { useChatScroll, useEscapeToStop, useFileDrop } from "../../lib/hooks";
+import { openSettings, useChatScroll, useEscapeToStop, useFileDrop } from "../../lib/hooks";
 import { handleProgressData, stopChat, useCompactedMessages } from "../../lib/chat-utils";
 import { WEB_CONFIG } from "../../lib/config";
 import { serverFetch } from "../../lib/server-fetch";
@@ -25,7 +25,7 @@ import { IS_IOS } from "../../lib/platform";
 import { preloadResultChunks } from "../charts/ResultView";
 import { WorkingIndicator } from "./ChatIndicators";
 import { ErrorBoundary } from "../ErrorBoundary";
-import { Composer, type Attachment } from "./Composer";
+import { Composer, RUN_PLACEHOLDER, type Attachment } from "./Composer";
 import { FollowUpTimerBar } from "./FollowUpTimerBar";
 import { MessageView, textOf, type MessageViewOptions } from "./MessageView";
 import { Transcript } from "./Transcript";
@@ -89,7 +89,9 @@ interface ChatCoreProps {
 export interface ChatCoreRef {
   readonly messages: UIMessage[];
   setMessages: (msgs: UIMessage[]) => void;
-  sendMessage: (msg: { text: string }) => void;
+  sendMessage: (msg: { text: string; files?: FileUIPart[] }) => void;
+  /** Replaces the messages with the saved ones when a streaming response was lost; ignored unless the chat is streaming. */
+  adoptSaved: (msgs: UIMessage[]) => void;
   scrollToBottom: (opts?: { animation?: "instant" | "smooth" }) => void;
   scrollToTop: (opts?: { animation?: "instant" | "smooth" }) => void;
   readonly streaming: boolean;
@@ -126,6 +128,11 @@ const MessageRow = memo(function MessageRow({
     </div>
   );
 });
+
+const NETWORK_ERROR = /failed to fetch|load failed|networkerror|network request failed|fetch failed/i;
+const MISSING_KEY = /api key not configured/i;
+
+const errorMessage = (message: string) => (NETWORK_ERROR.test(message) ? "Can't reach the Tracer server" : message);
 
 function NoticeRow({ tone = "default", children, action }: { tone?: "default" | "error"; children: ReactNode; action: ReactNode }) {
   return (
@@ -252,6 +259,8 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   sendMessageRef.current = sendMessage;
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
+  const statusRef = useRef(status);
+  statusRef.current = status;
 
   const isLoading = status === "submitted" || status === "streaming";
   const showEmptyState = !!emptyState && messages.length === 0 && status !== "submitted";
@@ -380,6 +389,12 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
       sendMessage: (msg) => sendMessageRef.current(msg),
       scrollToBottom,
       scrollToTop,
+      adoptSaved: (msgs) => {
+        // Only a response that is streaming can be lost; a finished or just-sent one keeps its own messages.
+        if (statusRef.current !== "streaming") return;
+        stopRef.current.handleStop();
+        setMessages(msgs);
+      },
       get streaming() { return stopRef.current.isLoading; },
       stop: () => stopRef.current.handleStop(),
     }),
@@ -391,7 +406,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
       value={input}
       onChange={setInput}
       onSubmit={handleSubmit}
-      placeholder={placeholder}
+      placeholder={isLoading ? RUN_PLACEHOLDER : placeholder}
       canSend={canSend}
       streaming={isLoading}
       onStop={handleStop}
@@ -470,8 +485,18 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
           </NoticeRow>
         )}
         {canRetry && (error || savedErrorText) && (
-          <NoticeRow tone="error" action={recoverAction}>
-            {error ? error.message : savedErrorText}
+          <NoticeRow
+            tone="error"
+            action={
+              MISSING_KEY.test(error?.message ?? "") ? (
+                <div className="flex shrink-0 gap-2">
+                  <Button variant="outline" size="sm" onClick={openSettings}>Open Settings</Button>
+                  {recoverAction}
+                </div>
+              ) : recoverAction
+            }
+          >
+            {error ? errorMessage(error.message) : savedErrorText}
           </NoticeRow>
         )}
       </Transcript>

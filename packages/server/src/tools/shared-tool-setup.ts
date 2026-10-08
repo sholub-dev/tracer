@@ -2,18 +2,22 @@ import type { Db } from "../db/driver.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 import type { ChatToolWriter as StreamWriter, AfterCompleteParams, ChatMode } from "@tracer-sh/shared";
 import { toolMemories } from "../db/schema.js";
-import { buildUnifiedModePrompt } from "../lib/shared-prompts.js";
+import { applyStepBudget, buildNoProviderPrompt, buildUnifiedModePrompt } from "../lib/shared-prompts.js";
 import { injectMemories } from "../agents/chat/sub-agent.js";
 import { getJiraChatTools } from "../integrations/jira/tools.js";
-import { DEFAULTS } from "../config.js";
+import { DEFAULTS, SETTINGS_KEYS } from "../config.js";
+import { readAppSetting } from "../db/config-reader.js";
 
 export interface BaseToolSetup {
   tools: Record<string, unknown>;
   promptFragments: string[];
   systemPrompt?: string;
+  /** The run's step limit and the number its prompt names. */
   maxSteps?: number;
   afterComplete?: (params: AfterCompleteParams) => void;
   connectedProviders: ReturnType<ProviderRegistry["getAllProviders"]>;
+  /** Types of the providers connected for this run. */
+  providerTypes?: string[];
 }
 
 export async function collectBaseTools(
@@ -28,7 +32,7 @@ export async function collectBaseTools(
   const tools: Record<string, unknown> = {};
   const promptFragments: string[] = [];
   const systemPrompts: string[] = [];
-  let maxSteps: number | undefined;
+  const maxSteps = (await readAppSetting<number>(db, SETTINGS_KEYS.directModeMaxSteps)) ?? DEFAULTS.directModeMaxSteps;
   const afterCompleteCallbacks: Array<(params: AfterCompleteParams) => void> = [];
   await registry.whenLoaded();
   await registry.reconnectDisconnected();
@@ -56,13 +60,15 @@ export async function collectBaseTools(
         promptFragments.push(...(kit.promptFragments ?? []));
         // Collect direct-mode fields from all providers
         if (kit.systemPrompt) systemPrompts.push(kit.systemPrompt);
-        if (kit.maxSteps && (!maxSteps || kit.maxSteps > maxSteps)) maxSteps = kit.maxSteps;
         if (kit.afterComplete) afterCompleteCallbacks.push(kit.afterComplete);
       } catch (err) {
         console.warn(`[chat-tools] Failed to load tools for ${provider.name}:`, err);
       }
     }
   }
+
+  const providerFragmentCount = promptFragments.length;
+  const hasProviderTools = Object.keys(tools).length > 0;
 
   // Jira is a non-observability integration: when enabled (chat only — not the dashboard/monitor
   // builders) its tools are always-on, independent of the active-provider filter above, so they're
@@ -77,26 +83,26 @@ export async function collectBaseTools(
   // - unified: ONE coherent prompt — shared intro/discipline/analysis once + each provider's
   //   role-less fragment (begin_analysis already comes from the merged direct tools).
   // - direct: a single connected provider supplies its own complete system prompt.
-  let systemPrompt =
-    mode === "unified"
-      ? (promptFragments.length > 0
-          ? injectMemories(
-              buildUnifiedModePrompt(promptFragments, maxSteps ?? DEFAULTS.directModeMaxSteps),
-              // Unified holds every connected provider's tools, so surface all their memories
-              // (direct mode injects the active provider's memories via its own systemPrompt).
-              {
-                toolName: "unified",
-                existingMemories: memories.filter((m) => connectedProviders.some((p) => p.type === m.toolName)),
-              },
-            )
-          : undefined)
-      : (systemPrompts.length > 0 ? systemPrompts.join("\n\n---\n\n") : undefined);
-
-  // In direct mode the model uses this systemPrompt and ignores promptFragments, so the Jira
-  // guidance must be appended here. (Unified already folded it via buildUnifiedModePrompt; the
-  // no-provider case falls back to base-agent's prompt + promptFragments, which includes it.)
-  if (mode !== "unified" && jiraKit && systemPrompt) {
-    systemPrompt += "\n\n" + jiraKit.promptFragment;
+  let systemPrompt: string | undefined;
+  if (!hasProviderTools) {
+    // Without a provider tool the observability prompt would describe tools the run does not have.
+    if (jiraKit) systemPrompt = buildNoProviderPrompt([jiraKit.promptFragment]);
+  } else if (mode === "unified") {
+    systemPrompt = providerFragmentCount > 0
+      ? injectMemories(
+          buildUnifiedModePrompt(promptFragments, maxSteps),
+          // Unified holds every connected provider's tools, so surface all their memories
+          // (direct mode injects the active provider's memories via its own systemPrompt).
+          {
+            toolName: "unified",
+            existingMemories: memories.filter((m) => connectedProviders.some((p) => p.type === m.toolName)),
+          },
+        )
+      : undefined;
+  } else if (systemPrompts.length > 0) {
+    // Provider prompts are built at load, before the setting is known.
+    systemPrompt = applyStepBudget(systemPrompts.join("\n\n---\n\n"), maxSteps);
+    if (jiraKit) systemPrompt += "\n\n" + jiraKit.promptFragment;
   }
 
   // Chain afterComplete callbacks so all providers run their post-processing
@@ -104,5 +110,5 @@ export async function collectBaseTools(
     ? (params: AfterCompleteParams) => { for (const cb of afterCompleteCallbacks) cb(params); }
     : undefined;
 
-  return { tools, promptFragments, systemPrompt, maxSteps, afterComplete, connectedProviders };
+  return { tools, promptFragments, systemPrompt, maxSteps, afterComplete, connectedProviders, providerTypes: connectedProviders.map((p) => p.type) };
 }

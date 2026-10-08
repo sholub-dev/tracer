@@ -241,9 +241,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *:not([data-timer-bar]),
-  *:not([data-timer-bar])::before,
-  *:not([data-timer-bar])::after {
+  *:not([data-timer-bar], .animate-spin, .animate-pulse-dot),
+  *:not([data-timer-bar], .animate-spin, .animate-pulse-dot)::before,
+  *:not([data-timer-bar], .animate-spin, .animate-pulse-dot)::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;

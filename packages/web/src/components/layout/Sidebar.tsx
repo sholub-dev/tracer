@@ -62,8 +62,12 @@ export function AppSidebar({
   };
 
   const onDeleted = useCallback((id: string) => {
-    if (id === currentSessionId) onNewSession();
-  }, [currentSessionId, onNewSession]);
+    // Replace the deleted session's history entry: Back must not return to it. A bare "/" gets a fresh session id.
+    if (id === currentSessionId) {
+      window.history.replaceState(null, "", "/");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }
+  }, [currentSessionId]);
 
   const openSession = useCallback((id: string) => {
     onSelectSession(id);
@@ -143,6 +147,22 @@ function VersionStatus() {
     enabled: !IS_IOS,
   });
   const version = updateCheck.data?.currentVersion ?? __APP_VERSION__;
+
+  // "unknown": the server could not read its version, and a reload does not change that.
+  if (updateCheck.data && updateCheck.data.currentVersion !== "unknown" && updateCheck.data.currentVersion !== __APP_VERSION__) {
+    return (
+      <button
+        type="button"
+        onClick={() => window.location.reload()}
+        className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+      >
+        <span className="flex size-3.5 shrink-0 items-center justify-center" aria-hidden="true">
+          <span className="size-1.5 rounded-full bg-primary animate-pulse-dot" />
+        </span>
+        <span className="truncate text-primary">Reload to finish updating</span>
+      </button>
+    );
+  }
 
   if (updateCheck.data?.available) {
     return (

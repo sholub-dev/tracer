@@ -64,11 +64,33 @@ function analysisParts(parts: UIMessage["parts"]): UIMessage["parts"] | null {
   return out;
 }
 
-export function copyText(text: string, message: string) {
-  navigator.clipboard.writeText(text).then(
-    () => toast.success(message),
-    () => toast.error("Couldn't copy to the clipboard"),
-  );
+/** Copy through a hidden textarea, for contexts where the async clipboard API is missing or refused. */
+function execCopy(text: string): boolean {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    ta.remove();
+  }
+}
+
+export async function copyText(text: string, message: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    if (!execCopy(text)) {
+      toast.error("Couldn't copy to the clipboard");
+      return;
+    }
+  }
+  toast.success(message);
 }
 
 // Browsers refuse canvases past ~16k px a side (Safari: ~16.7M px total), so long transcripts render at a lower scale.
@@ -153,7 +175,10 @@ async function downloadReplyImage(el: HTMLElement, analysis: UIMessage["parts"],
       parts: analysis,
     });
     if (payload.length > 2 * 1024 * 1024) {
-      toast.error("This reply is too large to embed in an image");
+      toast.error("This reply is too large to embed in an image", {
+        description: "Save a plain image instead.",
+        action: { label: "Save plain image", onClick: () => void downloadImage(el, stampedPngName("analysis")) },
+      });
       return;
     }
     const out = await encodePngWithPayload(bytes, new TextEncoder().encode(payload));

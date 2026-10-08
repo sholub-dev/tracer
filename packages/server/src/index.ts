@@ -6,12 +6,16 @@ import { db, setupDriver } from "./db/client.js";
 import { registerGcpProvider } from "./providers/gcp/register.js";
 import { registerApiRoutes } from "./http/routes/api.js";
 import { mountStaticFiles } from "./http/static.js";
-import { guardLocalRequests } from "./http/local-guard.js";
+import { guardLocalRequests, isLoopbackBind } from "./http/local-guard.js";
 import { startRuntime } from "./runtime.js";
 
 export type { AppRouter } from "./trpc/router.js";
 
 async function main() {
+  if (!isLoopbackBind(CONFIG.host) && !CONFIG.token) {
+    console.error(`\nTRACER_HOST=${CONFIG.host} exposes the API. Set TRACER_TOKEN to a secret; clients send it as "Authorization: Bearer <token>".\n`);
+    process.exit(1);
+  }
   startUpdateChecks();
   const { providers, context, app, scheduler } = await startRuntime(db, setupDriver, registerGcpProvider);
   registerApiRoutes(app, context);
@@ -21,7 +25,7 @@ async function main() {
   // The Vite dev proxy keeps the browser's Origin; the built app serves the web app from this server (same origin).
   const allowedOrigins = [CONFIG.corsOrigin, ...(import.meta.url.endsWith(".ts") ? ["http://localhost:5173", "http://127.0.0.1:5173"] : [])]
     .filter((o): o is string => !!o);
-  const fetch = guardLocalRequests(app.fetch, CONFIG.host, allowedOrigins);
+  const fetch = guardLocalRequests(app.fetch, CONFIG.host, allowedOrigins, CONFIG.token);
   const server = serve({ fetch, port: CONFIG.port, hostname: CONFIG.host }, (info) => {
     console.log(`Tracer server running on http://localhost:${info.port}`);
   });

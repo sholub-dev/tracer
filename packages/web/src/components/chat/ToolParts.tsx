@@ -103,6 +103,15 @@ export function stepQueryCount(part: ToolPart, store: ProgressStore): number {
   return stepParts(part, store.getSnapshot(part.toolCallId ?? "")?.parts).filter((p) => p.type === "query").length;
 }
 
+/** Scrolls to the tool row of a query and highlights it for a moment. */
+export function flashStep(toolCallId: string): void {
+  const el = document.querySelector<HTMLElement>(`[data-tool-call="${CSS.escape(toolCallId)}"]`);
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.setAttribute("data-flash", "");
+  setTimeout(() => el.removeAttribute("data-flash"), 1600);
+}
+
 function stepTitle(part: ToolPart, provider: string): string {
   const title = part.input?.title ?? part.input?.task;
   if (typeof title === "string" && title.trim()) return title.trim();
@@ -292,9 +301,10 @@ function stepError(part: ToolPart): string | null {
   return isSubAgentOutput(output) && output.error ? output.error : null;
 }
 
-function StepBody({ part, progressStore, resultsOnly = false }: { part: ToolPart; progressStore: ProgressStore; resultsOnly?: boolean }) {
+function StepBody({ part, progressStore, isAnimating, resultsOnly = false }: { part: ToolPart; progressStore: ProgressStore; isAnimating: boolean; resultsOnly?: boolean }) {
   const progress = useProgress(progressStore, part.toolCallId);
   const complete = part.state === "output-available";
+  const running = !complete && isAnimating;
   const output = complete ? part.output : undefined;
 
   const error = stepError(part);
@@ -321,12 +331,12 @@ function StepBody({ part, progressStore, resultsOnly = false }: { part: ToolPart
   const parts = stepParts(part, progress?.parts);
   if (parts.length > 0 || !complete) {
     const query = typeof part.input?.query === "string" ? part.input.query : null;
-    if (resultsOnly) return <ProgressItems parts={parts} isAnimating={!complete} resultsOnly />;
+    if (resultsOnly) return <ProgressItems parts={parts} isAnimating={running} resultsOnly />;
     return (
       <>
         {parts.length === 0 && query && <QueryBlock query={query} />}
-        <ProgressItems parts={parts} isAnimating={!complete} />
-        {!complete && <WorkingIndicator label={`Querying ${providerLabel(providerOf(part.type))}`} />}
+        <ProgressItems parts={parts} isAnimating={running} />
+        {running && <WorkingIndicator label={`Querying ${providerLabel(providerOf(part.type))}`} />}
       </>
     );
   }
@@ -342,11 +352,11 @@ function StepBody({ part, progressStore, resultsOnly = false }: { part: ToolPart
 }
 
 // A folded step keeps its charts and tables visible; only the query hides.
-type StepProps = { part: ToolPart; progressStore: ProgressStore };
+type StepProps = { part: ToolPart; progressStore: ProgressStore; isAnimating: boolean };
 
 // The AI SDK clones the streaming message per chunk, so part identity changes even when nothing read here did.
 function stepPropsEqual(prev: StepProps, next: StepProps): boolean {
-  if (prev.progressStore !== next.progressStore) return false;
+  if (prev.progressStore !== next.progressStore || prev.isAnimating !== next.isAnimating) return false;
   const a = prev.part;
   const b = next.part;
   if (a === b) return true;
@@ -361,7 +371,7 @@ function ChartStep({ part, query, results, totalRows }: { part: ToolPart; query:
   const provider = providerOf(part.type);
   const title = stepTitle(part, provider);
   return (
-    <li className="animate-in fade-in duration-200">
+    <li data-tool-call={part.toolCallId} className="animate-in fade-in duration-200 data-[flash]:rounded-xl data-[flash]:ring-2 data-[flash]:ring-primary/50">
       <Collapsible open={open} onOpenChange={setOpen} className="rounded-xl border bg-card p-4 shadow-sm max-sm:px-3">
         <FoldTrigger
           chevronEnd
@@ -389,19 +399,20 @@ function ChartStep({ part, query, results, totalRows }: { part: ToolPart; query:
   );
 }
 
-export const ProviderStep = memo(function ProviderStep({ part, progressStore }: StepProps) {
+export const ProviderStep = memo(function ProviderStep({ part, progressStore, isAnimating }: StepProps) {
   const [open, setOpen] = useState(false);
   const progress = useProgress(progressStore, part.toolCallId);
   const provider = providerOf(part.type);
-  const running = part.state !== "output-available" && part.state !== "output-error";
-  const queries = running || stepError(part) ? [] : stepParts(part, progress?.parts).filter((p) => p.type === "query");
+  const settled = part.state === "output-available" || part.state === "output-error";
+  const running = !settled && isAnimating;
+  const queries = !settled || stepError(part) ? [] : stepParts(part, progress?.parts).filter((p) => p.type === "query");
   const only = queries.length === 1 && queries[0].type === "query" && queries[0].query && isRowResult(queries[0].results) ? queries[0] : null;
   if (only) return <ChartStep part={part} query={only.query} results={only.results} totalRows={only.totalRows} />;
-  const rows = running || stepError(part) ? null : rowsOf(part.output);
+  const rows = !settled || stepError(part) ? null : rowsOf(part.output);
   if (rows) return <ChartStep part={part} query={inputText(part)} results={rows} />;
   const error = open ? null : stepError(part);
   return (
-    <li className="animate-in fade-in duration-200">
+    <li data-tool-call={part.toolCallId} className="animate-in fade-in duration-200 data-[flash]:rounded-xl data-[flash]:ring-2 data-[flash]:ring-primary/50">
       <Collapsible open={open} onOpenChange={setOpen}>
         <FoldTrigger
           chevronEnd
@@ -412,20 +423,25 @@ export const ProviderStep = memo(function ProviderStep({ part, progressStore }: 
           <span className="sr-only">{providerLabel(provider)}:</span>
           <span className="min-w-0 truncate text-sm font-medium">{stepTitle(part, provider)}</span>
           {running && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-label="Running" />}
+          {!settled && !isAnimating && <span className="shrink-0 text-xs text-muted-foreground">Stopped</span>}
         </FoldTrigger>
         <CollapsibleContent className="mt-2 ml-4 space-y-2">
-          <StepBody part={part} progressStore={progressStore} />
+          <StepBody part={part} progressStore={progressStore} isAnimating={isAnimating} />
         </CollapsibleContent>
       </Collapsible>
       {!open && (
         <div className="mt-2 ml-4 space-y-2">
-          <StepBody part={part} progressStore={progressStore} resultsOnly />
+          <StepBody part={part} progressStore={progressStore} isAnimating={isAnimating} resultsOnly />
         </div>
       )}
       {error && <div className="mt-1 ml-4"><ErrorLine>{error}</ErrorLine></div>}
     </li>
   );
 }, stepPropsEqual);
+
+function StoppedLine() {
+  return <p className="text-[13px]/[18px] text-muted-foreground">Stopped</p>;
+}
 
 function smallToolLabel(part: ToolPart, spec: (typeof SMALL_TOOLS)[string]): string {
   const output = (part.output ?? {}) as Record<string, unknown>;
@@ -441,20 +457,20 @@ function smallToolLabel(part: ToolPart, spec: (typeof SMALL_TOOLS)[string]): str
 }
 
 /** Monitor saves, small tool lines (timer, widgets, triage reports) and anything else that is not a provider query. */
-export const OtherToolPart = memo(function OtherToolPart({ part }: { part: ToolPart }) {
+export const OtherToolPart = memo(function OtherToolPart({ part, isAnimating }: { part: ToolPart; isAnimating: boolean }) {
   // Outputs present on mount come from history, not a save that just happened.
   const savedLive = useRef(part.state !== "output-available").current;
 
   if (MONITOR_TOOLS.has(part.type)) {
     if (part.state === "output-available") return <MonitorSavedCard output={(part.output ?? {}) as MonitorSavedOutput} fresh={savedLive} />;
     if (part.state === "output-error") return <ErrorLine>{part.errorText ?? "Monitor save failed"}</ErrorLine>;
-    return <WorkingIndicator label="Working on the monitor" />;
+    return isAnimating ? <WorkingIndicator label="Working on the monitor" /> : <StoppedLine />;
   }
 
   const spec = SMALL_TOOLS[part.type];
   if (!spec) return null;
   if (part.state === "output-error") return <ErrorLine>{`${spec.errorLabel}: ${part.errorText ?? "failed"}`}</ErrorLine>;
-  if (part.state !== "output-available") return <WorkingIndicator label={spec.loading} />;
+  if (part.state !== "output-available") return isAnimating ? <WorkingIndicator label={spec.loading} /> : <StoppedLine />;
   const failed = hasErrorOutput(part.output);
   const Icon = failed ? AlertCircle : spec.icon;
   return (

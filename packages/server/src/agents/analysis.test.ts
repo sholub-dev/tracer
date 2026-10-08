@@ -18,12 +18,22 @@ test("extractAnalysis keeps later messages after the marker", () => {
   assert.equal(out.analysis, "a\n\nb");
 });
 
-const finding = { kind: "root_cause", headline: "Pool exhausted", details: "The pool held 50 of 50 connections.", points: ["50 of 50 in use at 14:39", "p95 rose to 810 ms"], confidence: "likely", toConfirm: "Gateway pool metrics for the spike window" };
+const finding = { kind: "root_cause", verdict: "problem", headline: "Pool exhausted", happened: "The pool held 50 of 50 connections.", cause: "Retries opened a connection per attempt.", evidence: [{ fact: "50 of 50 in use at 14:39" }, { fact: "p95 rose to 810 ms" }], confidence: "likely", toConfirm: "Gateway pool metrics for the spike window" };
 const findingCall = (input: unknown) => ({ type: "tool-report_finding", toolCallId: "f", state: "output-available", input, output: { recorded: true } });
 
 test("extractAnalysis puts the finding of the latest turn first", () => {
   const user = { id: "", role: "user", parts: [{ type: "text", text: "why?" }] } as unknown as UIMessage;
   const out = extractAnalysis([user, msg([marker, findingCall(finding), { type: "text", text: "Details" }])]).analysis;
-  assert.equal(out, "**Root cause** (likely): Pool exhausted\n\nThe pool held 50 of 50 connections.\n\n- 50 of 50 in use at 14:39\n- p95 rose to 810 ms\n\n**To confirm:** Gateway pool metrics for the spike window\n\nDetails");
+  assert.equal(out, "**Problem** (likely): Pool exhausted\n\n**What happened:** The pool held 50 of 50 connections.\n\n**Why:** Retries opened a connection per attempt.\n\n**Evidence:**\n- 50 of 50 in use at 14:39\n- p95 rose to 810 ms\n\n**To confirm:** Gateway pool metrics for the spike window\n\nDetails");
   assert.equal(extractAnalysis([msg([marker, findingCall(finding)]), user, msg([marker, { type: "text", text: "Other" }])]).analysis, "Other");
+});
+
+test("extractAnalysis ignores a begin_analysis marker from an earlier turn", () => {
+  const messages = [
+    { id: "", role: "user", parts: [{ type: "text", text: "first" }] },
+    { id: "", role: "assistant", parts: [{ type: "tool-begin_analysis" }, { type: "text", text: "old analysis" }] },
+    { id: "", role: "user", parts: [{ type: "text", text: "second" }] },
+    { id: "", role: "assistant", parts: [{ type: "text", text: "new answer" }] },
+  ] as unknown as UIMessage[];
+  assert.equal(extractAnalysis(messages).analysis, "new answer");
 });

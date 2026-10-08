@@ -1,5 +1,5 @@
 import type { Db } from "../db/driver.js";
-import { OldFormError, seal, TooLargeError, unseal } from "./crypto.js";
+import { MAX_BODY_BYTES, OldFormError, seal, TooLargeError, unseal } from "./crypto.js";
 import { getMark, getSetting, recordSync, setMark } from "./peer.js";
 import { FORMAT, importSnapshot, type Snapshot } from "./snapshot.js";
 import { exportSyncPayload, mergeSyncPayload, type SyncPayload } from "./sync.js";
@@ -16,7 +16,7 @@ const POLL_INTERVAL_MS = 1000;
 export type SyncMode = "merge" | "replace";
 
 // Only addresses on the local network: a link from elsewhere must not pull data from the internet.
-const PRIVATE_IPV4 = /^(10\.\d+|172\.(1[6-9]|2\d|3[01])|192\.168)\.\d+\.\d+$/;
+const PRIVATE_IPV4 = /^(10\.\d{1,3}|172\.(1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3}$/;
 
 /** Reads a copy link from a QR code. Throws when it is not one. */
 export function parseCopyLink(link: string): { from: URL; key: string; name?: string; device?: string } {
@@ -47,6 +47,24 @@ const EXPIRED = "This code is used or expired. Show a new code on the computer."
 const INTERRUPTED = "The connection broke during the transfer. Stay on the same Wi-Fi, keep Tracer open, then show a new code and try again.";
 const TOO_SLOW = "The transfer took too long and stopped. Move closer to the Wi-Fi router, then show a new code and try again.";
 
+/** Reads the body but stops at the size limit, so a computer that streams without end cannot fill the memory before the decrypt. */
+async function readCapped(response: Response): Promise<string> {
+  const tooLarge = () => new TooLargeError("The computer sent more data than the limit allows. Delete sessions you do not need on the computer, then try again.");
+  if (Number(response.headers.get("content-length")) > MAX_BODY_BYTES) throw tooLarge();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  const reader = response.body?.getReader();
+  for (let part = await reader?.read(); part && !part.done; part = await reader!.read()) {
+    size += part.value.length;
+    if (size > MAX_BODY_BYTES) { await reader!.cancel(); throw tooLarge(); }
+    chunks.push(part.value);
+  }
+  const bytes = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) { bytes.set(chunk, at); at += chunk.length; }
+  return new TextDecoder().decode(bytes);
+}
+
 /** `transfer` marks a call that moves the copy: a failure there is a broken transfer, not an unreachable computer. */
 async function call(url: URL, init: RequestInit, timeoutMs = 15_000, transfer = false): Promise<{ status: number; text: string }> {
   const abort = new AbortController();
@@ -55,8 +73,9 @@ async function call(url: URL, init: RequestInit, timeoutMs = 15_000, transfer = 
   try {
     // A redirect could lead off the local network.
     const response = await fetch(url, { ...init, signal: abort.signal, redirect: "error" });
-    return { status: response.status, text: await response.text() };
-  } catch {
+    return { status: response.status, text: await readCapped(response) };
+  } catch (err) {
+    if (err instanceof TooLargeError) throw err;
     throw new Error(!transfer ? UNREACHABLE : abort.signal.aborted ? TOO_SLOW : INTERRUPTED);
   } finally {
     clearTimeout(timer);
@@ -124,8 +143,8 @@ export async function receiveCopy(db: Db, link: string, beforeImport?: () => voi
   if (mode === "replace") {
     const { at: theirs, snapshot } = await open<{ at: number; snapshot: Snapshot }>(check(await call(at(""), {}, FETCH_TIMEOUT_MS, true)), key);
     beforeImport?.();
-    // The computer keeps running its monitors; the same alerts must not reach Slack twice.
-    counts = await importSnapshot(db, snapshot, { pauseMonitors: true });
+    // The computer keeps its follow-up timers; the same re-check must not run on both devices.
+    counts = await importSnapshot(db, snapshot, { dropTimers: true });
     // The import wrote the whole change log just now; the next merge needs to send none of it back.
     if (device) await setMark(db, device, { mine: Date.now(), theirs });
   } else {

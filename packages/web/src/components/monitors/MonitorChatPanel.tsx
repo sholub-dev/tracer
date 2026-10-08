@@ -60,7 +60,14 @@ export const MonitorChatPanel = forwardRef<ChatCoreRef, MonitorChatPanelProps>(f
         </p>
       }
       className="min-h-0 flex-1"
-      onRetryTruncate={async (keepCount) => { await truncateMessages.mutateAsync({ id: sessionId, keepCount }); }}
+      onRetryTruncate={async (keepCount) => {
+        try {
+          await truncateMessages.mutateAsync({ id: sessionId, keepCount });
+        } catch (err) {
+          // A first send that failed left no saved row to truncate.
+          if ((err as { data?: { code?: string } }).data?.code !== "NOT_FOUND") throw err;
+        }
+      }}
       onStatusChange={(status) => {
         ownRun.current = status === "submitted" || status === "streaming";
         if (status !== "ready") return;

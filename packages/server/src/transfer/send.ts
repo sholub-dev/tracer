@@ -5,14 +5,12 @@ import { hostname, networkInterfaces } from "node:os";
 import { getTableColumns, sql } from "drizzle-orm";
 import QRCode from "qrcode";
 import type { Db } from "../db/driver.js";
-import { limits, MAX_SYNC_BYTES, OldFormError, randomSecret, seal, TooLargeError, unseal } from "./crypto.js";
+import { limits, MAX_BODY_BYTES, MAX_SYNC_BYTES, OldFormError, randomSecret, seal, TooLargeError, unseal } from "./crypto.js";
 import { getSetting, recordSync } from "./peer.js";
 import { exportSnapshot, FORMAT, TABLES } from "./snapshot.js";
 import { exportSyncPayload, mergeSyncPayload, type SyncPayload } from "./sync.js";
 import { APPROVAL_WINDOW_MS, COPY_LINK_PREFIX, DEVICE_ID, MAX_NAME_LENGTH, type SyncMode } from "./receive.js";
 
-// Base64 adds a third to the sealed data.
-const MAX_BODY_BYTES = Math.ceil((MAX_SYNC_BYTES * 4) / 3) + 1024;
 // A large upload on a slow Wi-Fi needs minutes.
 const BODY_TIMEOUT_MS = 300_000;
 // The phone polls once a second: after a deny or expiry the listener answers briefly so the phone learns why.

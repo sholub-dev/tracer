@@ -43,7 +43,11 @@ export const integrationsRouter = router({
         };
       }
 
-      const config = { domain, email: input.email.trim(), apiToken: input.apiToken.trim() };
+      // The form sends the masked token back when only domain or email changed.
+      const stored = await readJiraConfig(ctx.db);
+      const token = input.apiToken.trim();
+      const apiToken = stored && token === maskToken(stored.apiToken) ? stored.apiToken : token;
+      const config = { domain, email: input.email.trim(), apiToken };
       const result = await new JiraClient(config).validate();
       if (!result.ok) {
         return { success: false, error: result.error ?? "Connection failed" };
@@ -67,12 +71,17 @@ export const integrationsRouter = router({
   saveSlack: publicProcedure
     .input(z.object({ webhookUrl: z.string().min(1), mentions: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
-      const webhookUrl = input.webhookUrl.trim();
+      const stored = await readSlackConfig(ctx.db);
+      const submitted = input.webhookUrl.trim();
+      const unchanged = !!stored && submitted === maskToken(stored.webhookUrl);
+      const webhookUrl = unchanged ? stored.webhookUrl : submitted;
       const mentions = input.mentions?.trim() ?? "";
       const parsed = parseMentions(mentions);
       if ("error" in parsed) return { success: false, error: parsed.error };
-      const result = await postSlack(webhookUrl, { text: `${mentionPrefix(parsed.mentions)}Tracer is connected. Monitor alerts will be posted here.` });
-      if ("error" in result) return { success: false, error: result.error };
+      if (!unchanged) {
+        const result = await postSlack(webhookUrl, { text: `${mentionPrefix(parsed.mentions)}Tracer is connected. Monitor alerts will be posted here.` });
+        if ("error" in result) return { success: false, error: result.error };
+      }
       await writeSlackConfig(ctx.db, { webhookUrl, mentions });
       return { success: true };
     }),

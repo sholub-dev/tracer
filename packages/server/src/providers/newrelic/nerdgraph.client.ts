@@ -7,6 +7,8 @@ export interface AiIssue {
   title: string[] | null;
   incidentIds: string[] | null;
   conditionName: string[] | null;
+  acknowledgedAt: number | null;
+  acknowledgedBy: string | null;
 }
 
 export interface AiIssuesFilter {
@@ -74,7 +76,7 @@ export class NerdGraphClient {
           aiIssues {
             issues(filter: $filter, timeWindow: $tw, cursor: $cursor) {
               nextCursor
-              issues { issueId state title incidentIds conditionName }
+              issues { issueId state title incidentIds conditionName acknowledgedAt acknowledgedBy }
             }
           }
         }

@@ -1,5 +1,7 @@
 import { memo, startTransition, useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { SidebarGroup, SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar";
 import { formatClock, formatShortDate } from "../../lib/format";
@@ -119,6 +121,17 @@ export const RecentSessions = memo(function RecentSessions({ currentSessionId, o
           </section>
         );
       })}
+      {sessionsQuery.isPending && (
+        <div className="mt-2 space-y-2 px-2" role="status" aria-label="Loading investigations">
+          {[0, 1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-9 w-full" />)}
+        </div>
+      )}
+      {sessionsQuery.isError && !sessionsQuery.data && (
+        <div role="alert" className="flex flex-col items-center gap-2 px-2 py-6 text-center">
+          <p className="text-[13px]/[18px] text-muted-foreground">Couldn't load investigations</p>
+          <Button variant="outline" size="sm" onClick={() => void sessionsQuery.refetch()}>Retry</Button>
+        </div>
+      )}
       {sessionsQuery.data && !visible.length && (
         <p className="px-2 py-6 text-center text-[13px]/[18px] text-muted-foreground">Nothing here yet</p>
       )}
@@ -173,7 +186,7 @@ const SessionRow = memo(function SessionRow({ session: s, day, active, animateIn
         </span>
       </SidebarMenuButton>
       <MoreActionsMenu lazy label={`More actions for ${s.title}`} sidebar side="right" align="start" triggerClassName="top-2! size-6 w-6">
-        <DropdownMenuItem variant="destructive" onSelect={() => onDelete(s)}>Delete</DropdownMenuItem>
+        <DropdownMenuItem variant="destructive" disabled={running} onSelect={() => onDelete(s)}>Delete</DropdownMenuItem>
       </MoreActionsMenu>
     </SidebarMenuItem>
   );

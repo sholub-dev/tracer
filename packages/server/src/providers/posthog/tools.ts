@@ -5,29 +5,28 @@
 import { z } from "zod";
 import { tool } from "ai";
 import type { PosthogProvider } from "./posthog.provider.js";
-import type { AfterCompleteParams, ChatToolMemoryContext, ChatToolWriter } from "@tracer-sh/shared";
+import type { AfterCompleteParams, ChatToolMemoryContext } from "@tracer-sh/shared";
 import {
   injectMemories,
   type SubAgentQuery,
 } from "../../agents/chat/sub-agent.js";
+import { capQuery } from "../../lib/messages-codec.js";
 import type { Db } from "../../db/driver.js";
 import { toolModelOutput, buildAfterComplete } from "../../tools/provider-tool-helpers.js";
 import { beginAnalysisTool, ANALYSIS_TOOL_NAME } from "../../tools/analysis-tool.js";
 import { formatHogqlCsv, toChartRows } from "./posthog-formatter.js";
 import {
-  POSTHOG_DIRECT_MODE_MAX_STEPS,
   directModeSystemPrompt,
   posthogUnifiedFragment,
 } from "./prompts.js";
 
-export { POSTHOG_DIRECT_MODE_MAX_STEPS, posthogUnifiedFragment };
+export { posthogUnifiedFragment };
 
 // ── Shared tool builder ──
 
 function buildExecuteHogqlTool(
   provider: PosthogProvider,
   collectedQueries: SubAgentQuery[],
-  writer?: ChatToolWriter,
 ) {
   return tool({
     description: "Execute a HogQL query against PostHog.",
@@ -35,7 +34,7 @@ function buildExecuteHogqlTool(
       query: z.string().describe("The HogQL query to execute"),
       title: z.string().optional().describe("Short chart title in plain words, e.g. \"Checkout p95 latency\""),
     }),
-    execute: async ({ query }, { toolCallId }) => {
+    execute: async ({ query }) => {
       try {
         const raw = (await provider.executeRawQuery(query)) as Record<string, unknown>[];
         // Reshape time-bucketed results into New Relic's chartable contract so they plot as a
@@ -43,16 +42,11 @@ function buildExecuteHogqlTool(
         const rows = toChartRows(raw);
         collectedQueries.push({ query, results: rows });
 
-        writer?.write({
-          type: "data-provider-part",
-          data: { toolCallId, part: { type: "query", query, results: rows } },
-        });
-
         // The model reads the CSV built from the ORIGINAL rows: HogQL already returns time buckets
         // as readable strings under their own alias, so there is nothing to humanize — and using
         // `raw` avoids relabeling/dropping the user's columns or mangling numeric metrics.
         const csv = formatHogqlCsv(raw, query);
-        return { parts: [{ type: "query" as const, query, results: rows }], analysis: csv };
+        return { parts: [capQuery({ type: "query" as const, query, results: rows })], analysis: csv };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         collectedQueries.push({ query, results: { error: message } });
@@ -68,14 +62,13 @@ function buildExecuteHogqlTool(
 export function createPosthogDirectTools(
   provider: PosthogProvider,
   memoryContext?: ChatToolMemoryContext,
-  writer?: ChatToolWriter,
   db?: unknown,
 ): { tools: Record<string, unknown>; systemPrompt: string; afterComplete: (params: AfterCompleteParams) => void } {
   const collectedQueries: SubAgentQuery[] = [];
 
   return {
     tools: {
-      execute_hogql: buildExecuteHogqlTool(provider, collectedQueries, writer),
+      execute_hogql: buildExecuteHogqlTool(provider, collectedQueries),
       [ANALYSIS_TOOL_NAME]: beginAnalysisTool,
     },
     systemPrompt: injectMemories(directModeSystemPrompt, memoryContext),

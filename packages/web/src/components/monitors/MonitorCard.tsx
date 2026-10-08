@@ -105,9 +105,11 @@ export const MonitorCard = memo(function MonitorCard({
     utils.monitors.list.setData(undefined, (rows) => rows?.map((m) => (
       m.id === monitor.id ? { ...m, enabled: run ? 1 : 0, alertEnabled: run ? (alert ? 1 : 0) : m.alertEnabled } : m
     )));
-    if (!!monitor.enabled !== run) toggleRun.mutate({ id: monitor.id, enabled: run });
-    if (run && !!monitor.alertEnabled !== alert) toggleAlert.mutate({ id: monitor.id, enabled: alert });
-    toast(`${monitor.name} ${STATE_TOAST[next]}`);
+    const calls: Promise<unknown>[] = [];
+    if (!!monitor.enabled !== run) calls.push(toggleRun.mutateAsync({ id: monitor.id, enabled: run }));
+    if (run && !!monitor.alertEnabled !== alert) calls.push(toggleAlert.mutateAsync({ id: monitor.id, enabled: alert }));
+    // onError already toasts the failure.
+    Promise.all(calls).then(() => toast(`${monitor.name} ${STATE_TOAST[next]}`), () => {});
   };
 
   return (

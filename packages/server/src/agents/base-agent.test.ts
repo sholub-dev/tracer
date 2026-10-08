@@ -39,7 +39,7 @@ function memoryDb(): Db {
     CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, messages TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'idle',
       kind TEXT, summary TEXT, summary_up_to INTEGER, summary_created_at INTEGER, run_scope TEXT, resumed INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
     CREATE TABLE tool_memories (id INTEGER PRIMARY KEY AUTOINCREMENT, tool_name TEXT NOT NULL, note TEXT NOT NULL, review_note TEXT, uid TEXT, created_at INTEGER NOT NULL DEFAULT 0);
-    CREATE TABLE monitor_triggers (id TEXT PRIMARY KEY, monitor_id TEXT, triggered_at INTEGER, window_start INTEGER NOT NULL, session_id TEXT, reported TEXT);
+    CREATE TABLE monitor_triggers (id TEXT PRIMARY KEY, monitor_id TEXT, triggered_at INTEGER, window_start INTEGER NOT NULL, session_id TEXT, reported TEXT, device_id TEXT);
     CREATE TABLE agent_runs (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, agent_type TEXT NOT NULL, model TEXT,
       input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, cached_input_tokens INTEGER NOT NULL DEFAULT 0,
       reasoning_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0, duration_ms INTEGER, created_at INTEGER NOT NULL);
@@ -93,13 +93,14 @@ const DROPPED = "dropped";
 const STALLED = "stalled";
 
 /** `fail` first requests get a non-retryable API error; `hold` never answers; `script` sets each request's SSE body (null fails it). */
-function fakeAnthropic({ fail = 0, hold = false, script = [] as (string | null)[] } = {}): Promise<{ server: Server; url: string; bodies: Record<string, unknown>[] }> {
+function fakeAnthropic({ fail = 0, hold = false, script = [] as (string | null)[], onRequest }: { fail?: number; hold?: boolean; script?: (string | null)[]; onRequest?: () => Promise<void> } = {}): Promise<{ server: Server; url: string; bodies: Record<string, unknown>[] }> {
   const bodies: Record<string, unknown>[] = [];
   const server = createServer((req, res) => {
     let raw = "";
     req.on("data", (c) => { raw += c; });
-    req.on("end", () => {
+    req.on("end", async () => {
       bodies.push(JSON.parse(raw));
+      await onRequest?.();
       if (hold) return;
       if (bodies.length <= fail || script[bodies.length - 1] === null) {
         res.writeHead(400, { "content-type": "application/json" });
@@ -214,10 +215,15 @@ test("Anthropic chat request: date-only system prompt with cache breakpoint, tim
 });
 
 async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string | null)[] }, retryDelaysMs: number[], whileRunning?: (ctx: Context) => Promise<void>, tools?: ToolSet | ((writer: { write: (part: Record<string, unknown>) => void }) => ToolSet)) {
-  const { server, url, bodies } = await fakeAnthropic(fake);
+  const db = memoryDb();
+  // The session status at each model request.
+  const statusAtRequest: (string | undefined)[] = [];
+  const { server, url, bodies } = await fakeAnthropic({
+    ...fake,
+    onRequest: async () => { statusAtRequest.push((await db.select().from(schema.chatSessions).get())?.status); },
+  });
   process.env.ANTHROPIC_BASE_URL = url;
   try {
-    const db = memoryDb();
     await db.insert(schema.providerConfigs).values({ type: "anthropic", config: JSON.stringify({ apiKey: "test" }) }).run();
     await writeAppSetting(db, SETTINGS_KEYS.chatModel, { provider: "anthropic", modelId: "claude-test" });
     const context: Context = { db, providers: {} as ProviderRegistry, activeStreams: new Map() };
@@ -239,7 +245,7 @@ async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string 
     const row = await db.select().from(schema.chatSessions).get();
     const saved = decodeMessages(row!.messages);
     const runs = await db.select().from(schema.agentRuns).all();
-    return { bodies, completed, failed, parts, saved, status: row?.status, runs };
+    return { bodies, completed, failed, parts, saved, status: row?.status, title: row?.title, statusAtRequest, runs };
   } finally {
     delete process.env.ANTHROPIC_BASE_URL;
     server.close();
@@ -273,6 +279,7 @@ test("a non-transient failure is not re-run: one failure, one error, nothing to 
   assert.equal(r.parts.filter((p) => p.type === "error").length, 1);
   assert.deepEqual(r.saved.map((m) => m.role), ["user"], "a failed reply without parts adds no message");
   assert.equal(r.status, "done");
+  assert.equal(r.title, "t", "a first message that failed still gets a title");
 });
 
 test("a non-transient failure after partial output ends the run at once and keeps the partial reply", async () => {
@@ -345,17 +352,18 @@ const findingTools = { lookup: tool({ inputSchema: z.object({}), execute: async 
 
 test("a turn that ran a query and stopped without a finding card gets one extra pass limited to report_finding", async () => {
   const r = await retryRun({ script: [TOOL_CALL_SSE, EMPTY_TEXT_SSE, FINDING_CALL_SSE, SSE] }, [], undefined, findingTools);
-  assert.equal(r.bodies.length, 4);
+  assert.equal(r.bodies.length, 3, "the repair pass is one step, so nothing follows the card");
   const toolNames = (i: number) => (r.bodies[i].tools as { name: string }[]).map((t) => t.name);
   assert.deepEqual(toolNames(1), ["lookup", "report_finding"]);
   assert.deepEqual(toolNames(2), ["report_finding"], "the first repair step offers only the card");
-  assert.deepEqual(toolNames(3), ["lookup", "report_finding"], "later steps offer every tool");
   const last = r.bodies[2].messages as { role: string }[];
   assert.equal(last.at(-1)!.role, "user", "the repair request ends with a nudge, not a prefill");
   assert.deepEqual(r.saved.map((m) => m.role), ["user", "assistant"], "the nudge is not saved");
   const types = r.saved[1].parts.map((p) => p.type);
   assert.ok(types.includes("tool-report_finding"));
   assert.equal(r.completed, 1, "follow-up work runs once, after the repair pass");
+  assert.equal(r.statusAtRequest[2], "streaming", "the row is not done while the repair pass runs");
+  assert.equal(r.status, "done");
 });
 
 test("a failed repair pass still runs the follow-up work of the complete reply and reports no failure", async () => {

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { enterSends } from "../chat/Composer";
 
 export function EditMessageForm({ initialText, onSave, onCancel }: {
   initialText: string;
@@ -15,7 +16,7 @@ export function EditMessageForm({ initialText, onSave, onCancel }: {
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+          if (enterSends(e)) {
             e.preventDefault();
             onSave(text);
           }

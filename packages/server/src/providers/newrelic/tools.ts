@@ -5,23 +5,23 @@
 import { z } from "zod";
 import { tool, type Tool } from "ai";
 import type { NewRelicProvider } from "./newrelic.provider.js";
-import { formatTimestamps, type AfterCompleteParams, type ChatToolMemoryContext, type ChatToolWriter } from "@tracer-sh/shared";
+import { formatTimestamps, type AfterCompleteParams, type ChatToolMemoryContext } from "@tracer-sh/shared";
 import {
   injectMemories,
   type SubAgentQuery,
 } from "../../agents/chat/sub-agent.js";
 import type { Db } from "../../db/driver.js";
+import { capQuery } from "../../lib/messages-codec.js";
 import { getTimezone } from "../../lib/current-context.js";
 import { toolModelOutput, buildAfterComplete } from "../../tools/provider-tool-helpers.js";
 import { beginAnalysisTool, ANALYSIS_TOOL_NAME } from "../../tools/analysis-tool.js";
 import { formatNrqlCsv, sanitizeNrqlRows } from "./nrql-formatter.js";
 import {
-  NR_DIRECT_MODE_MAX_STEPS,
   directModeSystemPrompt,
   nrUnifiedFragment,
 } from "./prompts.js";
 
-export { NR_DIRECT_MODE_MAX_STEPS, nrUnifiedFragment };
+export { nrUnifiedFragment };
 
 // ── Shared tool builder ──
 
@@ -32,7 +32,6 @@ export function withTimezone(query: string, timezone: string): string {
 function buildExecuteNrqlTool(
   provider: NewRelicProvider,
   collectedQueries: SubAgentQuery[],
-  writer?: ChatToolWriter,
   db?: Db,
 ) {
   return tool({
@@ -41,21 +40,16 @@ function buildExecuteNrqlTool(
       query: z.string().describe("The NRQL query to execute"),
       title: z.string().optional().describe("Short chart title in plain words, e.g. \"Checkout p95 latency\""),
     }),
-    execute: async ({ query }, { toolCallId }) => {
+    execute: async ({ query }) => {
       try {
         const timezone = await getTimezone(db);
         const raw = await provider.executeRawQuery(withTimezone(query, timezone));
         const cleaned = sanitizeNrqlRows(raw as Record<string, unknown>[]);
         collectedQueries.push({ query, results: cleaned });
 
-        writer?.write({
-          type: "data-provider-part",
-          data: { toolCallId, part: { type: "query", query, results: cleaned } },
-        });
-
         const formatted = formatTimestamps(raw, timezone);
         const csv = formatNrqlCsv(formatted as Record<string, unknown>[], query);
-        return { parts: [{ type: "query" as const, query, results: cleaned }], analysis: csv };
+        return { parts: [capQuery({ type: "query" as const, query, results: cleaned })], analysis: csv };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         collectedQueries.push({ query, results: { error: message } });
@@ -130,14 +124,13 @@ export function buildNewRelicIssueTools(provider: NewRelicProvider): Record<"lis
 export function createNewRelicDirectTools(
   provider: NewRelicProvider,
   memoryContext?: ChatToolMemoryContext,
-  writer?: ChatToolWriter,
   db?: unknown,
 ): { tools: Record<string, unknown>; systemPrompt: string; afterComplete: (params: AfterCompleteParams) => void } {
   const collectedQueries: SubAgentQuery[] = [];
 
   return {
     tools: {
-      execute_nrql: buildExecuteNrqlTool(provider, collectedQueries, writer, db as Db | undefined),
+      execute_nrql: buildExecuteNrqlTool(provider, collectedQueries, db as Db | undefined),
       ...buildNewRelicIssueTools(provider),
       [ANALYSIS_TOOL_NAME]: beginAnalysisTool,
     },

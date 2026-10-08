@@ -8,7 +8,7 @@ import { extractAnalysis } from "../agents/analysis.js";
 import { CONFIG } from "../config.js";
 import { decodeMessages } from "../lib/messages-codec.js";
 import { redact } from "../integrations/slack.js";
-import { alertFindingFromMessages, dismissalFromMessages, firstSentence, summaryFromMessages, type AlertSummary } from "./alert-summary.js";
+import { alertFindingFromMessages, dismissalFromMessages, firstSentence, latestRunSummary, summaryFromMessages, type AlertSummary } from "./alert-summary.js";
 import type { Group } from "./condition.js";
 
 export interface TriggerGroup extends Group {
@@ -68,14 +68,24 @@ export function byRelevance<T extends { keys: string[] }>(newestFirst: T[], curr
   return [...newestFirst.filter(shares), ...newestFirst.filter((p) => !shares(p))];
 }
 
+export interface Outcome {
+  analysis: string;
+  /** The last report of any run of the session. */
+  report: AlertSummary | null;
+  /** The report of the latest run only; null when that run reported none. */
+  latestReport: AlertSummary | null;
+  finding: Finding | null;
+  dismissed: string | null;
+}
+
 /** A session's analysis, the answer card and the alert details it reported. */
-export async function readOutcome(db: Db, sessionId: string): Promise<{ analysis: string; report: AlertSummary | null; finding: Finding | null; dismissed: string | null }> {
+export async function readOutcome(db: Db, sessionId: string): Promise<Outcome> {
   const row = await db.select({ messages: chatSessions.messages }).from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
   try {
     const messages = row ? decodeMessages(row.messages) : [];
-    return { analysis: extractAnalysis(messages).analysis, report: summaryFromMessages(messages), finding: alertFindingFromMessages(messages), dismissed: dismissalFromMessages(messages) };
+    return { analysis: extractAnalysis(messages).analysis, report: summaryFromMessages(messages), latestReport: latestRunSummary(messages), finding: alertFindingFromMessages(messages), dismissed: dismissalFromMessages(messages) };
   } catch {
-    return { analysis: "", report: null, finding: null, dismissed: null };
+    return { analysis: "", report: null, latestReport: null, finding: null, dismissed: null };
   }
 }
 
@@ -83,22 +93,43 @@ export const outcomeSummary = (o: { analysis: string; finding: Finding | null })
 /** The one-line summary of a past run, for the prompt. */
 export const pastSummary = (p: PastSession) => redact(outcomeSummary(p));
 
+type StoredOutcome = Pick<Outcome, "analysis" | "report" | "finding" | "dismissed">;
+
+const truncated = (analysis: string) => analysis.length > ANALYSIS_MAX_CHARS ? `${analysis.slice(0, ANALYSIS_MAX_CHARS)} …[truncated]` : analysis;
+
+/** Keeps the result of a finished run on its firing, so later firings read it without decoding the session. */
+export async function saveOutcome(db: Db, sessionId: string, { analysis, report, finding, dismissed }: Outcome): Promise<void> {
+  const stored: StoredOutcome = { analysis: truncated(analysis), report, finding, dismissed };
+  await db.update(monitorTriggers).set({ outcome: JSON.stringify(stored) }).where(eq(monitorTriggers.sessionId, sessionId)).run();
+}
+
+function parseStoredOutcome(json: string | null): StoredOutcome | null {
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json);
+    return typeof parsed?.analysis === "string" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function pastSessions(db: Db, monitorId: string, currentKeys: string[], before = Number.MAX_SAFE_INTEGER): Promise<PastSession[]> {
   const triggers = (await db
-    .select({ sessionId: monitorTriggers.sessionId, triggeredAt: monitorTriggers.triggeredAt, groups: monitorTriggers.groups })
+    .select({ sessionId: monitorTriggers.sessionId, triggeredAt: monitorTriggers.triggeredAt, groups: monitorTriggers.groups, outcome: monitorTriggers.outcome })
     .from(monitorTriggers)
     .where(and(eq(monitorTriggers.monitorId, monitorId), isNotNull(monitorTriggers.sessionId), lt(monitorTriggers.triggeredAt, before)))
     .orderBy(desc(monitorTriggers.triggeredAt))
     .limit(PAST_SESSIONS_SCAN)
     .all())
-    .map((t) => ({ sessionId: t.sessionId!, triggeredAt: t.triggeredAt, keys: parseTriggerGroups(t.groups).map((g) => g.key).filter(Boolean) }));
+    .map((t) => ({ sessionId: t.sessionId!, triggeredAt: t.triggeredAt, keys: parseTriggerGroups(t.groups).map((g) => g.key).filter(Boolean), stored: parseStoredOutcome(t.outcome) }));
 
   // Parse session messages lazily: they can be large and only a few are kept.
   const picked: PastSession[] = [];
   for (const t of byRelevance(triggers, currentKeys)) {
     if (picked.length === PAST_SESSIONS_LIMIT) break;
-    const { analysis, report, finding, dismissed } = await readOutcome(db, t.sessionId);
-    if (dismissed === null && (analysis || report || finding)) picked.push({ ...t, report, finding, analysis: analysis.length > ANALYSIS_MAX_CHARS ? `${analysis.slice(0, ANALYSIS_MAX_CHARS)} …[truncated]` : analysis });
+    const { stored, ...past } = t;
+    const { analysis, report, finding, dismissed } = stored ?? await readOutcome(db, t.sessionId);
+    if (dismissed === null && (analysis || report || finding)) picked.push({ ...past, report, finding, analysis: truncated(analysis) });
   }
   return picked.sort((a, b) => b.triggeredAt - a.triggeredAt);
 }

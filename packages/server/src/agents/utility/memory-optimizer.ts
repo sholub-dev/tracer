@@ -3,7 +3,10 @@ import { tool, generateText, isStepCount } from "ai";
 import { eq } from "drizzle-orm";
 import type { Db } from "../../db/driver.js";
 import { toolMemories } from "../../db/schema.js";
-import { resolveModel } from "../../llm/resolve.js";
+import { CONFIG } from "../../config.js";
+import { resolveModel, utilityProviderOptions } from "../../llm/resolve.js";
+import { recordEachCall } from "../../llm/usage.js";
+import { timeoutSignal } from "../../lib/timeout-signal.js";
 import { makeMemoryExecute } from "../../tools/memory-executor.js";
 import { createUpdateMemoryTool, createDeleteMemoryTool } from "../../tools/memory-tools.js";
 import { getDomainKnowledge } from "./memory-domain-knowledge.js";
@@ -40,6 +43,7 @@ Only after reviewing all memories, perform any needed updates or deletes.
 export async function runMemoryOptimizer(
   db: Db,
   toolName: string,
+  sessionId?: string,
 ): Promise<{ success: boolean; error?: string; stats: { kept: number; updated: number; deleted: number } }> {
   const memories = await db
     .select()
@@ -124,6 +128,9 @@ Be conservative. When unsure, keep the memory.`;
       prompt,
       tools,
       stopWhen: isStepCount(30),
+      providerOptions: utilityProviderOptions(resolved),
+      abortSignal: timeoutSignal(CONFIG.utilityCallTimeoutMs),
+      onLanguageModelCallEnd: sessionId ? recordEachCall(db, sessionId, "memory", resolved.modelId) : undefined,
     });
 
     return { success: true, stats };

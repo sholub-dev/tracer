@@ -4,11 +4,12 @@
 
 import { z } from "zod";
 import { jsonSchema, tool } from "ai";
-import type { AfterCompleteParams, ChatToolMemoryContext, ChatToolWriter } from "@tracer-sh/shared";
+import type { AfterCompleteParams, ChatToolMemoryContext } from "@tracer-sh/shared";
 import {
   injectMemories,
   type SubAgentQuery,
 } from "../../agents/chat/sub-agent.js";
+import { capQuery } from "../../lib/messages-codec.js";
 import type { Db } from "../../db/driver.js";
 import { toolModelOutput, buildAfterComplete } from "../../tools/provider-tool-helpers.js";
 import { beginAnalysisTool, ANALYSIS_TOOL_NAME } from "../../tools/analysis-tool.js";
@@ -17,13 +18,12 @@ import { formatGcpResult } from "./gcp-formatter.js";
 import { extractMcpContent, isTransportError, detectTruncation } from "../../mcp/mcp-tools.js";
 import { getGcpAuth } from "./gcp-auth.js";
 import {
-  GCP_DIRECT_MODE_MAX_STEPS,
   gcpDirectModeSystemPrompt,
   buildProjectConstraint,
   buildGcpUnifiedFragment,
 } from "./prompts.js";
 
-export { GCP_DIRECT_MODE_MAX_STEPS, buildGcpUnifiedFragment };
+export { buildGcpUnifiedFragment };
 
 // ── Direct mode tool factory ──
 
@@ -40,7 +40,6 @@ function withTitleField(schema: any) {
 export function createGcpDirectTools(
   provider: McpProvider,
   memoryContext?: ChatToolMemoryContext,
-  writer?: ChatToolWriter,
   db?: unknown,
   projectId?: string,
 ): { tools: Record<string, unknown>; systemPrompt: string; afterComplete: (params: AfterCompleteParams) => void } {
@@ -65,7 +64,7 @@ export function createGcpDirectTools(
     directTools[name] = tool({
       description: (mcpTool as any).description ?? name,
       inputSchema: withTitleField((mcpTool as any).inputSchema),
-      execute: async (rawInput: any, { toolCallId }: { toolCallId: string }) => {
+      execute: async (rawInput: any) => {
         const { title: _title, ...rest } = rawInput && typeof rawInput === "object" ? rawInput : ({} as Record<string, unknown>);
         const input = ownsTitle || !rawInput || typeof rawInput !== "object" ? rawInput : rest;
         const queryStr = typeof input === "string" ? input : JSON.stringify(input).slice(0, 500);
@@ -90,13 +89,8 @@ export function createGcpDirectTools(
 
           collectedQueries.push({ query: `${name}: ${queryStr}`, results: normalized });
 
-          writer?.write({
-            type: "data-provider-part",
-            data: { toolCallId, part: { type: "query", query: `${name}: ${queryStr}`, results: normalized } },
-          });
-
           const markdown = formatGcpResult(name, normalized);
-          return { parts: [{ type: "query" as const, query: `${name}: ${queryStr}`, results: normalized }], analysis: markdown };
+          return { parts: [capQuery({ type: "query" as const, query: `${name}: ${queryStr}`, results: normalized })], analysis: markdown };
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           collectedQueries.push({ query: `${name}: ${queryStr}`, results: { error: message } });

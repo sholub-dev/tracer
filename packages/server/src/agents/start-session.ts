@@ -1,18 +1,15 @@
 import type { UIMessage } from "ai";
 import {
-  UNIFIED_SCOPE,
   DEFAULT_SESSION_TITLE,
   unixNow,
-  type ChatMode,
   type SessionKind,
 } from "@tracer-sh/shared";
 import type { Context } from "../trpc/context.js";
 import { chatSessions } from "../db/schema.js";
 import { sessionChanged } from "../lib/session-events.js";
-import { firstUserMessageTitle, loadSessionMessages, runChatAgent } from "./base-agent.js";
-import { collectChatTools, withSessionTools } from "../tools/chat-tools.js";
+import { loadSessionMessages, runChatAgent } from "./base-agent.js";
+import { buildRunOptions } from "./chat-run.js";
 import { generateSessionTitle } from "./utility/title.js";
-import { CONFIG } from "../config.js";
 
 export interface StartSessionOptions {
   sessionId: string;
@@ -60,32 +57,13 @@ export async function startAgentSession(
     generateSessionTitle(context.db, sessionId, message);
   }
 
-  const isUnified = !provider || provider === UNIFIED_SCOPE;
-  const mode: ChatMode = isUnified ? "unified" : "direct";
-  const scopedProvider = isUnified ? undefined : provider;
-
   const result = await runChatAgent({
     sessionId,
     messages,
     summary,
     summaryUpTo,
     context,
-    collectTools: async (writer) => {
-      const collected = await collectChatTools(context.providers, context.db, writer, scopedProvider, mode);
-      const orig = collected.afterComplete;
-      return {
-        ...collected,
-        tools: collected.tools && withSessionTools(collected.tools, context.db, sessionId, kind, tools),
-        afterComplete: (params) => {
-          orig?.(params);
-          onComplete?.({});
-        },
-      };
-    },
-    sessionTitle: firstUserMessageTitle,
-    scope: provider || UNIFIED_SCOPE,
-    retryDelaysMs: CONFIG.agentRetryDelaysMs,
-    onFailed: (error) => onComplete?.({ error }),
+    ...await buildRunOptions(context, { sessionId, kind, scope: provider, extras: tools, onComplete }),
   });
 
   return "error" in result ? { error: result.error ?? "Unknown error" } : { ok: true };

@@ -3,7 +3,7 @@ export const WEB_CONFIG = {
   /** Also the global react-query staleTime default (main.tsx). */
   sessionStaleTimeMs: 30_000,
   /** Coalesces bursts of live session change events into one refetch. */
-  sessionEventCoalesceMs: 100,
+  sessionEventCoalesceMs: 500,
   subscriptionRetryMaxMs: 10_000,
   sourcesStaleMs: 60_000,
   /** How often a failed data-source check repeats. */

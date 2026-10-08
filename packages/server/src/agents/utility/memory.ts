@@ -2,7 +2,7 @@ import { z } from "zod";
 import { tool, generateText, isStepCount } from "ai";
 import type { Db } from "../../db/driver.js";
 import { CONFIG } from "../../config.js";
-import { resolveModel } from "../../llm/resolve.js";
+import { resolveModel, utilityProviderOptions } from "../../llm/resolve.js";
 import { recordEachCall } from "../../llm/usage.js";
 import { makeMemoryExecute } from "../../tools/memory-executor.js";
 import { createUpdateMemoryTool, createDeleteMemoryTool } from "../../tools/memory-tools.js";
@@ -79,6 +79,7 @@ export async function runMemoryAgent(opts: MemoryAgentOptions): Promise<void> {
 
   const resolved = await resolveModel(db);
   if ("error" in resolved) {
+    await markCompleted(db, sessionId);
     return;
   }
 
@@ -156,6 +157,7 @@ ${tailInstruction}`;
     await generateText({
       model: resolved.model,
       temperature: 0,
+      providerOptions: utilityProviderOptions(resolved),
       instructions: SYSTEM_PROMPT,
       prompt,
       tools,
@@ -166,14 +168,14 @@ ${tailInstruction}`;
   } catch (err) {
     console.warn(`[memory-agent] ${providerType} failed:`, err);
   } finally {
-    // Always mark completion so the frontend knows the agent finished
-    if (sessionId) {
-      try {
-        await db.insert(memoryOperations).values({
-          sessionId,
-          operation: "completed",
-        }).run();
-      } catch { /* best-effort */ }
-    }
+    await markCompleted(db, sessionId);
   }
+}
+
+/** Tells the frontend the agent finished; every exit path calls it. */
+async function markCompleted(db: Db, sessionId: string | undefined): Promise<void> {
+  if (!sessionId) return;
+  try {
+    await db.insert(memoryOperations).values({ sessionId, operation: "completed" }).run();
+  } catch { /* best-effort */ }
 }

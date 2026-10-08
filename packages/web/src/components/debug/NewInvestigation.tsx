@@ -3,6 +3,7 @@ import { trpc } from "../../lib/trpc";
 import { providerLabel, sortProviders } from "../../lib/providers";
 import { ProviderDot } from "../common/ProviderDot";
 import { useConnectedProviders } from "../chat/SourcesToggle";
+import { openSettings } from "../../lib/hooks";
 
 function SourcesLine() {
   const connected = useConnectedProviders();
@@ -10,6 +11,7 @@ function SourcesLine() {
   if (!connected || !registered) return <div className="mt-3 h-[18px]" aria-hidden="true" />;
   const on = new Set(connected.map((p) => p.type));
   return (
+    <>
     <ul className="mt-3 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[13px]/[18px] text-ink-2" aria-label="Data sources">
       {sortProviders(registered).map((p) =>
         on.has(p.type) ? (
@@ -25,6 +27,12 @@ function SourcesLine() {
         ),
       )}
     </ul>
+    {connected.length === 0 && (
+      <p className="mt-2 text-center text-[13px]/[18px]">
+        <a href="/settings" onClick={(e) => { e.preventDefault(); openSettings(); }} className="text-primary underline-offset-4 hover:underline">Connect a source</a>
+      </p>
+    )}
+    </>
   );
 }
 

@@ -1,12 +1,12 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import type { UIMessage } from "ai";
+import type { FileUIPart, UIMessage } from "ai";
 import { Loader2, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { DEFAULT_SESSION_TITLE, SESSION_KIND, UNIFIED_SCOPE, compactionUpTo, isAnalysisMessage } from "@tracer-sh/shared";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { trpc } from "../lib/trpc";
-import { useParsedMessages } from "../lib/chat-utils";
+import { parseMessages, useParsedMessages } from "../lib/chat-utils";
 import { useDeleteSession, usePersistedState } from "../lib/hooks";
 import { useOnResume } from "../lib/resume";
 import { sessionKindLabel } from "../lib/session-kind";
@@ -18,7 +18,7 @@ import { COLUMN } from "../components/chat/Transcript";
 import { POST_MORTEM_PROMPT, monitorNameOf, textOf, transcriptOf } from "../components/chat/MessageView";
 import { MessageActionButton, copyText } from "../components/chat/MessageActions";
 import { SessionSummaryBlock } from "../components/chat/SessionSummaryBlock";
-import { SourcesToggle } from "../components/chat/SourcesToggle";
+import { SourcesToggle, useEffectiveScope } from "../components/chat/SourcesToggle";
 import { SessionHeader } from "../components/debug/SessionHeader";
 import { CostDisplay, computeCostBreakdown, costLabel } from "../components/debug/CostDisplay";
 import { EditMessageForm } from "../components/debug/EditMessageForm";
@@ -26,6 +26,7 @@ import { NewInvestigation } from "../components/debug/NewInvestigation";
 import { ConfirmDialog } from "../components/common/ConfirmDialog";
 
 const PROVIDER_KEY = "tracer:activeProvider";
+const SETTLE_ATTEMPTS = 6;
 
 function sessionMeta(kind: string | null | undefined, messages: UIMessage[], at: number | undefined): string[] {
   return [
@@ -67,6 +68,18 @@ export function Debug({ sessionId, isNew, onDeleted }: { sessionId: string; isNe
 
   const initialMessages = useParsedMessages(sessionQuery.data?.messagesJson);
 
+  // One failed refetch at run end must not leave "Running": retry with a growing wait until the session leaves "streaming".
+  const unmounted = useRef(false);
+  useEffect(() => () => { unmounted.current = true; }, []);
+  const refetchUntilSettled = useCallback(async () => {
+    for (let attempt = 0; attempt < SETTLE_ATTEMPTS && !unmounted.current; attempt++) {
+      const { data } = await sessionQuery.refetch();
+      if (data && data.status !== "streaming") return;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(500 * 2 ** attempt, 8000)));
+    }
+  }, [sessionQuery.refetch]); // eslint-disable-line react-hooks/exhaustive-deps
+  useOnResume(() => { if (sessionQuery.data?.status === "streaming") void refetchUntilSettled(); });
+
   // Separate from sessions.get so refreshing cost after a stream never unmounts the chat.
   const costQuery = trpc.sessions.getCost.useQuery({ id: sessionId });
   const costBreakdown = useMemo(() => {
@@ -78,6 +91,7 @@ export function Debug({ sessionId, isNew, onDeleted }: { sessionId: string; isNe
   const hasCost = !!costBreakdown && (costBreakdown.totalInput > 0 || costBreakdown.totalOutput > 0);
   const cost = hasCost ? <CostDisplay breakdown={costBreakdown} /> : null;
   const costText = hasCost ? costLabel(costBreakdown) : undefined;
+  const scope = useEffectiveScope(activeProvider);
   const sources = <SourcesToggle activeProvider={activeProvider} onToggle={setActiveProvider} />;
 
   let body: React.ReactNode;
@@ -101,7 +115,7 @@ export function Debug({ sessionId, isNew, onDeleted }: { sessionId: string; isNe
         initialMessages={liveMsgs}
         collapseCount={liveUpTo}
         analysisOnlyIndex={liveUpTo > 0 ? liveUpTo : undefined}
-        onComplete={() => sessionQuery.refetch()}
+        onComplete={() => void refetchUntilSettled()}
         header={
           <SessionHeader
             chatId={sessionId}
@@ -142,7 +156,7 @@ export function Debug({ sessionId, isNew, onDeleted }: { sessionId: string; isNe
         sources={sources}
         cost={cost}
         costText={costText}
-        activeProvider={activeProvider}
+        activeProvider={scope}
         sessionTitle={sessionQuery.data?.title}
         sessionKind={sessionQuery.data?.kind}
         sessionUpdatedAt={sessionQuery.data?.updatedAt}
@@ -229,25 +243,33 @@ function DebugChat({ chatId, initialMessages, sources, cost, costText, activePro
   const isCompacting = compacting !== null;
   const coreRef = useRef<ChatCoreRef>(null);
   const hasMarkedViewed = useRef(false);
+  // The edited message's attachments, taken when the edit starts and sent again with the new text.
+  const editFiles = useRef<FileUIPart[]>([]);
   const utils = trpc.useUtils();
   const [startedAt] = useState(() => Math.floor(Date.now() / 1000));
 
   // A run the server starts here (follow-up timer, API) flips the page to the live stream view.
   const listStatus = trpc.sessions.list.useQuery(undefined, { select: (l) => l.find((s) => s.id === chatId)?.status }).data;
+  // A run the server no longer has can leave the local stream open (the POST connection was lost): adopt the saved messages.
+  // Used when the list says the run ended and when the app resumes.
+  const reconcile = () => {
+    utils.sessions.get.fetch({ id: chatId }, { staleTime: 0 })
+      .then((session) => {
+        if (session && session.status !== "streaming") coreRef.current?.adoptSaved(parseMessages(session.messagesJson));
+      })
+      .catch(() => {});
+  };
   const prevListStatus = useRef(listStatus);
   useEffect(() => {
     const started = listStatus === "streaming" && prevListStatus.current !== "streaming";
+    const ended = listStatus !== "streaming" && prevListStatus.current === "streaming";
     prevListStatus.current = listStatus;
     if (started && !isStreaming) utils.sessions.get.fetch({ id: chatId }, { staleTime: 0 }).catch(() => {});
+    if (ended && coreRef.current?.streaming) reconcile();
   }, [listStatus]); // eslint-disable-line react-hooks/exhaustive-deps
   // The app was suspended or the server connection came back: a run may have started or ended meanwhile.
   // A run the server still has swaps this view for the live stream; one it lost ends the local stream, which can hang open.
-  useOnResume(() => {
-    if (!hasMessages) return;
-    utils.sessions.get.fetch({ id: chatId }, { staleTime: 0 })
-      .then((session) => { if (session?.status !== "streaming" && coreRef.current?.streaming) coreRef.current.stop(); })
-      .catch(() => {});
-  });
+  useOnResume(() => { if (hasMessages) reconcile(); });
   const markViewed = trpc.sessions.markViewed.useMutation();
   const truncateMessages = trpc.sessions.truncateMessages.useMutation();
   const compactMutation = trpc.sessions.compact.useMutation();
@@ -293,12 +315,21 @@ function DebugChat({ chatId, initialMessages, sources, cost, costText, activePro
     coreRef.current.sendMessage({ text: POST_MORTEM_PROMPT });
   };
 
+  // A failed first send has no saved row yet, so there is nothing to trim before Retry.
+  const retryTruncate = async (keepCount: number) => {
+    try {
+      await truncateTo(keepCount);
+    } catch (err) {
+      if ((err as { data?: { code?: string } }).data?.code !== "NOT_FOUND") throw err;
+    }
+  };
+
   const handleDeleteConfirm = async () => {
     if (deleteTarget === null || !coreRef.current) return;
     try {
       await truncateTo(deleteTarget);
-    } catch {
-      toast.error("Couldn't delete the messages");
+    } catch (err) {
+      toast.error("Couldn't delete the messages", { description: err instanceof Error ? err.message : undefined });
       return;
     }
     const kept = coreRef.current.messages.slice(0, deleteTarget);
@@ -310,7 +341,8 @@ function DebugChat({ chatId, initialMessages, sources, cost, costText, activePro
   const handleStartEdit = (index: number) => {
     const msg = coreRef.current?.messages[index];
     const text = msg ? textOf(msg) : "";
-    if (!text) return;
+    if (!text || !msg) return;
+    editFiles.current = msg.parts.filter((p): p is FileUIPart => p.type === "file");
     setEditingIndex(index);
     setEditText(text);
   };
@@ -320,14 +352,14 @@ function DebugChat({ chatId, initialMessages, sources, cost, costText, activePro
     const trimmed = text.trim();
     try {
       await truncateTo(editingIndex);
-    } catch {
-      toast.error("Couldn't edit the message");
+    } catch (err) {
+      toast.error("Couldn't edit the message", { description: err instanceof Error ? err.message : undefined });
       return;
     }
     coreRef.current.setMessages(coreRef.current.messages.slice(0, editingIndex));
     setEditingIndex(null);
     coreRef.current.scrollToBottom({ animation: "instant" });
-    coreRef.current.sendMessage({ text: trimmed });
+    coreRef.current.sendMessage({ text: trimmed, files: editFiles.current });
   };
 
   const handleCompact = async (index: number) => {
@@ -497,7 +529,7 @@ function DebugChat({ chatId, initialMessages, sources, cost, costText, activePro
         collapseCount={summary && !showOriginals && summaryUpTo ? summaryUpTo : undefined}
         analysisOnlyIndex={summary && !showOriginals && summaryUpTo ? summaryUpTo : undefined}
         inputDisabled={isCompacting}
-        onRetryTruncate={truncateTo}
+        onRetryTruncate={retryTruncate}
         onStatusChange={(status, msgs) => {
           const loading = status === "submitted" || status === "streaming";
           setIsStreaming(loading);

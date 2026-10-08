@@ -31,6 +31,29 @@ ${providerFragments.join("\n\n---\n\n")}
 ${buildAnalysisSection(maxSteps)}`;
 }
 
+/** The step limit the prompt names must equal the limit the run enforces, so a prompt built before the setting was read is corrected here. */
+export function applyStepBudget(prompt: string, maxSteps: number): string {
+  return prompt.replace(/maximum of \d+ steps/g, `maximum of ${maxSteps} steps`);
+}
+
+// ── No-provider prompt ──
+
+export const BASE_PROMPT = `You are Tracer — an AI debugging assistant for engineers investigating incidents across their observability stack. Be direct, follow evidence, and surface uncertainty rather than guessing. Skip preamble and caveats; get to the answer.
+
+If a tool call fails, retry with a corrected approach. If you fail the same tool call twice, DO NOT retry again — stop and explain the issue to the user. Ask clarifying questions if needed. Never silently give up.
+
+When the user's question spans multiple providers, query each relevant provider and synthesize findings across the results.`;
+
+/** Used when no provider tool exists: only the notice that providers connect in Settings, plus any integration fragments. */
+export function buildNoProviderPrompt(extraFragments: string[] = []): string {
+  return [
+    BASE_PROMPT,
+    PLAIN_LANGUAGE,
+    "No observability providers are currently configured. If the user asks about observability data, let them know they can connect providers in the Settings page.",
+    ...extraFragments,
+  ].join("\n\n");
+}
+
 // ── Shared rules builder ──
 
 /**
@@ -43,7 +66,7 @@ export function buildRules(opts: {
   extraRules?: string[];
 }): string {
   const rules = [
-    `1. **Batch only independent reads.** You may make up to 4 tool calls in one step when each is a read and none needs another's result (for example the same query for two services, or logs and metrics for one window). Make a call that depends on a result in a later step. Never batch begin_analysis, report_finding, or any tool that records, reports or changes state (save, update, delete, ack, close, dismiss, timer, comment, report) — make them alone in their step. After the results arrive, write one brief summary that covers all of them.`,
+    `1. **Batch only independent reads.** You may make up to 4 tool calls in one step when each is a read and none needs another's result (for example the same query for two services, or logs and metrics for one window). Make a call that depends on a result in a later step. Never batch begin_analysis, report_finding, or any tool that records, reports or changes state (save, update, delete, ack, close, dismiss, timer, comment, report) — make them alone in their step. During the investigation, after the results arrive, write one brief summary that covers all of them. This does not apply to the answer: the Response Format section governs it.`,
     `2. **Empty results: suspect the query first, then prove absence.** Check field name, case, quoting, and time range; fix and retry differently. If a deliberately broadened probe (wider window, fewer filters) is also empty, the absence IS the finding — report it. Never keep reshaping the same query hoping data appears.`,
     `3. **NEVER repeat a failed query.** Read the error, fix the cause. Same error twice → completely different approach.`,
     `4. **Use discovered identifiers exactly.** If the actual name differs from the task, use the exact discovered value.`,
@@ -191,7 +214,7 @@ Write every response in plain, simple language, following ASD-STE100 principles:
  */
 export const EXECUTION_DISCIPLINE = `## Execution Discipline
 
-For multi-step investigations:
+For the investigation phase of multi-step work (the Response Format section governs the answer):
 1. **Step N: [Goal]** — state the candidate this tests and the result that would eliminate it, or the gap it fills
 2. **Tool call(s)** → one query each; independent queries may share a step
 3. **→ Found:** [data] **→ So what:** [only what this data supports — if it needs an assumption, it's a gap, not a finding]
@@ -222,14 +245,14 @@ function analysisBlock(): string {
    - Do not start writing until you have a clear chain and a concrete list of visuals to run.
 2. ${markerStep}
    Then call \`report_finding\` as the "Finding card" rule below says, if it applies to this turn.
-3. **Supporting visuals.** After the card, run at most 3 tool calls that display the data behind its points, each as the best form for its point: a single-value query for a key number, a table (\`FACET\` or \`COMPARE WITH\`) for a comparison such as current against baseline, a \`TIMESERIES\` for change over time. Before each visual, write at most one short sentence that names the point it supports.
+3. **Supporting visuals.** After the card, run at most 3 tool calls that display the data behind its points, each as the best form for its point: a single value for a key number, a grouped table for a comparison such as current against baseline, a time series for change over time. Before each visual, write at most one short sentence that names the point it supports.
 4. **Stop after the last visual.** The card already holds the conclusion with its confidence label.
 
 **Rules:**
 - **The card is the whole written answer.** Nothing after the last visual: no recap, no headings, no bullet lists, no closing line. Never repeat the card in text.
 - **Re-run queries here even if you already ran them during investigation.** A tool call executed earlier in the same session does NOT count as a visual in the final response — investigation-phase tool results live in a separate area of the UI. Treat "I already showed this above" as a forbidden reason to skip a visual.
 - **Never render data as markdown tables.** Every table comes from a query. Tool calls produce interactive charts and tables in the UI.
-- Each visual shows different data from the others — different metric, different time slice, different service, or different grouping. Cite investigation steps with \`[step N]\` only in the card details, and only when it adds auditability.
+- Each visual shows different data from the others — different metric, different time slice, different service, or different grouping. Cite investigation steps with \`[step N]\` only in summary \`details\`, and only when it adds auditability.
 - ${NO_FIXES_RULE}`;
 }
 
@@ -247,12 +270,18 @@ ${analysisBlock()}
 
 When the investigation is done, and before any supporting visuals, call \`report_finding\` once, alone in its step, in every turn that ran at least one query. The card is the whole written answer, so it must answer the question completely and directly.
 - Use \`kind: "root_cause"\` when the turn explains why something happened. Use \`kind: "summary"\` for status, counts, trends and lookups.
-- \`headline\`: one sentence. For a root cause: the change, condition or failing dependency that produced the symptom. For a summary: the main takeaway with its key number.
-- When the data shows the symptom but not its cause (a symptom is not a cause): the headline states what the data shows and where it stops. A candidate cause goes in \`details\`, labeled as a candidate. Use confidence unverified and put the check in \`toConfirm\`.
-- \`details\`: 1 to 5 sentences; the first sentence answers the question. Add the key numbers and the time window. Inline bold and code are allowed. No lists, no headings.
-- \`points\`: 0 to 4 facts with a number or time from a query result, only facts not already in \`details\`.
-- Root cause only: add the confidence label (confirmed, likely or unverified). Confirmed needs a query result that shows the cause itself, not only the symptom. When the cause is not confirmed, add \`toConfirm\`: the one check that would confirm it (the data and the time window to look at).
-The card never names a fix. It may state an action you performed in this turn as a fact. Skip it only when no query ran (for example a greeting, a settings question or "list my monitors") or when \`report_finding\` is not in your tool list.
+- Root cause card, read top to bottom as: what happened, why, based on what evidence.
+  - \`verdict\`: \`problem\` when something is broken or degraded; \`no_problem\` when the signal is expected, normal or noise; \`unclear\` when the data stops short.
+  - \`headline\`: one plain sentence that says what happened and why. A symptom is not a cause: when the data shows only the symptom, the headline says what the data shows and where it stops.
+  - \`happened\`: 1 to 2 sentences on what was observed, where, when and how much (numbers and the time window).
+  - \`cause\`: 1 to 3 sentences on the mechanism that explains it, or why it is not a fault. Never the symptom restated. A candidate cause is labeled as a candidate.
+  - \`evidence\`: 1 to 5 facts, each with a number or time from a query result, only facts not already in \`happened\` or \`cause\`. Set each item's \`query\` to the exact title you gave the query that shows it.
+  - \`impact\` (optional): who or what is affected and how much; "none" is allowed for \`no_problem\`.
+  - \`action\` (optional): an action you performed in this turn, stated as a fact.
+  - \`confidence\`: confirmed, likely or unverified. Confirmed needs a query result that shows the cause itself, not only the symptom, and rules out the strongest alternative. When the cause is not confirmed, add \`toConfirm\`: the one check that would confirm it (the data and the time window to look at).
+  - No ids (incident, issue, session, UUIDs) anywhere in the card: name the service, endpoint or condition instead. Nothing repeated across fields.
+- Summary card: \`headline\` is the main takeaway with its key number. \`details\` is 1 to 5 sentences; the first answers the question. \`points\` are 0 to 4 facts not already in \`details\`.
+The card never names a fix. It may state an action you performed in this turn as a fact. Skip it only when no query ran (for example a greeting or a question answered from the conversation) or when \`report_finding\` is not in your tool list.
 
 A tool whose description says to call it after the card goes right after the card, alone in its step, before any visual. After the card, show at most 3 supporting visuals (see "Supporting visuals" above) and write nothing after the last one. In a turn with queries but no investigation (a simple lookup), the same shape applies, and visuals are optional when the query results already show the data.
 

@@ -1,6 +1,7 @@
+import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { trpc } from "../../lib/trpc";
-import { useGcpAuthStatus, useProviderPings } from "../../lib/hooks";
+import { useGcpAuthStatus, useInvalidateProviders, useProviderPings } from "../../lib/hooks";
 import { ConnectionRow, Group, Section } from "./parts";
 import { PROVIDER_NOTES } from "./notes";
 import { GcloudHint, GcpProjectField } from "./GcpProjectField";
@@ -12,24 +13,19 @@ const DETAIL: Record<string, (c: Record<string, string>) => string> = {
 };
 
 export function DataSourcesSettings() {
-  const utils = trpc.useUtils();
+  const invalidate = useInvalidateProviders();
   const { data: statuses, isLoading: statusLoading } = trpc.provider.list.useQuery();
   const { data: configs, isLoading: configsLoading } = trpc.provider.getConfigs.useQuery();
   const { data: types, isLoading: typesLoading } = trpc.provider.getRegisteredTypes.useQuery();
   const { data: pings } = useProviderPings({ fresh: true });
   const auth = useGcpAuthStatus();
 
-  const invalidate = () => {
-    utils.provider.list.invalidate();
-    utils.provider.getConfigs.invalidate();
-    utils.provider.ping.invalidate();
-  };
   const saveConfig = trpc.provider.saveConfig.useMutation({ onSuccess: invalidate });
   const removeConfig = trpc.provider.removeConfig.useMutation({ onSuccess: invalidate });
   const pending = saveConfig.isPending || removeConfig.isPending;
 
   return (
-    <Section title="Data sources" description="Where the agent runs its queries. Each source gets its own agent and memory.">
+    <Section title="Data sources" description="Where the agent runs its queries. One agent queries them all.">
       <Group>
         {statusLoading || configsLoading || typesLoading
           ? [0, 1, 2].map((i) => (
@@ -77,7 +73,7 @@ export function DataSourcesSettings() {
                         <GcpProjectField
                           value={config?.projectId ?? ""}
                           disabled={pending}
-                          onChange={(projectId) => saveConfig.mutate({ type: "gcp", config: { ...config, projectId } })}
+                          onChange={(projectId) => saveConfig.mutate({ type: "gcp", config: { ...config, projectId } }, { onError: (e) => toast.error(e.message) })}
                         />
                       </div>
                     ))

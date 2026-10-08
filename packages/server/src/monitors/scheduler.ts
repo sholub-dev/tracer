@@ -1,20 +1,24 @@
-import { and, desc, eq, isNotNull, isNull, lt, notInArray, or } from "drizzle-orm";
+import { and, desc, eq, gte, isNotNull, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
 import { SESSION_KIND, substituteWindow, unixNow } from "@tracer-sh/shared";
 import type { Context } from "../trpc/context.js";
-import { alertIssues, chatSessions, monitors, monitorTriggers } from "../db/schema.js";
+import { alertIssues, chatSessions, monitors, monitorTriggers, syncRows } from "../db/schema.js";
 import type { Db } from "../db/driver.js";
 import { startAgentSession } from "../agents/start-session.js";
 import { sessionChanged } from "../lib/session-events.js";
 import { CONFIG } from "../config.js";
+import { localDeviceId } from "../db/config-reader.js";
+import { decodeMessages } from "../lib/messages-codec.js";
+import { failedWindowEnds } from "./store.js";
 import { evaluateCondition, extractGroups, parseCondition, sumGroups, type Group } from "./condition.js";
-import { classifyGroups, pastSessions, pastSummary, readOutcome, readPastSessionTool, type PastSession, type TriggerGroup } from "./repeats.js";
+import { classifyGroups, pastSessions, pastSummary, readOutcome, readPastSessionTool, saveOutcome, type Outcome, type PastSession, type TriggerGroup } from "./repeats.js";
 import { withTimeout } from "./validate.js";
 import { getTimezone } from "../lib/current-context.js";
 import { monitorAlert, postSlack, readSlackConfig } from "../integrations/slack.js";
-import { dismissAlertTool, reportAlertSummaryTool } from "./alert-summary.js";
+import { dismissAlertTool, MONITOR_ROLE, reportAlertSummaryTool, summaryInstruction } from "./alert-summary.js";
 import { fireDueTimers } from "./timers.js";
+import { ensureFollowUp } from "./follow-up.js";
 import {
-  checkWatches, closeCounts, closedCheckPrompt, conditionOf, findIssues, forgetReports, incidentQuery, ingestLagSeconds, triageEnabled, issuesPrompt, pendingIssueIds, recordIssues,
+  ackRemaining, checkWatches, closeCounts, closedCheckPrompt, conditionOf, findIssues, forgetReports, incidentQuery, ingestLagSeconds, triageEnabled, issuesPrompt, isWakeupTurn, pendingIssueIds, recordIssues, wakeupFailed,
   monitorIssueTools, reportIssueStatusTool, triageAfterRun, type FoundIssues, type Triage,
 } from "./triage.js";
 
@@ -29,7 +33,8 @@ export function nextWindow(
   lagSeconds: number = CONFIG.monitorIngestLagSeconds,
 ): { start: number; end: number } | null {
   const end = Math.floor((now - lagSeconds) / frequencySeconds) * frequencySeconds;
-  const start = lastCheckedAt ?? end - frequencySeconds;
+  // After a long sleep the missed time is not summed into one check: the window covers at most two periods.
+  const start = Math.max(lastCheckedAt ?? end - frequencySeconds, end - 2 * frequencySeconds);
   return end > start ? { start, end } : null;
 }
 
@@ -37,8 +42,6 @@ export function nextWindow(
 export function isFailedWindow(failedEnds: Map<string, number>, monitorId: string, windowEnd: number): boolean {
   return failedEnds.get(monitorId) === windowEnd;
 }
-
-const failedWindowEnds = new Map<string, number>();
 
 function iso(seconds: number): string {
   return new Date(seconds * 1000).toISOString();
@@ -86,15 +89,17 @@ export function buildMessage(
   lines.push(...triageLines);
   lines.push(
     "",
+    MONITOR_ROLE,
+    "",
     "If this looks like a past issue, its past cause is only a hypothesis. Read the most relevant past session, then check in this window that the same cause appears, starts before this firing and explains its groups and size. If it does, say which session; if any part differs, investigate fully.",
-    `${dismissible ? "Unless you dismissed the alert, find" : "Find"} the root cause, or state where the data stops. Answer with report_finding as in any session.${slack ? " Right after it, before any visual, call report_alert_summary once with the alert details (after report_issue_status when that tool is listed). Slack posts the card and the details together. Do not repeat the card or the details as text." : ""}`,
+    `${dismissible ? "Unless you dismissed the alert, find" : "Find"} the root cause, or state where the data stops. Answer with report_finding as in any session.${summaryInstruction(slack)}`,
   );
   return lines.join("\n");
 }
 
 /** Never throws: a Slack failure is only logged. */
 async function notifySlack(
-  context: Context, monitor: Monitor, triggeredAt: number, sessionId: string, triage?: Triage, outcome?: Awaited<ReturnType<typeof readOutcome>>,
+  context: Context, monitor: Monitor, triggeredAt: number, sessionId: string, triage?: Triage, outcome?: Outcome,
 ): Promise<void> {
   let error: string;
   try {
@@ -109,6 +114,7 @@ async function notifySlack(
       timeZone: await getTimezone(context.db),
       mentions: slack.mentions,
       ...triage,
+      ping: triage ? triage.ping || report?.notify === true : report ? report.notify === true : undefined,
     }));
     if (!("error" in result)) return;
     error = result.error;
@@ -139,17 +145,21 @@ async function completeFiring(
       // The provider's error text stays in the local log; Slack gets a fixed line.
       console.warn(`[monitor] "${monitor.name}" investigation failed:`, error);
       await notifySlack(context, monitor, triggeredAt, sessionId, {
-        action: "Investigation failed (AI model error after retries). Issues it did not close stay open; Retry the session to triage them.",
+        action: "Investigation failed. Issues it did not close stay open.",
         ping: true,
       });
       return;
     }
     const outcome = await readOutcome(context.db, sessionId);
+    await saveOutcome(context.db, sessionId, outcome);
     if (outcome.dismissed !== null) {
       console.log(`[monitor] "${monitor.name}" alert already closed, not posted: ${outcome.dismissed}`);
       return;
     }
-    await notifySlack(context, monitor, triggeredAt, sessionId, await triageAfterRun(context, sessionId, found), outcome);
+    await ensureFollowUp(context, sessionId, outcome.latestReport);
+    const triage = await triageAfterRun(context, sessionId, found);
+    await ackRemaining(context, sessionId);
+    await notifySlack(context, monitor, triggeredAt, sessionId, triage, outcome);
   } catch (err) {
     console.error(`[monitor] "${monitor.name}" completion failed:`, err instanceof Error ? err.message : err);
   }
@@ -166,12 +176,34 @@ export async function firingRerun(context: Context, sessionId: string): Promise<
   const pending = await pendingIssueIds(db, sessionId);
   return {
     tools: {
-      ...(await readSlackConfig(db) ? { report_alert_summary: reportAlertSummaryTool() } : {}),
-      ...(pending.length > 0 ? { report_issue_status: reportIssueStatusTool(db, pending), ...monitorIssueTools(context, pending) }
+      report_alert_summary: reportAlertSummaryTool({ slack: await readSlackConfig(db) !== null }),
+      ...(pending.length > 0 ? { report_issue_status: reportIssueStatusTool(db, pending, sessionId), ...monitorIssueTools(context, pending, sessionId) }
         : incidentQuery(monitor.query) ? { dismiss_alert: dismissAlertTool() } : {}),
     },
     onComplete: (outcome) => void completeFiring(context, monitor, trigger.triggeredAt, sessionId, undefined, outcome),
   };
+}
+
+/**
+ * Closes out a monitor run that never started again after a restart: an unreported firing is reported as failed;
+ * an interrupted wake-up keeps its re-check chain. Never throws.
+ */
+export async function settleMonitorRun(context: Context, sessionId: string, error: string): Promise<void> {
+  try {
+    const { db } = context;
+    const trigger = await db.select({ monitorId: monitorTriggers.monitorId, triggeredAt: monitorTriggers.triggeredAt, reported: monitorTriggers.reported })
+      .from(monitorTriggers).where(eq(monitorTriggers.sessionId, sessionId)).get();
+    if (!trigger) return;
+    if (trigger.reported === null) {
+      const monitor = await db.select().from(monitors).where(eq(monitors.id, trigger.monitorId)).get();
+      if (monitor) await completeFiring(context, monitor, trigger.triggeredAt, sessionId, undefined, { error });
+      return;
+    }
+    const row = await db.select({ messages: chatSessions.messages }).from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
+    if (row && isWakeupTurn(decodeMessages(row.messages))) await wakeupFailed(context, sessionId);
+  } catch (err) {
+    console.error("[monitor] settling an interrupted run failed:", err instanceof Error ? err.message : err);
+  }
 }
 
 async function setStatus(context: Context, monitorId: string, fields: Partial<Pick<Monitor, "lastStatus" | "lastError" | "lastCheckedAt">>): Promise<void> {
@@ -199,7 +231,21 @@ async function latestSessionRunning(context: Context, monitorId: string): Promis
   return !!latest?.sessionId && context.activeStreams.has(latest.sessionId);
 }
 
-async function checkMonitor(context: Context, monitor: Monitor, window: { start: number; end: number }): Promise<void> {
+/**
+ * True when an earlier firing already covers this one. With issue data: every open issue is tracked (on either device)
+ * or acked, and none is new. Without it: the other device fired this monitor within the last period and started a session.
+ */
+async function handledElsewhere(db: Db, monitor: Monitor, window: { end: number }, found: FoundIssues | null): Promise<boolean> {
+  if (found) return !("error" in found) && found.tracked > 0 && found.open.length === 0 && found.closed.length === 0;
+  return !!await db.select({ id: monitorTriggers.id }).from(monitorTriggers).where(and(
+    eq(monitorTriggers.monitorId, monitor.id),
+    isNotNull(monitorTriggers.sessionId),
+    ne(monitorTriggers.deviceId, await localDeviceId(db)),
+    gte(monitorTriggers.triggeredAt, window.end - monitor.frequencySeconds),
+  )).get();
+}
+
+async function checkMonitor(context: Context, monitor: Monitor, window: { start: number; end: number }, start: typeof startAgentSession): Promise<void> {
   await context.providers.whenLoaded();
   await context.providers.reconnectDisconnected();
   const provider = context.providers.getProvider(monitor.provider);
@@ -249,17 +295,13 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
   const classified = alerting
     ? await classifyGroups(context.db, monitor.id, groups, now)
     : groups.map((g) => ({ ...g, sessionId: null, repeat: false }));
-  const sessionId = alerting ? crypto.randomUUID() : null;
-  const triggerId = crypto.randomUUID();
-  const past = alerting ? await pastSessions(context.db, monitor.id, classified.map((g) => g.key)) : [];
   const onIncidents = incidentQuery(monitor.query) !== null;
   const found: FoundIssues | null = alerting && await triageEnabled(context.db) && onIncidents ? await findIssues(context, monitor, window) : null;
-  const openIssues = found && !("error" in found) ? found.open : [];
-  const checkClosed = alerting && onIncidents && openIssues.length === 0;
-  const slack = alerting && await readSlackConfig(context.db) !== null;
-  const message = alerting
-    ? buildMessage(monitor, value, window, classified, past, checkClosed ? closedCheckPrompt(found, slack) : issuesPrompt(openIssues, await closeCounts(context.db, monitor.id, sessionId!, openIssues.map((i) => ({ issueId: i.issueId, conditionName: conditionOf(i) }))), slack), checkClosed, slack)
-    : "";
+  // An earlier firing (this device, the other device or a person) already handled it: it is recorded, but no session starts.
+  const handled = alerting && await handledElsewhere(context.db, monitor, window, found);
+  const sessionId = alerting && !handled ? crypto.randomUUID() : null;
+  const triggerId = crypto.randomUUID();
+  const past = sessionId ? await pastSessions(context.db, monitor.id, classified.map((g) => g.key)) : [];
   try {
     // Insert first: the monitor_id FK fails if the monitor was deleted mid-check.
     await context.db.insert(monitorTriggers).values({
@@ -269,31 +311,39 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
       value,
       windowStart: window.start,
       windowEnd: window.end,
-      status: alerting ? "investigating" : "muted",
+      status: sessionId ? "investigating" : "muted",
       groups: JSON.stringify(classified.map((g) => (g.repeat ? g : { ...g, sessionId }))),
       sessionId,
+      deviceId: await localDeviceId(context.db),
     }).run();
   } catch (err) {
     console.warn(`[monitor] "${monitor.name}" trigger not recorded (monitor deleted?):`, err instanceof Error ? err.message : err);
     return;
   }
 
-  if (sessionId && found && !("error" in found)) await recordIssues(context.db, { monitorId: monitor.id, triggerId, sessionId }, found);
   if (sessionId) {
-    const started = await startAgentSession(context, {
+    // A concurrent firing of another monitor may have recorded an issue first; this session gets only its own.
+    const owned = found && !("error" in found) ? await recordIssues(context.db, { monitorId: monitor.id, triggerId, sessionId }, found) : new Set<string>();
+    const openIssues = found && !("error" in found) ? found.open.filter((i) => owned.has(i.issueId)) : [];
+    const issueIds = openIssues.map((i) => i.issueId);
+    const checkClosed = onIncidents && openIssues.length === 0;
+    const slack = await readSlackConfig(context.db) !== null;
+    const message = buildMessage(monitor, value, window, classified, past, checkClosed ? closedCheckPrompt(found, slack) : issuesPrompt(openIssues, await closeCounts(context.db, monitor.id, sessionId, openIssues.map((i) => ({ issueId: i.issueId, conditionName: conditionOf(i) })))), checkClosed, slack);
+    const started = await start(context, {
       sessionId,
       kind: SESSION_KIND.MONITOR,
       title: sessionTitle(monitor.name, classified),
       message,
       tools: {
         read_past_session: readPastSessionTool(() => past),
-        ...(slack ? { report_alert_summary: reportAlertSummaryTool() } : {}),
-        ...(openIssues.length > 0 ? { report_issue_status: reportIssueStatusTool(context.db, openIssues.map((i) => i.issueId)), ...monitorIssueTools(context, openIssues.map((i) => i.issueId)) } : {}),
+        report_alert_summary: reportAlertSummaryTool({ slack }),
+        ...(openIssues.length > 0 ? { report_issue_status: reportIssueStatusTool(context.db, issueIds, sessionId), ...monitorIssueTools(context, issueIds, sessionId) } : {}),
         ...(checkClosed ? { dismiss_alert: dismissAlertTool() } : {}),
       },
       onComplete: (outcome) => void completeFiring(context, monitor, now, sessionId, found, outcome),
     });
     if ("error" in started) {
+      await context.db.delete(alertIssues).where(eq(alertIssues.sessionId, sessionId)).run();
       await context.db.delete(monitorTriggers).where(eq(monitorTriggers.id, triggerId)).run();
       await context.db.delete(chatSessions).where(eq(chatSessions.id, sessionId)).run();
       sessionChanged(sessionId);
@@ -302,11 +352,11 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
     }
   }
 
-  console.log(`[monitor] "${monitor.name}" triggered (value ${value}${sessionId ? `, session ${sessionId}` : ", alerts off"})`);
+  console.log(`[monitor] "${monitor.name}" triggered (value ${value}${sessionId ? `, session ${sessionId}` : handled ? ", already handled" : ", alerts off"})`);
   await succeed(context, monitor.id, "triggered", window.end);
 }
 
-export async function runDueMonitors(context: Context): Promise<void> {
+export async function runDueMonitors(context: Context, start = startAgentSession): Promise<void> {
   const enabled = await context.db.select().from(monitors).where(eq(monitors.enabled, 1)).all();
   const now = unixNow();
   const queue = [...enabled];
@@ -314,7 +364,7 @@ export async function runDueMonitors(context: Context): Promise<void> {
     const window = nextWindow(monitor.lastCheckedAt, monitor.frequencySeconds, now, ingestLagSeconds(monitor.query));
     if (!window || isFailedWindow(failedWindowEnds, monitor.id, window.end)) return;
     try {
-      await checkMonitor(context, monitor, window);
+      await checkMonitor(context, monitor, window, start);
     } catch (err) {
       console.error(`[monitor] "${monitor.name}" check failed:`, err);
       await fail(context, monitor.id, window.end, err instanceof Error ? err.message : String(err));
@@ -328,35 +378,40 @@ export async function runDueMonitors(context: Context): Promise<void> {
 }
 
 /**
- * Deletes firings older than the retention time that no session or issue points to. Session, run and memory rows stay:
- * the session pages show them. Sync delete markers stay too: this computer keeps no record of what each phone received.
+ * Deletes data older than the retention time: finished monitor sessions (their run and memory rows go with them), firings no session or
+ * issue points to, and sync delete markers. Chats the user started are never deleted. A phone that has not synced
+ * for longer than the retention time can bring back a row deleted here.
  */
 export async function pruneOldData(db: Db, now = unixNow()): Promise<void> {
   const cutoff = now - CONFIG.dataRetentionSeconds;
+  await db.delete(chatSessions).where(and(
+    eq(chatSessions.kind, SESSION_KIND.MONITOR),
+    eq(chatSessions.status, "done"),
+    lt(chatSessions.updatedAt, cutoff),
+    notInArray(chatSessions.id, db.select({ id: alertIssues.sessionId }).from(alertIssues)),
+  )).run();
   await db.delete(monitorTriggers).where(and(
     lt(monitorTriggers.triggeredAt, cutoff),
     or(isNull(monitorTriggers.sessionId), notInArray(monitorTriggers.sessionId, db.select({ id: chatSessions.id }).from(chatSessions))),
     notInArray(monitorTriggers.id, db.select({ id: alertIssues.triggerId }).from(alertIssues)),
   )).run();
-
+  await db.delete(syncRows).where(and(eq(syncRows.deleted, 1), lt(syncRows.localAt, cutoff * 1000))).run();
 }
 
-let lastPrune = 0;
-
-async function pruneWhenDue(db: Db): Promise<void> {
-  if (Date.now() - lastPrune < CONFIG.retentionSweepIntervalMs) return;
-  lastPrune = Date.now();
-  try {
-    await pruneOldData(db);
-  } catch (err) {
-    console.error("[retention] Pruning failed:", err);
-  }
+/** True when a tick has nothing to do: no enabled monitor, no pending timer and no issue waiting on a run or a re-check. */
+export async function isIdle(db: Db): Promise<boolean> {
+  const row = await db.get<unknown[] | { busy: number }>(sql`SELECT
+    EXISTS (SELECT 1 FROM monitors WHERE enabled = 1)
+    OR EXISTS (SELECT 1 FROM session_timers WHERE fire_at IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM alert_issues WHERE state IN ('pending', 'watching')) AS busy`);
+  return !(Array.isArray(row) ? row[0] : row?.busy);
 }
 
 export class MonitorScheduler {
   private interval: ReturnType<typeof setInterval> | null = null;
   private tickPromise: Promise<void> | null = null;
   private started = false;
+  private lastPrune = 0;
 
   constructor(private context: Context) {}
 
@@ -372,12 +427,26 @@ export class MonitorScheduler {
 
   private tick(): void {
     if (this.tickPromise) return;
-    this.tickPromise = runDueMonitors(this.context)
-      .then(() => checkWatches(this.context))
-      .then(() => fireDueTimers(this.context))
-      .then(() => pruneWhenDue(this.context.db))
+    this.tickPromise = isIdle(this.context.db)
+      .then(async (idle) => {
+        if (idle) return;
+        await runDueMonitors(this.context);
+        await checkWatches(this.context);
+        await fireDueTimers(this.context);
+      })
+      .then(() => this.pruneWhenDue())
       .catch((err) => console.error("MonitorScheduler tick error:", err))
       .finally(() => { this.tickPromise = null; });
+  }
+
+  private async pruneWhenDue(): Promise<void> {
+    if (Date.now() - this.lastPrune < CONFIG.retentionSweepIntervalMs) return;
+    this.lastPrune = Date.now();
+    try {
+      await pruneOldData(this.context.db);
+    } catch (err) {
+      console.error("[retention] Pruning failed:", err);
+    }
   }
 
   async stop(): Promise<void> {

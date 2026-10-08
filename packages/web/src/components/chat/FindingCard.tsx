@@ -28,8 +28,38 @@ function Section({ label, compact, children }: { label: string; compact: boolean
   );
 }
 
+const LIST_ITEM = /^\s*(?:([-*•])|\d+[.)])\s+(.*)$/;
+
+type Block = { kind: "p" | "ul" | "ol"; lines: string[] };
+
+// Paragraphs and "- " or "1. " lists; everything inside a line is inline text only.
+function blocks(text: string): Block[] {
+  const out: Block[] = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) { out.push({ kind: "p", lines: [] }); continue; }
+    const m = line.match(LIST_ITEM);
+    const kind = m ? (m[1] ? "ul" : "ol") : "p";
+    const last = out.at(-1);
+    if (last?.kind === kind && (kind !== "p" || last.lines.length)) last.lines.push(m ? m[2] : line.trim());
+    else out.push({ kind, lines: [m ? m[2] : line.trim()] });
+  }
+  return out.filter((b) => b.lines.length);
+}
+
 function Body({ text, compact }: { text: string; compact: boolean }) {
-  return <p className={cn("text-[15px]/[1.6] text-ink-2 [overflow-wrap:anywhere]", compact && "text-sm/[1.55]")}><Inline text={text} /></p>;
+  return (
+    <div className={cn("space-y-2 text-[15px]/[1.6] text-ink-2 [overflow-wrap:anywhere]", compact && "text-sm/[1.55]")}>
+      {blocks(text).map((b, i) => {
+        if (b.kind === "p") return <p key={i}><Inline text={b.lines.join(" ")} /></p>;
+        const List = b.kind;
+        return (
+          <List key={i} className={cn("ml-5 space-y-1", b.kind === "ul" ? "list-disc" : "list-decimal")}>
+            {b.lines.map((l, j) => <li key={j} className="pl-1"><Inline text={l} /></li>)}
+          </List>
+        );
+      })}
+    </div>
+  );
 }
 
 function Checks({ items, verified, compact }: { items: { fact: string; toolCallId?: string; title?: string }[]; verified: boolean; compact: boolean }) {

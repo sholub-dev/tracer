@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { tool, generateText, isStepCount } from "ai";
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import type { Db } from "../../db/driver.js";
 import { toolMemories } from "../../db/schema.js";
 import { CONFIG } from "../../config.js";
@@ -26,29 +26,40 @@ Only after reviewing all memories, perform any needed updates or deletes.
 ## Verdicts
 - **keep** — Memory captures a real correction from a failure. This is the default — most memories should be kept.
 - **update** — Memory is useful but could be clearer or should be merged with another. Call update_memory after.
-- **delete** — ONLY for: exact duplicates of another kept memory, OR memories that teach genuinely wrong/harmful practices that contradict domain knowledge anti-patterns. Call delete_memory after.
+- **delete** — ONLY for: duplicates of another kept memory, notes contradicted by a newer note about the same field or event, OR memories that teach genuinely wrong/harmful practices that contradict domain knowledge anti-patterns. Call delete_memory after.
 
-## What to NEVER delete
-- Field name corrections ("Don't use X, use Y") — these reflect the user's actual data schema
-- Event type discoveries — which event types contain which data in this environment
-- Syntax corrections from real query failures
-- Any "Don't X, use Y instead" pattern — this IS a failure correction by definition
+## When to delete a correction
+- A newer note about the same field or event contradicts it: delete the older one, keep the newer.
+- It duplicates another note: keep the better one.
+- Otherwise keep field name corrections, event type discoveries and syntax corrections from real failures.
 
 ## Guidelines
-- **Default to KEEP.** Only delete when you are 100% certain the memory is harmful or an exact duplicate.
+- **Default to KEEP.** Only delete for a reason listed above.
 - Merge duplicates: UPDATE the better one, DELETE the other.
 - Rewrite vague notes to be specific (max 15 words). Add no fact the original note lacks.
 - Delete memories that teach syntax invalid for THIS provider's query language — judge against the provider domain knowledge in the prompt, never against another provider's dialect (e.g. GROUP BY is invalid NRQL but valid HogQL).`;
 
-export async function runMemoryOptimizer(
-  db: Db,
-  toolName: string,
-  sessionId?: string,
-): Promise<{ success: boolean; error?: string; stats: { kept: number; updated: number; deleted: number } }> {
+const running = new Set<string>();
+
+type OptimizerResult = { success: boolean; error?: string; stats: { kept: number; updated: number; deleted: number } };
+
+/** One run per data source at a time: the button and the background pass share this guard. */
+export async function runMemoryOptimizer(db: Db, toolName: string, sessionId?: string): Promise<OptimizerResult> {
+  if (running.has(toolName)) return { success: false, error: "The optimizer is already running for this source.", stats: { kept: 0, updated: 0, deleted: 0 } };
+  running.add(toolName);
+  try {
+    return await optimize(db, toolName, sessionId);
+  } finally {
+    running.delete(toolName);
+  }
+}
+
+async function optimize(db: Db, toolName: string, sessionId?: string): Promise<OptimizerResult> {
   const memories = await db
     .select()
     .from(toolMemories)
     .where(eq(toolMemories.toolName, toolName))
+    .orderBy(asc(toolMemories.createdAt), asc(toolMemories.id))
     .all();
 
   const emptyStats = { kept: 0, updated: 0, deleted: 0 };
@@ -92,7 +103,7 @@ export async function runMemoryOptimizer(
       onSuccess: () => { stats.updated++; },
     }),
     delete_memory: createDeleteMemoryTool(memoryExecute, {
-      description: "Delete a memory by ID. Use after reviewing with verdict 'delete'. Only for clear duplicates.",
+      description: "Delete a memory by ID. Use after reviewing with verdict 'delete'. Only for a delete reason in the instructions.",
       onSuccess: () => { stats.deleted++; },
     }),
   };
@@ -111,12 +122,12 @@ export async function runMemoryOptimizer(
 
   const prompt = `Review these ${memories.length} memories for provider "${toolName}".
 
-${domainSection}## Current Memories
+${domainSection}## Current Memories (oldest first)
 ${memoriesList}
 
 Step 1: Call review_memory for EVERY memory with your verdict and reasoning. You may batch these calls in one step.
 Step 2: For memories marked "update" — call update_memory with improved text. Do this in a later step than all review_memory calls.
-Step 3: For memories marked "delete" — call delete_memory (only clear duplicates or verbatim domain knowledge restating). Do this in a later step than all review_memory calls.
+Step 3: For memories marked "delete" — call delete_memory (only for a delete reason in the instructions). Do this in a later step than all review_memory calls.
 
 Be conservative. When unsure, keep the memory.`;
 

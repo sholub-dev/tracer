@@ -454,5 +454,5 @@ test("an old-form reply to the phone gives the update message", async () => {
   const k = await crypto.subtle.importKey("raw", Buffer.from(key, "base64url"), "AES-GCM", false, ["encrypt"]);
   const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, k, new TextEncoder().encode("{}"));
   await assert.rejects(unseal(`${Buffer.from(iv).toString("base64url")}.${Buffer.from(data).toString("base64url")}`, key), (err: Error) => err.constructor.name === "OldFormError");
-  assert.equal(FORMAT, 3);
+  assert.equal(FORMAT, 4);
 });

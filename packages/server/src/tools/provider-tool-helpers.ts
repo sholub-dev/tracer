@@ -7,7 +7,7 @@ import type { AfterCompleteParams, ChatToolMemoryContext } from "@tracer-sh/shar
 import type { Db } from "../db/driver.js";
 import { memoryOperations } from "../db/schema.js";
 import { runMemoryAgent } from "../agents/utility/memory.js";
-import type { SubAgentQuery } from "../agents/chat/sub-agent.js";
+import { isEmptyQuery, isFailedQuery, type SubAgentQuery } from "../agents/chat/sub-agent.js";
 
 /**
  * Converts tool output into a text part for model context.
@@ -37,10 +37,8 @@ export function buildAfterComplete(opts: {
 
   return (params: AfterCompleteParams) => {
     if (!db || !memoryContext) return;
-    // Nothing was queried for this provider in this session (common in unified mode, where every
-    // connected provider's afterComplete fires but typically only some were used) — there are no
-    // failures or struggles to learn from, so skip the memory agent and its operation markers.
-    if (collectedQueries.length === 0) return;
+    // A clean turn (rows everywhere) teaches nothing about the query language; only an error or an empty result can.
+    if (!collectedQueries.some((q) => isFailedQuery(q) || isEmptyQuery(q))) return;
     const sessionId = params.sessionId;
 
     void (async () => {

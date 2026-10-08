@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { formatShortDate } from "../../lib/format";
+import { formatRelative, formatShortDate } from "../../lib/format";
 import { providerLabel } from "../../lib/providers";
 import { trpc } from "../../lib/trpc";
 import { ProviderDot } from "../common/ProviderDot";
@@ -19,7 +19,43 @@ import { ConfirmButton, Section } from "./parts";
 const PAGE = 10;
 const ALL = "all";
 
-type Memory = { id: number; toolName: string; note: string; reviewNote: string | null; createdAt: number };
+type Memory = {
+  id: number;
+  toolName: string;
+  note: string;
+  reviewNote: string | null;
+  source: string;
+  sourceSessionId: string | null;
+  sourceSessionTitle: string | null;
+  lastUsedAt: number | null;
+  createdAt: number;
+};
+
+function openSession(id: string) {
+  window.history.pushState(null, "", `/debug/${id}`);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
+function Provenance({ memory }: { memory: Memory }) {
+  if (memory.source === "user") return <>Added by you</>;
+  if (!memory.sourceSessionId) return <>Learned in an earlier session</>;
+  if (memory.sourceSessionTitle === null) return <>Learned in a session that is not on this device</>;
+  return (
+    <>
+      Learned in{" "}
+      <a
+        href={`/debug/${memory.sourceSessionId}`}
+        onClick={(e) => {
+          e.preventDefault();
+          openSession(memory.sourceSessionId!);
+        }}
+        className="text-primary underline underline-offset-2 hover:text-primary-hover"
+      >
+        {memory.sourceSessionTitle}
+      </a>
+    </>
+  );
+}
 
 export function MemorySettings() {
   const utils = trpc.useUtils();
@@ -207,6 +243,9 @@ function MemoryRow({ memory, label }: { memory: Memory; label: string }) {
         <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
           <ProviderDot provider={memory.toolName} />
           {label} · {formatShortDate(memory.createdAt)}
+        </p>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          <Provenance memory={memory} /> · {memory.lastUsedAt ? `Last used ${formatRelative(memory.lastUsedAt)}` : "Not used yet"}
         </p>
       </div>
       <div className="-my-0.5 flex shrink-0 gap-1 transition-opacity duration-150 group-focus-within/row:opacity-100 group-hover/row:opacity-100 [@media(hover:hover)]:opacity-0">

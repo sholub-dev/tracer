@@ -55,6 +55,10 @@ export const CONFIG = {
   /** Upper limit on one title or memory LLM call. */
   utilityCallTimeoutMs: 5 * 60_000,
 
+  /** Per data source, the most notes and characters of memory a chat prompt carries. */
+  memoryMaxNotes: 40,
+  memoryMaxChars: 4000,
+
   /** Upper limit on one conclusion review call; a slow review must not hold the run. */
   reviewTimeoutMs: 90_000,
 

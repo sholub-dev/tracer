@@ -62,6 +62,10 @@ function AnswerText({ text, isAnimating, compact }: { text: string; isAnimating:
   return <Markdown text={text} isAnimating={isAnimating} className={compact ? ANSWER_PROSE_COMPACT : ANSWER_PROSE} />;
 }
 
+// The AI SDK hands the first render of a reply its live message and later mutates its tool parts in place. A copy keeps
+// the state this render saw, so a memoized tool view does not mistake the mutated part for an unchanged one.
+const snapshot = (part: Part) => ({ ...part }) as ToolPart;
+
 interface Props {
   parts: UIMessage["parts"];
   isAnimating: boolean;
@@ -94,9 +98,10 @@ export const MessageParts = React.memo(
         }
         return;
       }
-      if (i >= workEnd) {
-        if (!(marker && part.type === "reasoning")) answer.push({ part, key: `${i}` });
-      }
+      // Reasoning is work, never part of the Analysis box.
+      if (i >= workEnd && part.type === "reasoning") {
+        if (!marker) work.push({ part, key: `${i}` });
+      } else if (i >= workEnd) answer.push({ part, key: `${i}` });
       else if (part.type === "file" || isMonitorTool(part.type)) aside.push({ part, key: `${i}` });
       else work.push({ part, key: `${i}` });
     });
@@ -107,8 +112,8 @@ export const MessageParts = React.memo(
     const renderWork = ({ part, key, text }: (typeof work)[number]) => {
       if (part.type === "text") return <li key={key}><Narration content={text ?? part.text} isAnimating={isAnimating} /></li>;
       if (part.type === "reasoning") return <li key={key}><ReasoningBlock content={part.text} isAnimating={isAnimating} /></li>;
-      if (isProviderTool(part.type)) return <ProviderStep key={key} part={part as ToolPart} progressStore={progressStore} isAnimating={isAnimating} />;
-      return <li key={key}><OtherToolPart part={part as ToolPart} isAnimating={isAnimating} /></li>;
+      if (isProviderTool(part.type)) return <ProviderStep key={key} part={snapshot(part)} progressStore={progressStore} isAnimating={isAnimating} />;
+      return <li key={key}><OtherToolPart part={snapshot(part)} isAnimating={isAnimating} /></li>;
     };
 
     const renderAnswer = ({ part, key, text }: (typeof answer)[number]) => {
@@ -118,11 +123,11 @@ export const MessageParts = React.memo(
       if (isProviderTool(part.type)) {
         return (
           <ol key={key}>
-            <ProviderStep part={part as ToolPart} progressStore={progressStore} isAnimating={isAnimating} />
+            <ProviderStep part={snapshot(part)} progressStore={progressStore} isAnimating={isAnimating} />
           </ol>
         );
       }
-      return <OtherToolPart key={key} part={part as ToolPart} isAnimating={isAnimating} />;
+      return <OtherToolPart key={key} part={snapshot(part)} isAnimating={isAnimating} />;
     };
 
     const finding = findingFromMessages([{ parts }]);
@@ -156,8 +161,8 @@ export const MessageParts = React.memo(
     return (
       <div className={cn("space-y-4", compact && "space-y-3")}>
         {investigation}
-        {aside.map(({ part, key }) => (part.type === "file" ? <FileAttachment key={key} part={part as FilePartLike} /> : <OtherToolPart key={key} part={part as ToolPart} isAnimating={isAnimating} />))}
-        {marker && answer.length > 0 ? (
+        {aside.map(({ part, key }) => (part.type === "file" ? <FileAttachment key={key} part={part as FilePartLike} /> : <OtherToolPart key={key} part={snapshot(part)} isAnimating={isAnimating} />))}
+        {card || (marker && answer.length > 0) ? (
           <section
             aria-label="Analysis"
             // On a phone the box runs edge to edge, so the cards inside are as wide as the chat input.

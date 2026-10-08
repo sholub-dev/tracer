@@ -27,6 +27,7 @@ export function useChatScroll(mountKey?: unknown) {
     const el = scrollRef.current;
     if (!el) return;
     shouldAutoScroll.current = false;
+    pinned.current = false;
     el.scrollTo({ top: 0, behavior: opts?.animation === "smooth" ? "smooth" : "instant" });
   }, []);
 
@@ -66,20 +67,32 @@ export function useChatScroll(mountKey?: unknown) {
     // Opening a session stops at the last reply's card; older cards, and cards that appear (or remount) while the
     // follow is paused, never stop it later.
     const cardsNow = () => [...el.querySelectorAll("[data-answer-card]")];
+    const lastCard = (row: Element | undefined) => (row ? [...row.querySelectorAll("[data-answer-card]")].at(-1) : undefined);
     const lastRow = [...el.querySelectorAll("[data-role]")].at(-1);
-    const openCard = lastRow?.getAttribute("data-role") === "assistant" ? [...lastRow.querySelectorAll("[data-answer-card]")].at(-1) : undefined;
+    const openCard = lastRow?.getAttribute("data-role") === "assistant" ? lastCard(lastRow) : undefined;
     const seen = new WeakSet<Element>(cardsNow().filter((c) => c !== openCard));
+    let pinnedCard: Element | undefined;
+    const anchor = (scroller: HTMLElement, card: Element) => {
+      const header = scroller.querySelector("[data-page-header]")?.getBoundingClientRect().height ?? 0;
+      scroller.scrollTo({ top: scroller.scrollTop + card.getBoundingClientRect().top - scroller.getBoundingClientRect().top - header - 16 });
+    };
     const ro = new ResizeObserver(() => {
       const fresh = cardsNow().filter((c) => !seen.has(c));
       fresh.forEach((c) => seen.add(c));
-      if (!shouldAutoScroll.current) return;
       const scroller = scrollRef.current;
+      if (pinned.current && scroller) {
+        // Content above the card keeps growing; the card may also remount or swap to the saved view.
+        if (!pinnedCard?.isConnected) pinnedCard = lastCard([...el.querySelectorAll('[data-role="assistant"]')].at(-1));
+        if (pinnedCard) anchor(scroller, pinnedCard);
+        return;
+      }
+      if (!shouldAutoScroll.current) return;
       const card = fresh.at(-1);
       if (!card || !scroller) return scrollToBottom();
-      const header = scroller.querySelector("[data-page-header]")?.getBoundingClientRect().height ?? 0;
       shouldAutoScroll.current = false;
       pinned.current = true;
-      scroller.scrollTo({ top: scroller.scrollTop + card.getBoundingClientRect().top - scroller.getBoundingClientRect().top - header - 16 });
+      pinnedCard = card;
+      anchor(scroller, card);
     });
     ro.observe(el);
     return () => ro.disconnect();

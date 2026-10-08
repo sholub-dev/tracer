@@ -14,7 +14,7 @@ function memoryDb(): Db {
   const sqlite = new Database(":memory:");
   sqlite.exec(`
     CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
-    CREATE TABLE tool_memories (id INTEGER PRIMARY KEY AUTOINCREMENT, tool_name TEXT NOT NULL, note TEXT NOT NULL, review_note TEXT, uid TEXT, created_at INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE tool_memories (id INTEGER PRIMARY KEY AUTOINCREMENT, tool_name TEXT NOT NULL, note TEXT NOT NULL, review_note TEXT, source_session_id TEXT, source TEXT NOT NULL DEFAULT 'agent', last_used_at INTEGER, uid TEXT, created_at INTEGER NOT NULL DEFAULT 0);
   `);
   return drizzle(sqlite, { schema }) as unknown as Db;
 }

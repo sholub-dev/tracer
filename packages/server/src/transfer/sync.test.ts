@@ -6,7 +6,7 @@ import { createNodeDb } from "../db/node-db.js";
 import { runSetup } from "../db/setup.js";
 import type { Db } from "../db/driver.js";
 import { appSettings, chatSessions, providerConfigs, memoryOperations, monitors, monitorTriggers, syncRows, toolMemories } from "../db/schema.js";
-import { exportSnapshot, importSnapshot } from "./snapshot.js";
+import { exportSnapshot, FORMAT, importSnapshot } from "./snapshot.js";
 import { exportSyncPayload, LOCAL_SETTING_KEYS, mergeSyncPayload } from "./sync.js";
 
 async function freshDb() {
@@ -312,4 +312,13 @@ test("incoming rows with unknown columns or unsafe integration settings are reje
   const payload = clone(await exportSyncPayload(a.db));
   payload.tables.chat_sessions[0].injected = 1;
   await assert.rejects(mergeSyncPayload(b.db, payload), /unknown column/);
+});
+
+test("a payload of another format gives the update message in both directions", async () => {
+  const { db } = await freshDb();
+  const payload = await exportSyncPayload(db);
+  assert.equal(payload.format, FORMAT);
+  for (const format of [FORMAT - 1, FORMAT + 1]) {
+    await assert.rejects(mergeSyncPayload(db, { ...payload, format }), /Update both apps/);
+  }
 });

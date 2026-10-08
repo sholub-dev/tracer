@@ -7,7 +7,7 @@ import type {
 } from "@tracer-sh/shared";
 import { McpProvider } from "../../mcp/mcp-provider.js";
 import type { McpServerDefinition } from "../../mcp/definitions.js";
-import { createGcpDirectTools, GCP_DIRECT_MODE_MAX_STEPS, buildGcpUnifiedFragment } from "./tools.js";
+import { createGcpDirectTools, buildGcpUnifiedFragment } from "./tools.js";
 import { getGcpAuth, clearGcpAuthCache } from "./gcp-auth.js";
 
 export class GcpProvider extends McpProvider {
@@ -41,7 +41,6 @@ export class GcpProvider extends McpProvider {
     const direct = createGcpDirectTools(
       this,
       options.memoryContext,
-      options.writer,
       options.db,
       this.config.projectId,
     );
@@ -51,7 +50,6 @@ export class GcpProvider extends McpProvider {
     const hasTools = Object.keys(direct.tools).length > 0;
     return {
       tools: direct.tools,
-      maxSteps: GCP_DIRECT_MODE_MAX_STEPS,
       afterComplete: direct.afterComplete,
       ...(options.mode === "unified"
         ? (hasTools ? { promptFragments: [buildGcpUnifiedFragment(this.config.projectId)] } : {})

@@ -2,7 +2,7 @@ import { eq, getTableColumns, inArray } from "drizzle-orm";
 import { runInTransaction, type Db } from "../db/driver.js";
 import * as schema from "../db/schema.js";
 import { LOCAL_SETTING_KEYS, SYNC_KEYS } from "../db/setup.js";
-import { FORMAT, readSyncRows, readTable, TABLES, type SyncRow } from "./snapshot.js";
+import { CHAT_MODEL_KEY, checkRows, FORMAT, readSyncRows, readTable, SESSION_RUN_STATE, TABLES, usesDesktopOnlyProvider, type SyncRow } from "./snapshot.js";
 
 export { LOCAL_SETTING_KEYS, SYNC_KEYS };
 
@@ -29,7 +29,8 @@ const PARENTS: Record<string, [string, string][]> = {
 
 // Each device numbers these itself, so the remote id is never copied.
 const LOCAL_IDS = new Set(["provider_configs", "tool_memories", "memory_operations"]);
-const MONITOR_RUNTIME = ["enabled", "lastCheckedAt", "lastStatus", "lastError"];
+const MONITOR_RUNTIME = ["lastCheckedAt", "lastStatus", "lastError"];
+const SESSION_RUN_COLUMNS = Object.keys(SESSION_RUN_STATE);
 
 /** The property name and column of a table's sync key. */
 function keyOf(name: string): { prop: string; column: any } {
@@ -87,7 +88,10 @@ export async function mergeSyncPayload(db: Db, remote: SyncPayload): Promise<{ a
   if (remote.format !== FORMAT) throw new Error("The data comes from a different Tracer version. Update both apps to the same version.");
   const applied: Record<string, number> = {};
   const deleted: Record<string, number> = {};
-  for (const [name] of SYNCED) applied[name] = deleted[name] = 0;
+  for (const [name, table] of SYNCED) {
+    applied[name] = deleted[name] = 0;
+    checkRows(name, table, remote.tables[name] ?? []);
+  }
 
   return runInTransaction(db, async (tx) => {
     const logged = new Map((await readSyncRows(tx)).map((r) => [`${r.tbl}\0${r.row_key}`, r.changed_at]));
@@ -133,6 +137,7 @@ export async function mergeSyncPayload(db: Db, remote: SyncPayload): Promise<{ a
       for (const entry of (newer.get(name) ?? []).filter((e) => !e.deleted)) {
         const row = incoming.get(entry.row_key);
         if (!row) continue;
+        if (name === "app_settings" && row.key === CHAT_MODEL_KEY && usesDesktopOnlyProvider(row.value)) continue;
         let orphan = false;
         for (const [fk, parent] of PARENTS[name] ?? []) {
           if (!(await hasParent(parent, row[fk]))) orphan = true;
@@ -146,10 +151,12 @@ export async function mergeSyncPayload(db: Db, remote: SyncPayload): Promise<{ a
           values = { ...values, memoryId: local?.id ?? null };
         }
         let insert = values;
-        if (name === "monitors") {
-          // A monitor new to this device starts paused; an existing one keeps its own run state.
-          values = omit(values, MONITOR_RUNTIME);
-          insert = { ...values, enabled: 0 };
+        // The toggles sync; the check state stays on its device.
+        if (name === "monitors") values = insert = omit(values, MONITOR_RUNTIME);
+        if (name === "chat_sessions") {
+          // A new session arrives idle; an existing one keeps the run state of this device.
+          insert = { ...values, ...SESSION_RUN_STATE };
+          values = omit(values, SESSION_RUN_COLUMNS);
         }
         await tx.insert(table).values(insert as never).onConflictDoUpdate({ target: column, set: omit(values, [prop]) as never }).run();
         await log(entry);

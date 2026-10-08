@@ -20,3 +20,20 @@ test("a successful response passes through", async () => {
   const res = new Response("ok");
   assert.equal(await withRetryableFailures((async () => res) as typeof fetch)("http://x"), res);
 });
+
+test("an Anthropic thinking budget below 1024 is raised to 1024; zero turns thinking off", async () => {
+  const { createNodeDb } = await import("../db/node-db.js");
+  const { runSetup } = await import("../db/setup.js");
+  const { writeAppSetting } = await import("../db/config-reader.js");
+  const { SETTINGS_KEYS } = await import("../config.js");
+  const { db, setupDriver } = createNodeDb(new (await import("better-sqlite3-multiple-ciphers")).default(":memory:"));
+  await runSetup(setupDriver);
+  await db.insert((await import("../db/schema.js")).providerConfigs).values({ type: "anthropic", config: JSON.stringify({ apiKey: "k" }) }).run();
+  await writeAppSetting(db, SETTINGS_KEYS.chatModel, { provider: "anthropic", modelId: "claude-sonnet-4-5" });
+  const { resolveModel } = await import("./resolve.js");
+  await writeAppSetting(db, SETTINGS_KEYS.thinkingBudgetAnthropic, 500);
+  const low = await resolveModel(db);
+  assert.equal((low as any).providerOptions.anthropic.thinking.budgetTokens, 1024);
+  await writeAppSetting(db, SETTINGS_KEYS.thinkingBudgetAnthropic, 0);
+  assert.equal((await resolveModel(db) as any).providerOptions, undefined);
+});

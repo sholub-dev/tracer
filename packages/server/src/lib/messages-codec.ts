@@ -15,7 +15,8 @@ function isCappable(rows: unknown[]): boolean {
   return !("beginTimeSeconds" in first) && !("comparison" in first);
 }
 
-function capQuery<T>(query: T): T {
+/** Caps one query result the way a saved chat does. */
+export function capQuery<T>(query: T): T {
   if (!isRecord(query) || !Array.isArray(query.results) || query.results.length <= MAX_SAVED_ROWS || !isCappable(query.results)) return query;
   const totalRows = typeof query.totalRows === "number" ? query.totalRows : query.results.length;
   return { ...query, results: query.results.slice(0, MAX_SAVED_ROWS), totalRows };

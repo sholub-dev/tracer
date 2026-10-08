@@ -2,13 +2,13 @@ import { useState, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { readUIMessageStream, type UIMessage, type UIMessageChunk } from "ai";
 import { ProgressStore } from "../../lib/progress-store";
 import { handleProgressData, stopChat, useCompactedMessages } from "../../lib/chat-utils";
-import { useChatScroll, useEscapeToStop } from "../../lib/hooks";
+import { useChatScroll } from "../../lib/hooks";
 import { WEB_CONFIG } from "../../lib/config";
 import { readEventStream } from "../../lib/sse";
 import { serverFetch } from "../../lib/server-fetch";
 import { useOnResume } from "../../lib/resume";
 import { WorkingIndicator } from "./ChatIndicators";
-import { Composer } from "./Composer";
+import { Composer, RUN_PLACEHOLDER } from "./Composer";
 import { FollowUpTimerBar } from "./FollowUpTimerBar";
 import { MessageView } from "./MessageView";
 import { Transcript } from "./Transcript";
@@ -28,6 +28,8 @@ interface LiveStreamViewProps {
   sources?: ReactNode;
   cost?: ReactNode;
 }
+
+const toolCallIdOf = (part: UIMessage["parts"][number]) => (part as { toolCallId?: string }).toolCallId;
 
 /** Reconnects to an in-progress server stream over SSE and rebuilds the growing reply from replayed and live chunks. */
 export function LiveStreamView({ sessionId, initialMessages, onComplete, header, beforeMessages, collapseCount = 0, analysisOnlyIndex, sources, cost }: LiveStreamViewProps) {
@@ -62,7 +64,14 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
         if (!cancelled && isCurrent() && msg) {
           // The server saves each tool step, so the loaded messages can end with the reply this stream rebuilds.
           const loaded = initialMessagesRef.current;
-          setMessages([...(loaded.at(-1)?.role === "assistant" ? loaded.slice(0, -1) : loaded), msg]);
+          const prior = loaded.at(-1)?.role === "assistant" ? loaded.at(-1) : undefined;
+          // After a restart the replay holds only the steps the resumed run adds, so the saved steps stay in front of them.
+          const rebuilt = new Set(msg.parts.map(toolCallIdOf));
+          const continues = prior?.parts.some((p) => {
+            const id = toolCallIdOf(p);
+            return id !== undefined && !rebuilt.has(id);
+          });
+          setMessages([...(prior ? loaded.slice(0, -1) : loaded), continues && prior ? { ...msg, parts: [...prior.parts, ...msg.parts] } : msg]);
         }
       };
       try {
@@ -148,8 +157,6 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
     };
   }, [sessionId, progressStore]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEscapeToStop(true, () => void stopChat(sessionId));
-
   const lastIdx = messages.length - 1;
   const waiting = messages[lastIdx]?.role === "user";
   const { collapse, analysisOnlyMsg } = useCompactedMessages(messages, collapseCount, analysisOnlyIndex);
@@ -169,10 +176,11 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
               value=""
               onChange={() => {}}
               onSubmit={() => {}}
-              placeholder="Ask a follow-up"
+              placeholder={RUN_PLACEHOLDER}
               canSend={false}
               disabled
               streaming
+              escStops={false}
               onStop={() => void stopChat(sessionId)}
               sources={sources}
               cost={cost}

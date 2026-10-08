@@ -24,13 +24,14 @@ function ShrinkingBar({ fireAt, setAt }: { fireAt: number; setAt: number }) {
 export function FollowUpTimerBar({ sessionId, className }: { sessionId: string; className?: string }) {
   const { data: timer } = trpc.sessions.timer.useQuery({ id: sessionId });
   const [now, setNow] = useState(unixNow);
+  const left = timer ? Math.max(0, timer.fireAt - now) : 0;
+  const ticking = !!timer && left > 0;
   useEffect(() => {
-    if (!timer) return;
+    if (!ticking) return;
     const id = setInterval(() => setNow(unixNow()), 1000);
     return () => clearInterval(id);
-  }, [timer]);
+  }, [ticking]);
   if (!timer) return null;
-  const left = Math.max(0, timer.fireAt - now);
   return (
     <div role="timer" aria-label={`Follow-up at ${formatTime(timer.fireAt)}: ${timer.note}`} className={cn("flex items-center gap-3 pb-2.5 text-[13px]/[18px] text-ink-2", className)}>
       <Timer className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />

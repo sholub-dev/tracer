@@ -1,11 +1,16 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Db } from "../db/driver.js";
 import { toolMemories, memoryOperations } from "../db/schema.js";
 
-function enforceNoteLength(note: string): string {
-  const words = note.split(/\s+/);
-  if (words.length <= 20) return note;
-  return words.slice(0, 20).join(" ");
+const MAX_NOTE_WORDS = 40;
+
+/** Prompts ask for 15 words; the cap is a backstop that cuts at a sentence end, not mid-sentence. */
+export function enforceNoteLength(note: string): string {
+  const words = note.trim().split(/\s+/);
+  if (words.length <= MAX_NOTE_WORDS) return note.trim();
+  const head = words.slice(0, MAX_NOTE_WORDS).join(" ");
+  const end = Math.max(head.lastIndexOf(". "), head.lastIndexOf("; "));
+  return end > 0 ? head.slice(0, end + 1) : head;
 }
 
 export function makeMemoryExecute(db: Db, toolName: string, sessionId?: string) {
@@ -38,7 +43,9 @@ export function makeMemoryExecute(db: Db, toolName: string, sessionId?: string) 
       }
       if (operation === "DELETE") {
         try {
-          await db.delete(toolMemories).where(eq(toolMemories.id, id)).run();
+          const deleted = await db.delete(toolMemories).where(and(eq(toolMemories.id, id), eq(toolMemories.toolName, toolName)))
+            .returning({ id: toolMemories.id }).all();
+          if (deleted.length === 0) return { error: `No memory ${id} of this data source` };
           await logOp("delete", undefined, id);
           return { deleted: true, id };
         } catch (err) {
@@ -50,10 +57,12 @@ export function makeMemoryExecute(db: Db, toolName: string, sessionId?: string) 
       }
       try {
         const trimmed = enforceNoteLength(note);
-        await db.update(toolMemories)
-          .set({ note: trimmed, toolName })
-          .where(eq(toolMemories.id, id))
-          .run();
+        const updated = await db.update(toolMemories)
+          .set({ note: trimmed })
+          .where(and(eq(toolMemories.id, id), eq(toolMemories.toolName, toolName)))
+          .returning({ id: toolMemories.id })
+          .all();
+        if (updated.length === 0) return { error: `No memory ${id} of this data source` };
         await logOp("update", trimmed, id);
         return { updated: true, id };
       } catch (err) {

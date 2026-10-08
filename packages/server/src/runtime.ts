@@ -18,7 +18,8 @@ export async function startRuntime(
   await runSetup(setupDriver);
   await repairChats(db, setupDriver);
 
-  const interrupted = await settleInterruptedRuns(db);
+  const settled: string[] = [];
+  const interrupted = await settleInterruptedRuns(db, settled);
 
   const providers = new ProviderRegistry();
   registerDefaultProviders(providers, registerPlatformProviders);
@@ -30,7 +31,7 @@ export async function startRuntime(
     console.log("Providers initialized:", providers.getAllProviders().map((p) => p.name));
   }).catch((err) => {
     console.warn("Provider initialization error:", err);
-  }).then(() => resumeRuns(context, interrupted));
+  }).then(() => resumeRuns(context, interrupted, settled));
   const app = createApp(context);
 
   const scheduler = FEATURES.monitors ? new MonitorScheduler(context) : null;

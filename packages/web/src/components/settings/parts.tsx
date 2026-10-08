@@ -143,6 +143,8 @@ type ConnectionProps = {
   /** For sources with no fields: Connect saves straight away instead of opening the form. */
   onConnect?: () => Promise<SaveResult>;
   connected: boolean;
+  /** The server keeps the stored secret when it gets the masked value back, so other fields can change alone. */
+  keepsMaskedSecrets?: boolean;
   remove?: RemoveSpec;
   pending?: boolean;
   /** Extra controls inside the open panel (project pickers, auth hints). */
@@ -167,6 +169,7 @@ export function ConnectionRow({
   onSave,
   onConnect,
   connected,
+  keepsMaskedSecrets,
   remove,
   pending,
   extra,
@@ -207,6 +210,8 @@ export function ConnectionRow({
   const maskedKeys = fields.filter(
     (f) => f.required !== false && f.type === "password" && isMasked(values[f.key], existingConfig?.[f.key]),
   );
+  const edited = fields.some((f) => (values[f.key] ?? "") !== (existingConfig?.[f.key] ?? ""));
+  const blockedBySecret = maskedKeys.length > 0 && !(keepsMaskedSecrets && edited);
   const emptyRequired = fields.some((f) => f.required !== false && !values[f.key]);
   const busy = saving || !!pending;
   const showForm = fields.length > 0 && !!onSave;
@@ -269,7 +274,7 @@ export function ConnectionRow({
           {showForm && (
             <div className="grid gap-4 sm:grid-cols-2">
               {fields.map((f, i) => {
-                const masked = f.type === "password" && isMasked(values[f.key], existingConfig?.[f.key]);
+                const masked = blockedBySecret && f.type === "password" && isMasked(values[f.key], existingConfig?.[f.key]);
                 return (
                   <div key={f.key} className={cn("space-y-1.5", fields.length === 1 && "sm:col-span-2")}>
                     <Label htmlFor={`${id}-${f.key}`} className="text-[13px]/[18px]">
@@ -298,13 +303,13 @@ export function ConnectionRow({
             </div>
           )}
           {extra}
-          {showForm && maskedKeys.length > 0 && !saving && !result && (
+          {showForm && blockedBySecret && !saving && !result && (
             <p className="text-[13px]/[18px] text-warning">Re-enter highlighted fields to save</p>
           )}
           {inlineResult}
           <div className="flex flex-wrap items-center gap-2">
             {showForm && (
-              <Button type="submit" size="sm" disabled={busy || emptyRequired || maskedKeys.length > 0}>
+              <Button type="submit" size="sm" disabled={busy || emptyRequired || blockedBySecret}>
                 {saving && <Loader2 className="animate-spin" />}
                 {saving ? "Testing" : saveLabel}
               </Button>

@@ -54,4 +54,22 @@ describe("guardLocalRequests", () => {
     assert.equal(send("POST", "/api/v1/analyze", { ...json, origin: "http://localhost:3579" }).status, 200);
     assert.equal(send("POST", "/api/v1/analyze", { ...json, origin: "http://localhost:5173" }).status, 200);
   });
+
+  it("requires the bearer token on /api of an exposed server and leaves a loopback server alone", () => {
+    const via = (bind: string, headers: Record<string, string>, token: string | null = "s3cret") =>
+      (guardLocalRequests(ok, bind, [], token)(new Request("http://x/api/trpc/settings.get", { headers: { host: "192.168.1.5", ...headers } }), env("192.168.1.9")) as Response).status;
+    assert.equal(via("0.0.0.0", {}), 401);
+    assert.equal(via("0.0.0.0", { authorization: "Bearer wrong!" }), 401);
+    assert.equal(via("0.0.0.0", { authorization: "Bearer s3cret" }), 200);
+    assert.equal(via("127.0.0.1", { host: "localhost" }), 200);
+  });
+
+  it("lets a loopback peer skip the token on an exposed server", () => {
+    const from = (peer: string, headers: Record<string, string> = {}) =>
+      (guardLocalRequests(ok, "0.0.0.0", [], "s3cret")(new Request("http://x/api/trpc/settings.get", { headers: { host: "localhost", ...headers } }), env(peer)) as Response).status;
+    assert.equal(from("127.0.0.1"), 200);
+    assert.equal(from("::ffff:127.0.0.1"), 200);
+    assert.equal(from("192.168.1.9"), 401);
+    assert.equal(from("192.168.1.9", { authorization: "Bearer s3cret" }), 200);
+  });
 });

@@ -1,5 +1,6 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { Loader2, TriangleAlert } from "lucide-react";
+import { toast } from "sonner";
 
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
@@ -10,7 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 import { trpc } from "../../lib/trpc";
 import { IS_IOS } from "../../lib/platform";
-import { useAvailableModels, useConfiguredProviders, useGcpAuthStatus } from "../../lib/hooks";
+import { useAvailableModels, useConfiguredProviders, useGcpAuthStatus, useInvalidateProviders } from "../../lib/hooks";
 import { AVAILABLE_MODELS, effectivePrices, groupModelsByProvider, modelKey, llmProviderLabel } from "../../lib/models";
 import { FoldTrigger } from "../common/FoldTrigger";
 import { ConnectionRow, Group, Row, Section } from "./parts";
@@ -35,9 +36,14 @@ export function ModelsSettings() {
 
 function ModelRow() {
   const utils = trpc.useUtils();
+  const invalidateProviders = useInvalidateProviders();
   const { data: chatModel } = trpc.settings.getChatModel.useQuery();
   const save = trpc.settings.saveChatModel.useMutation({
-    onSuccess: () => utils.settings.getChatModel.invalidate(),
+    onSuccess: () => {
+      utils.settings.getChatModel.invalidate();
+      invalidateProviders();
+    },
+    onError: (e) => toast.error(e.message),
   });
   const { models, isLoading } = useAvailableModels();
 
@@ -52,7 +58,7 @@ function ModelRow() {
       htmlFor="chat-model"
       description={
         <>
-          Used for chat, data source agents and titles
+          Used for chat and titles
           {unavailable && (
             <span className="mt-1 flex items-start gap-1.5 text-warning">
               <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />

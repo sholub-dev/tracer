@@ -1,18 +1,18 @@
 import { streamText, convertToModelMessages, isStepCount, createUIMessageStream, toUIMessageStream, type UIMessage, type ToolSet } from "ai";
-import { eq, sql } from "drizzle-orm";
-import { CLIENT_TOOL_NAMES, DEFAULT_SESSION_TITLE, unixNow, splitAtAnalysis, mergeProgressPart, type AfterCompleteParams, type ProgressPart, type TokenUsage } from "@tracer-sh/shared";
+import { and, eq, sql } from "drizzle-orm";
+import { CLIENT_TOOL_NAMES, DEFAULT_SESSION_TITLE, unixNow, splitAtAnalysis, mergeProgressPart, findingFromMessages, findingMarkdown, type AfterCompleteParams, type ProgressPart, type TokenUsage } from "@tracer-sh/shared";
 import { chatSessions } from "../db/schema.js";
 import { sessionChanged } from "../lib/session-events.js";
 import { decodeMessages, encodeMessages } from "../lib/messages-codec.js";
-import { resolveModel, type ProviderOptions } from "../llm/resolve.js";
+import { resolveModel, utilityProviderOptions, type ProviderOptions } from "../llm/resolve.js";
 import { extractUsage, recordEachCall } from "../llm/usage.js";
 import { StreamBroadcaster } from "../lib/stream-broadcaster.js";
 import type { Context } from "../trpc/context.js";
 import type { ChatToolWriter as StreamWriter } from "@tracer-sh/shared";
 import { getCurrentDateBlock, getCurrentTimeText } from "../lib/current-context.js";
 import { stampSentTime, withPromptCaching, withSentTimes } from "../llm/prompt-cache.js";
-import { EVIDENCE_GROUNDING, PLAIN_LANGUAGE } from "../lib/shared-prompts.js";
-import { CONFIG } from "../config.js";
+import { BASE_PROMPT, buildNoProviderPrompt, EVIDENCE_GROUNDING, PLAIN_LANGUAGE } from "../lib/shared-prompts.js";
+import { CONFIG, DEFAULTS } from "../config.js";
 import { isTransientError } from "../lib/transient.js";
 import { createToolGate, WRITE_TOOLS } from "../tools/tool-gate.js";
 import { ANALYSIS_TOOL_NAME, createBeginAnalysisTool } from "../tools/analysis-tool.js";
@@ -105,6 +105,7 @@ export interface ChatAgentConfig {
     systemPrompt?: string;
     promptFragments?: string[];
     maxSteps?: number;
+    providerTypes?: string[];
     afterComplete?: (params: AfterCompleteParams) => void;
   }>;
   sessionTitle: (messages: UIMessage[]) => string;
@@ -125,11 +126,19 @@ export interface ChatAgentConfig {
 async function finalizeSession(sessionId: string, context: Context, broadcaster: StreamBroadcaster): Promise<void> {
   if (!context.activeStreams.has(sessionId)) return;
   try {
-    await context.db
-      .update(chatSessions)
-      .set({ status: "done", updatedAt: unixNow() })
-      .where(eq(chatSessions.id, sessionId))
-      .run();
+    // One retry: a row left "streaming" with no run shows as running forever.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await context.db
+          .update(chatSessions)
+          .set({ status: "done", updatedAt: unixNow() })
+          .where(eq(chatSessions.id, sessionId))
+          .run();
+        break;
+      } catch (err) {
+        if (attempt > 0) throw err;
+      }
+    }
   } catch (err) {
     console.warn(`[chat] Failed to mark ${sessionId} done:`, err);
   } finally {
@@ -138,6 +147,8 @@ async function finalizeSession(sessionId: string, context: Context, broadcaster:
     context.activeStreams.delete(sessionId);
   }
 }
+
+export const SESSION_BUSY = "Session is already processing a response";
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
@@ -180,8 +191,8 @@ function owesFinding(toolNames: string[]): boolean {
   return toolNames.some((name) => !NON_QUERY_TOOLS.has(name)) && !toolNames.includes(FINDING_TOOL);
 }
 
-/** A finished reply that still owes its finding card, and the follow-up work that waits for it. */
-type Owed = { messages: UIMessage[]; finish: () => void };
+/** A finished reply that still owes its finding card, and the follow-up work that waits for it. The repair pass collects fresh tools, so the first pass's `afterComplete` keeps the queries it gathered. */
+type Owed = { messages: UIMessage[]; finish: () => void; afterComplete?: (params: AfterCompleteParams) => void };
 type AttemptResult = { error?: string; transient?: boolean; checkpoint?: UIMessage[]; owed?: Owed };
 
 /** Resolves after `ms`, or at once when `signal` aborts. */
@@ -219,7 +230,7 @@ async function processLLMStream(
   compaction: { summary?: string | null; summaryUpTo?: number | null },
   final: boolean,
   /** The one extra pass that adds the finding card a finished turn still owes. */
-  repair = false,
+  repair?: Owed,
 ): Promise<AttemptResult> {
   // Sub-agent progress per tool call, so a stopped run keeps what its tools streamed.
   const progress = new Map<string, ProgressPart[]>();
@@ -242,7 +253,7 @@ async function processLLMStream(
   // The run's own model reviews the conclusion; swap the tool before gating so it stays a gated write.
   const tools = collected.tools && createToolGate()(
     ANALYSIS_TOOL_NAME in collected.tools
-      ? { ...collected.tools, [ANALYSIS_TOOL_NAME]: createBeginAnalysisTool((ledger, msgs, signal) => reviewConclusion(context.db, sessionId, model, modelId, ledger, msgs, signal)) }
+      ? { ...collected.tools, [ANALYSIS_TOOL_NAME]: createBeginAnalysisTool((ledger, msgs, signal) => reviewConclusion(context.db, sessionId, model, modelId, ledger, msgs, signal, utilityProviderOptions({ provider, modelId }))) }
       : collected.tools,
   );
 
@@ -292,18 +303,13 @@ async function processLLMStream(
   if (collected.systemPrompt) {
     systemPrompt = collected.systemPrompt;
   } else {
-    const basePrompt = `You are Tracer — an AI debugging assistant for engineers investigating incidents across their observability stack. Be direct, follow evidence, and surface uncertainty rather than guessing. Skip preamble and caveats; get to the answer.
-
-If a tool call fails, retry with a corrected approach. If you fail the same tool call twice, DO NOT retry again — stop and explain the issue to the user. Ask clarifying questions if needed. Never silently give up.
-
-When the user's question spans multiple providers, query each relevant provider and synthesize findings across the results.`;
     const fragments = collected.promptFragments ?? [];
     systemPrompt = fragments.length > 0
-      ? `${basePrompt}\n\n${EVIDENCE_GROUNDING}\n\n${PLAIN_LANGUAGE}\n\n${fragments.join("\n\n")}`
-      : `${basePrompt}\n\n${PLAIN_LANGUAGE}\n\nNo observability providers are currently configured. If the user asks about observability data, let them know they can connect providers in the Settings page.`;
+      ? `${BASE_PROMPT}\n\n${EVIDENCE_GROUNDING}\n\n${PLAIN_LANGUAGE}\n\n${fragments.join("\n\n")}`
+      : buildNoProviderPrompt();
   }
 
-  systemPrompt += "\n\n" + await getCurrentDateBlock(context.db);
+  systemPrompt += "\n\n" + await getCurrentDateBlock(context.db, collected.providerTypes);
 
   if (modelInput.some((m) => m.parts.some((p) => p.type === "file"))) {
     systemPrompt += "\n\n" + IMAGE_ANALYSIS_GUIDANCE;
@@ -317,7 +323,9 @@ When the user's question spans multiple providers, query each relevant provider 
   if (repair) modelMessages.push({ role: "user", content: `Call ${FINDING_TOOL} now with the answer to the question.` });
 
   const cached = withPromptCaching(provider, systemPrompt, providerOptions);
-  const maxSteps = collected.maxSteps ?? 15;
+  const maxSteps = collected.maxSteps ?? DEFAULTS.directModeMaxSteps;
+  // The repair pass only adds the card, so nothing follows it.
+  const stepLimit = repair ? 1 : maxSteps;
   const canReport = tools !== undefined && FINDING_TOOL in tools;
   // Anthropic extended thinking rejects a forced tool choice; activeTools alone still works.
   const mayForceTool = provider !== "anthropic" || !providerOptions?.anthropic?.thinking;
@@ -327,7 +335,7 @@ When the user's question spans multiple providers, query each relevant provider 
     instructions: cached.instructions,
     messages: modelMessages,
     tools: tools as Parameters<typeof streamText>[0]["tools"],
-    stopWhen: tools ? isStepCount(maxSteps) : undefined,
+    stopWhen: tools ? isStepCount(stepLimit) : undefined,
     prepareStep: canReport ? ({ stepNumber, steps }) => {
       if (repair && stepNumber === 0) {
         return { activeTools: [FINDING_TOOL], ...(mayForceTool ? { toolChoice: { type: "tool" as const, toolName: FINDING_TOOL } } : {}) };
@@ -402,7 +410,16 @@ When the user's question spans multiple providers, query each relevant provider 
               toSave = [...updatedMessages.slice(0, -1), { ...reply, metadata }];
             }
           }
-          if (toSave === messages) return;
+          if (toSave === messages) {
+            // A first message that failed still gets a title from its text.
+            await context.db
+              .update(chatSessions)
+              .set({ title: sessionTitle(messages) })
+              .where(and(eq(chatSessions.id, sessionId), eq(chatSessions.title, DEFAULT_SESSION_TITLE)))
+              .run();
+            sessionChanged(sessionId);
+            return;
+          }
 
           // A stopped or failed reply can end inside a tool call; saved, it would show as still running.
           const withProgress = toSave.map((msg) => msg.role !== "assistant" ? msg : {
@@ -425,6 +442,8 @@ When the user's question spans multiple providers, query each relevant provider 
           });
 
           const title = sessionTitle(enrichedMessages);
+          // A stopped or failed reply gets no repair pass. While one is owed the row stays "streaming"; finalizeSession writes "done".
+          const owesCard = !settled && !failed && !serverAbort.signal.aborted && canReport && !repair && owesFinding(turnToolNames(enrichedMessages));
           const now = unixNow();
           const packed = encodeMessages(enrichedMessages);
 
@@ -434,7 +453,7 @@ When the user's question spans multiple providers, query each relevant provider 
               id: sessionId,
               title,
               messages: packed,
-              status: "done",
+              status: owesCard ? "streaming" : "done",
               createdAt: now,
               updatedAt: now,
             })
@@ -443,15 +462,16 @@ When the user's question spans multiple providers, query each relevant provider 
               set: {
                 title: sql`CASE WHEN ${chatSessions.title} = ${DEFAULT_SESSION_TITLE} THEN ${title} ELSE ${chatSessions.title} END`,
                 messages: packed,
-                status: sql`CASE WHEN ${chatSessions.status} = 'idle' THEN 'idle' ELSE 'done' END`,
+                ...(owesCard ? {} : { status: sql`CASE WHEN ${chatSessions.status} = 'idle' THEN 'idle' ELSE 'done' END` }),
                 updatedAt: now,
               },
             })
             .run();
           sessionChanged(sessionId);
 
+          const afterComplete = repair?.afterComplete ?? collected.afterComplete;
           const finish = () => {
-            if (!collected.afterComplete) return;
+            if (!afterComplete) return;
             let lastUserText = "";
             let lastAssistantText = "";
             for (let i = enrichedMessages.length - 1; i >= 0; i--) {
@@ -464,13 +484,23 @@ When the user's question spans multiple providers, query each relevant provider 
               }
               if (lastUserText && lastAssistantText) break;
             }
-            collected.afterComplete({ lastUserMessage: lastUserText, lastAssistantText, sessionId });
+            // The card is the answer; the first text part is only a note before it.
+            const finding = findingFromMessages(enrichedMessages.slice(enrichedMessages.map((m) => m.role).lastIndexOf("user") + 1));
+            if (finding) lastAssistantText = findingMarkdown(finding);
+            afterComplete({ lastUserMessage: lastUserText, lastAssistantText, sessionId });
           };
           // A stopped reply is partial; follow-up work (e.g. a monitor's report) waits for a full run.
           if (!failed && !serverAbort.signal.aborted) {
             // The repair pass runs next and follow-up work waits for its reply; a save that outlived the wait below gets no repair pass.
-            if (canReport && !repair && !settled && owesFinding(turnToolNames(enrichedMessages))) owed = { messages: enrichedMessages, finish };
-            else finish();
+            if (owesCard && !settled) owed = { messages: enrichedMessages, finish, afterComplete: collected.afterComplete };
+            else {
+              // The wait gave up during the write above. Once finalizeSession has run, nothing else ends "streaming".
+              if (owesCard && !context.activeStreams.has(sessionId)) {
+                await context.db.update(chatSessions).set({ status: "done" }).where(eq(chatSessions.id, sessionId)).run();
+                sessionChanged(sessionId);
+              }
+              finish();
+            }
           }
         } catch (err) {
           console.warn(`[chat] Failed to save session ${sessionId}:`, err);
@@ -579,7 +609,7 @@ export async function runChatAgent({
 
   // Prevent concurrent streams on the same session
   if (context.activeStreams.has(sessionId)) {
-    return { error: "Session is already processing a response" };
+    return { error: SESSION_BUSY };
   }
 
   // Create server-owned abort controller + broadcaster
@@ -641,7 +671,7 @@ export async function runChatAgent({
         const repaired = await processLLMStream(
           sessionId, owed.messages, context, broadcaster, serverAbort,
           collectTools, sessionTitle, model, provider, modelId, providerOptions,
-          { summary, summaryUpTo }, false, true,
+          { summary, summaryUpTo }, false, owed,
         ).catch(attemptFailed(false));
         if (repaired.error !== undefined) {
           console.warn(`[chat] Finding pass for ${sessionId} failed:`, repaired.error);

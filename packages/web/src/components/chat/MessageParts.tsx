@@ -107,8 +107,8 @@ export const MessageParts = React.memo(
     const renderWork = ({ part, key, text }: (typeof work)[number]) => {
       if (part.type === "text") return <li key={key}><Narration content={text ?? part.text} isAnimating={isAnimating} /></li>;
       if (part.type === "reasoning") return <li key={key}><ReasoningBlock content={part.text} isAnimating={isAnimating} /></li>;
-      if (isProviderTool(part.type)) return <ProviderStep key={key} part={part as ToolPart} progressStore={progressStore} />;
-      return <li key={key}><OtherToolPart part={part as ToolPart} /></li>;
+      if (isProviderTool(part.type)) return <ProviderStep key={key} part={part as ToolPart} progressStore={progressStore} isAnimating={isAnimating} />;
+      return <li key={key}><OtherToolPart part={part as ToolPart} isAnimating={isAnimating} /></li>;
     };
 
     const renderAnswer = ({ part, key, text }: (typeof answer)[number]) => {
@@ -118,15 +118,20 @@ export const MessageParts = React.memo(
       if (isProviderTool(part.type)) {
         return (
           <ol key={key}>
-            <ProviderStep part={part as ToolPart} progressStore={progressStore} />
+            <ProviderStep part={part as ToolPart} progressStore={progressStore} isAnimating={isAnimating} />
           </ol>
         );
       }
-      return <OtherToolPart key={key} part={part as ToolPart} />;
+      return <OtherToolPart key={key} part={part as ToolPart} isAnimating={isAnimating} />;
     };
 
     const finding = findingFromMessages([{ parts }]);
-    const card = finding && <FindingCard key="finding" finding={finding} compact={compact} />;
+    const queries = steps.flatMap(({ part }) => {
+      const { input, toolCallId } = part as ToolPart;
+      const title = input?.title;
+      return typeof title === "string" && title.trim() && toolCallId ? [{ title: title.trim(), toolCallId }] : [];
+    });
+    const card = finding && <FindingCard key="finding" finding={finding} compact={compact} queries={queries} />;
 
     let investigation: React.ReactNode = null;
     if (steps.length > 0) {
@@ -151,7 +156,7 @@ export const MessageParts = React.memo(
     return (
       <div className={cn("space-y-4", compact && "space-y-3")}>
         {investigation}
-        {aside.map(({ part, key }) => (part.type === "file" ? <FileAttachment key={key} part={part as FilePartLike} /> : <OtherToolPart key={key} part={part as ToolPart} />))}
+        {aside.map(({ part, key }) => (part.type === "file" ? <FileAttachment key={key} part={part as FilePartLike} /> : <OtherToolPart key={key} part={part as ToolPart} isAnimating={isAnimating} />))}
         {marker && answer.length > 0 ? (
           <section
             aria-label="Analysis"

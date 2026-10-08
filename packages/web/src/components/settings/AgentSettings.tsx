@@ -42,12 +42,22 @@ function tzLabel(tz: string): string {
 
 const LIMITS = [
   { key: "directModeMaxSteps", label: "Steps per answer", description: "Most tool calls the agent makes for one answer", min: 1, max: 500 },
-  { key: "subAgentMaxSteps", label: "Steps per data source", description: "Most queries one data source agent runs per question", min: 1, max: 500 },
   { key: "thinkingBudgetGoogle", label: "Thinking budget, Google", description: "Tokens the model may spend reasoning before it answers", min: 0, max: 100000 },
   { key: "thinkingBudgetAnthropic", label: "Thinking budget, Anthropic", description: "Tokens the model may spend reasoning before it answers", min: 0, max: 100000 },
 ] as const;
 
-type Values = { timezone: string } & Record<(typeof LIMITS)[number]["key"], number>;
+type LimitKey = (typeof LIMITS)[number]["key"];
+// An emptied field stays "" until the user types a number, so it never submits as 0.
+type Values = { timezone: string } & Record<LimitKey, number | "">;
+
+const ANTHROPIC_MIN_BUDGET = 1024;
+
+const limitError = (l: (typeof LIMITS)[number], v: number | "") => {
+  if (v === "" || !Number.isInteger(v) || v < l.min || v > l.max) return `Enter a whole number from ${l.min} to ${l.max}`;
+  // The server rejects a smaller Anthropic budget; 0 turns thinking off.
+  if (l.key === "thinkingBudgetAnthropic" && v > 0 && v < ANTHROPIC_MIN_BUDGET) return `Enter 0 or at least ${ANTHROPIC_MIN_BUDGET}`;
+  return null;
+};
 
 export function AgentSettings() {
   const utils = trpc.useUtils();
@@ -68,6 +78,7 @@ export function AgentSettings() {
   }, [config]);
 
   const dirty = !!config && !!values && (Object.keys(values) as (keyof Values)[]).some((k) => values[k] !== config[k]);
+  const invalid = !!values && LIMITS.some((l) => limitError(l, values[l.key]));
   const set = <K extends keyof Values>(key: K, value: Values[K]) => {
     setValues((v) => v && { ...v, [key]: value });
     setJustSaved(false);
@@ -81,13 +92,13 @@ export function AgentSettings() {
         className="space-y-6"
         onSubmit={(e) => {
           e.preventDefault();
-          if (values && dirty) save.mutate(values);
+          if (values && dirty && !invalid) save.mutate(values as Parameters<typeof save.mutate>[0]);
         }}
       >
         <Group>
           <Row
             label="Time zone"
-            description="Used for times in answers and monitor schedules"
+            description="Used for dates in answers, query time zones, timers and times in Slack"
             htmlFor="timezone"
             control={
               values ? (
@@ -116,16 +127,20 @@ export function AgentSettings() {
               htmlFor={l.key}
               control={
                 values ? (
-                  <Input
-                    id={l.key}
-                    type="number"
-                    inputMode="numeric"
-                    min={l.min}
-                    max={l.max}
-                    value={values[l.key]}
-                    onChange={(e) => set(l.key, Number(e.target.value))}
-                    className="w-28 bg-card text-right tabular-nums"
-                  />
+                  <div className="flex flex-col items-end gap-1">
+                    <Input
+                      id={l.key}
+                      type="number"
+                      inputMode="numeric"
+                      min={l.min}
+                      max={l.max}
+                      value={values[l.key]}
+                      onChange={(e) => set(l.key, e.target.value === "" ? "" : Number(e.target.value))}
+                      aria-invalid={!!limitError(l, values[l.key]) || undefined}
+                      className="w-28 bg-card text-right tabular-nums"
+                    />
+                    {limitError(l, values[l.key]) && <p role="alert" className="text-xs text-destructive">{limitError(l, values[l.key])}</p>}
+                  </div>
                 ) : (
                   <Skeleton className="h-9 w-28" />
                 )
@@ -140,7 +155,7 @@ export function AgentSettings() {
               Saved
             </span>
           )}
-          <Button type="submit" disabled={!dirty || save.isPending}>
+          <Button type="submit" disabled={!dirty || invalid || save.isPending}>
             {save.isPending && <Loader2 className="animate-spin" />}
             {save.isPending ? "Saving" : "Save changes"}
           </Button>

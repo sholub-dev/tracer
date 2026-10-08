@@ -2,12 +2,13 @@ import { eq } from "drizzle-orm";
 import type { Db } from "../../db/driver.js";
 import { appSettings } from "../../db/schema.js";
 import { readAppSetting, writeAppSetting } from "../../db/config-reader.js";
-import type { JiraClientConfig } from "./jira.client.js";
+import { isJiraDomain, type JiraClientConfig } from "./jira.client.js";
 
 export const JIRA_CONFIG_KEY = "integration:jira";
 
-export function readJiraConfig(db: Db): Promise<JiraClientConfig | null> {
-  return readAppSetting<JiraClientConfig>(db, JIRA_CONFIG_KEY);
+export async function readJiraConfig(db: Db): Promise<JiraClientConfig | null> {
+  const config = await readAppSetting<JiraClientConfig>(db, JIRA_CONFIG_KEY);
+  return config && typeof config.domain === "string" && isJiraDomain(config.domain) ? config : null;
 }
 
 export async function writeJiraConfig(db: Db, config: JiraClientConfig): Promise<void> {

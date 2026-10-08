@@ -18,6 +18,17 @@ export async function hasPendingTimer(db: Db, sessionId: string): Promise<boolea
     .where(and(eq(sessionTimers.sessionId, sessionId), isNotNull(sessionTimers.fireAt))).get();
 }
 
+/** Sets the session's one follow-up timer, replacing a pending one. */
+export async function putTimer(db: Db, sessionId: string, minutes: number, note: string): Promise<number> {
+  const now = unixNow();
+  const fireAt = now + Math.round(minutes * 60);
+  const row = { fireAt, note: note.trim().slice(0, NOTE_MAX_CHARS), setAt: now };
+  await db.insert(sessionTimers).values({ sessionId, ...row })
+    .onConflictDoUpdate({ target: sessionTimers.sessionId, set: row }).run();
+  sessionChanged(sessionId);
+  return fireAt;
+}
+
 export function setTimerTool(db: Db, sessionId: string): Tool<TimerInput, TimerResult> {
   return tool({
     description: `Wake this chat later to follow up. Use it only when a follow-up is truly needed (e.g. an issue may recover, a deploy is rolling out). For a live incident wait ${CONFIG.timerFollowUpMinutes} minutes; checking too often beats waiting too long.`,
@@ -36,16 +47,11 @@ export function setTimerTool(db: Db, sessionId: string): Tool<TimerInput, TimerR
       }
       const session = await db.select({ createdAt: chatSessions.createdAt }).from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
       if (!session) return { error: "This session no longer exists" };
-      const now = unixNow();
-      const fireAt = now + Math.round(minutes * 60);
       const limit = session.createdAt + CONFIG.timerMaxAfterSessionSeconds;
-      if (fireAt > limit) {
+      if (unixNow() + Math.round(minutes * 60) > limit) {
         return { error: `Too late: follow-ups must fire within ${CONFIG.timerMaxAfterSessionSeconds / 3600}h of the session start (by ${formatLocalTime(limit, await getTimezone(db))})` };
       }
-      const row = { fireAt, note: note.trim().slice(0, NOTE_MAX_CHARS), setAt: now };
-      await db.insert(sessionTimers).values({ sessionId, ...row })
-        .onConflictDoUpdate({ target: sessionTimers.sessionId, set: row }).run();
-      sessionChanged(sessionId);
+      const fireAt = await putTimer(db, sessionId, minutes, note);
       return { dueAt: formatLocalTime(fireAt, await getTimezone(db)) };
     },
   });

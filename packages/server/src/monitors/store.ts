@@ -1,11 +1,24 @@
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import { unixNow } from "@tracer-sh/shared";
 import { runInTransaction, type Db } from "../db/driver.js";
-import { chatSessions, monitors, monitorTriggers } from "../db/schema.js";
+import { chatSessions, monitors, monitorTriggers, sessionTimers } from "../db/schema.js";
 import { sessionChanged } from "../lib/session-events.js";
 import type { MonitorDraft } from "./validate.js";
 
+/** Window ends whose check failed, per monitor: the next tick skips that window. An edit or delete makes the monitor retry at once. */
+export const failedWindowEnds = new Map<string, number>();
+
+/** Drops the follow-up timers of a monitor's sessions, e.g. when the monitor or its alerts turn off. */
+async function clearSessionTimers(db: Db, monitorId: string): Promise<void> {
+  const ids = (await db.select({ id: monitorTriggers.sessionId }).from(monitorTriggers)
+    .where(and(eq(monitorTriggers.monitorId, monitorId), isNotNull(monitorTriggers.sessionId))).all()).map((r) => r.id as string);
+  if (ids.length === 0) return;
+  await db.delete(sessionTimers).where(inArray(sessionTimers.sessionId, ids)).run();
+  sessionChanged(...ids);
+}
+
 export async function saveMonitor(db: Db, id: string, draft: MonitorDraft & { name: string }): Promise<void> {
+  failedWindowEnds.delete(id);
   const now = unixNow();
   const fields = {
     name: draft.name,
@@ -34,6 +47,7 @@ export async function setMonitorToggles(
   const row = await db.update(monitors).set(fields).where(eq(monitors.id, id))
     .returning({ name: monitors.name, enabled: monitors.enabled, alertEnabled: monitors.alertEnabled }).get();
   if (!row) return { error: "Monitor not found", code: "NOT_FOUND" };
+  if (toggles.run === false || toggles.alert === false) await clearSessionTimers(db, id);
   return { name: row.name, run: row.enabled === 1, alert: row.alertEnabled !== 0 };
 }
 
@@ -57,6 +71,7 @@ export async function deleteMonitor(db: Db, activeStreams: ReadonlyMap<string, u
     if (toDelete.length > 0) await tx.delete(chatSessions).where(inArray(chatSessions.id, toDelete)).run();
     await tx.delete(monitors).where(eq(monitors.id, id)).run();
   });
+  failedWindowEnds.delete(id);
   sessionChanged(...toDelete);
   return monitor;
 }

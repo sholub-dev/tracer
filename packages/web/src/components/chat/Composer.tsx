@@ -6,6 +6,13 @@ import { IconButton } from "../common/IconButton";
 
 export type Attachment = { file: File; url: string | null };
 
+export const RUN_PLACEHOLDER = "Wait for the run to finish, or press Stop";
+
+/** On a touch screen Enter is a newline key; the send button sends. */
+export function enterSends(e: { key: string; shiftKey: boolean; nativeEvent: { isComposing: boolean } }): boolean {
+  return e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && !window.matchMedia("(pointer: coarse)").matches;
+}
+
 const ATTACH_ACCEPT = "image/*,text/*,.md,.json,.csv,.log,application/pdf";
 
 interface ComposerProps {
@@ -16,6 +23,8 @@ interface ComposerProps {
   canSend: boolean;
   streaming?: boolean;
   onStop?: () => void;
+  /** False where Esc does not stop the run, so the button label does not promise it. */
+  escStops?: boolean;
   disabled?: boolean;
   attachments?: Attachment[];
   onAttach?: (files: FileList) => void;
@@ -36,6 +45,7 @@ export function Composer({
   canSend,
   streaming = false,
   onStop,
+  escStops = true,
   disabled = false,
   attachments = [],
   onAttach,
@@ -110,7 +120,7 @@ export function Composer({
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+          if (enterSends(e)) {
             e.preventDefault();
             onSubmit();
           }
@@ -150,7 +160,7 @@ export function Composer({
         {cost}
         {streaming ? (
           <IconButton
-            label="Stop (Esc)"
+            label={escStops ? "Stop (Esc)" : "Stop"}
             variant="secondary"
             className="rounded-full bg-foreground text-background hover:bg-foreground/85 hover:text-background"
             onClick={onStop}

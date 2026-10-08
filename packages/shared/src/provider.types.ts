@@ -66,6 +66,8 @@ export interface IProvider {
 
   connected: boolean;
   lastChecked: string | null;
+  /** True while the provider holds no live connection on purpose; a ping reconnects it. */
+  idle?: boolean;
 
   initialize(): Promise<void>;
   testConnection(): Promise<boolean>;

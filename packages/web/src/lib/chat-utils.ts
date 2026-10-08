@@ -35,16 +35,17 @@ export function normalizeClipboard(e: React.ClipboardEvent) {
   e.preventDefault();
 }
 
+export function parseMessages(json: string): UIMessage[] {
+  try {
+    return JSON.parse(json) as UIMessage[];
+  } catch {
+    console.warn("[sessions] Corrupted messages JSON");
+    return [];
+  }
+}
+
 export function useParsedMessages(json: string | undefined): UIMessage[] | undefined {
-  return useMemo(() => {
-    if (json === undefined) return undefined;
-    try {
-      return JSON.parse(json) as UIMessage[];
-    } catch {
-      console.warn("[sessions] Corrupted messages JSON");
-      return [];
-    }
-  }, [json]);
+  return useMemo(() => (json === undefined ? undefined : parseMessages(json)), [json]);
 }
 
 /** Only the analysis section of a kept compaction boundary; null when it has none. */

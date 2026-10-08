@@ -12,7 +12,6 @@ import { rowsToObjects } from "./posthog-formatter.js";
 import {
   createPosthogDirectTools,
   posthogUnifiedFragment,
-  POSTHOG_DIRECT_MODE_MAX_STEPS,
 } from "./tools.js";
 
 export class PosthogProvider extends BaseProvider {
@@ -73,12 +72,10 @@ export class PosthogProvider extends BaseProvider {
     const direct = createPosthogDirectTools(
       this,
       options.memoryContext,
-      options.writer,
       options.db,
     );
     return {
       tools: direct.tools,
-      maxSteps: POSTHOG_DIRECT_MODE_MAX_STEPS,
       afterComplete: direct.afterComplete,
       ...(options.mode === "unified"
         ? { promptFragments: [posthogUnifiedFragment] }

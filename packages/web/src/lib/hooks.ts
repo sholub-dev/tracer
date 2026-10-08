@@ -164,6 +164,7 @@ export function useSessionLiveUpdates() {
       utils.sessions.getTitle.invalidate();
       utils.sessions.timer.invalidate();
       utils.sessions.getCost.invalidate();
+      utils.update.check.invalidate();
     },
     onData: ({ id }) => {
       pending.current.add(id);
@@ -193,9 +194,15 @@ export function useDeleteSession({ noun = "investigation", onDeleted }: { noun?:
       toast(`${noun.charAt(0).toUpperCase()}${noun.slice(1)} deleted`);
       onDeleted?.(id);
     },
-    onError: () => toast.error(`Couldn't delete the ${noun}`),
+    onError: (err) => toast.error(`Couldn't delete the ${noun}`, { description: err.data?.code === "CONFLICT" ? err.message : undefined }),
   });
   return (id: string) => mutation.mutate({ id });
+}
+
+/** Opens the Settings page without a reload. */
+export function openSettings() {
+  window.history.pushState(null, "", "/settings");
+  window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
 /** Escape calls `onStop` while `active`, unless an open dialog or menu took the key. */
@@ -221,6 +228,16 @@ export function useGcpAuthStatus() {
     // The iOS app has no gcloud credentials to read.
     enabled: !IS_IOS,
   });
+}
+
+/** Refreshes everything a provider config change touches. */
+export function useInvalidateProviders() {
+  const utils = trpc.useUtils();
+  return () => {
+    utils.provider.list.invalidate();
+    utils.provider.getConfigs.invalidate();
+    utils.provider.ping.invalidate();
+  };
 }
 
 /** GCP projects as select options; `enabled` defers the fetch until a picker opens. */

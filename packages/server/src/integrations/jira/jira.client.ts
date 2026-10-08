@@ -70,6 +70,11 @@ export function normalizeJiraDomain(raw: string): string {
     .replace(/\.atlassian\.net$/i, "");
 }
 
+/** A site subdomain: letters, digits and inner hyphens, so the host stays under atlassian.net. */
+export function isJiraDomain(raw: string): boolean {
+  return /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i.test(normalizeJiraDomain(raw));
+}
+
 /**
  * Jira Cloud REST v2 returns descriptions as plain/wiki strings, but defensively
  * flatten an Atlassian Document Format (ADF) node tree to text if one shows up.
@@ -93,6 +98,7 @@ export class JiraClient {
   private readonly authHeader: string;
 
   constructor({ domain, email, apiToken }: JiraClientConfig) {
+    if (!isJiraDomain(domain)) throw new Error("The Jira domain is invalid");
     this.baseUrl = `https://${normalizeJiraDomain(domain)}.atlassian.net`;
     // btoa takes Latin-1 only, so encode to UTF-8 bytes first.
     const bytes = new TextEncoder().encode(`${email}:${apiToken}`);

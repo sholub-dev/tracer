@@ -1,5 +1,6 @@
 import { generateText, type ModelMessage } from "ai";
 import { CONFIG } from "../../config.js";
+import type { ProviderOptions } from "../../llm/resolve.js";
 import { recordEachCall } from "../../llm/usage.js";
 import type { Db } from "../../db/driver.js";
 import type { Ledger } from "../../tools/analysis-tool.js";
@@ -66,6 +67,7 @@ export async function reviewConclusion(
   ledger: Ledger,
   messages: ModelMessage[],
   abortSignal: AbortSignal | undefined,
+  providerOptions?: ProviderOptions,
 ): Promise<string | null> {
   if (abortSignal?.aborted) return null;
   // Not AbortSignal.any or AbortSignal.timeout: they need iOS 17.4 and 16, and the app supports iOS 15.
@@ -77,6 +79,7 @@ export async function reviewConclusion(
     const { text } = await generateText({
       model,
       temperature: 0,
+      providerOptions,
       instructions: INSTRUCTIONS,
       messages: [{ role: "user", content: `<run>\n${buildTranscript(messages)}\n</run>\n\n<ledger>\n${JSON.stringify(ledger, null, 2)}\n</ledger>` }],
       abortSignal: controller.signal,

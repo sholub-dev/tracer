@@ -11,7 +11,6 @@ import { NerdGraphClient, type AiIssue, type AiIssuesFilter } from "./nerdgraph.
 import {
   createNewRelicDirectTools,
   nrUnifiedFragment,
-  NR_DIRECT_MODE_MAX_STEPS,
 } from "./tools.js";
 
 export class NewRelicProvider extends BaseProvider {
@@ -92,12 +91,10 @@ export class NewRelicProvider extends BaseProvider {
     const direct = createNewRelicDirectTools(
       this,
       options.memoryContext,
-      options.writer,
       options.db,
     );
     return {
       tools: direct.tools,
-      maxSteps: NR_DIRECT_MODE_MAX_STEPS,
       afterComplete: direct.afterComplete,
       ...(options.mode === "unified"
         ? { promptFragments: [nrUnifiedFragment] }

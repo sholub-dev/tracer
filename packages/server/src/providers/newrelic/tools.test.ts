@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { NewRelicProvider } from "./newrelic.provider.js";
+import { MAX_SAVED_ROWS } from "../../lib/messages-codec.js";
 import { buildNewRelicIssueTools, createNewRelicDirectTools } from "./tools.js";
 
 const stub = (over: Record<string, unknown> = {}) => ({
@@ -41,4 +42,14 @@ test("list_nr_issues reports the window and truncation", async () => {
   const tools = buildNewRelicIssueTools(stub({ aiIssuesPage: async () => ({ issues: [], truncated: true }) })) as Record<string, any>;
   assert.deepEqual(await tools.list_nr_issues.execute({ sinceHours: 24 }, {}), { issues: [], sinceHours: 24, truncated: true });
   assert.equal((await tools.list_nr_issues.execute({}, {})).sinceHours, 6);
+});
+
+test("execute_nrql returns capped table rows once, without a separate progress write", async () => {
+  const rows = Array.from({ length: 300 }, (_, i) => ({ host: `h${i}`, n: i }));
+  const provider = stub({ executeRawQuery: async () => rows });
+  const { tools } = createNewRelicDirectTools(provider) as { tools: Record<string, any> };
+  const out = await tools.execute_nrql.execute({ query: "SELECT host, n FROM Log" }, { toolCallId: "c" });
+  assert.equal(out.parts.length, 1);
+  assert.equal(out.parts[0].results.length, MAX_SAVED_ROWS);
+  assert.equal(out.parts[0].totalRows, 300);
 });

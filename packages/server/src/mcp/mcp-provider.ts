@@ -23,6 +23,11 @@ export class McpProvider extends BaseProvider {
   protected cachedTools: Record<string, any> | null = null;
   private lastReconnectAttempt = 0;
   private starting: Promise<void> | null = null;
+  private discovering: Promise<Record<string, any>> | null = null;
+  private liveTools: Record<string, any> = {};
+  private idleTimer: ReturnType<typeof setTimeout> | undefined;
+  private inFlight = 0;
+  idle = false;
 
   constructor(
     private readonly definition: McpServerDefinition,
@@ -41,6 +46,7 @@ export class McpProvider extends BaseProvider {
       const tools = await this.discoverAllTools();
       this.cachedTools = tools;
       this.connected = true;
+      this.armIdleClose();
       this.lastChecked = new Date().toISOString();
       console.log(
         `[mcp] ${this.definition.label} connected (${this.clients.length} server(s)), ${Object.keys(tools).length} tools discovered`,
@@ -62,6 +68,7 @@ export class McpProvider extends BaseProvider {
       const tools = await this.discoverAllTools();
       this.cachedTools = tools;
       this.connected = true;
+      this.armIdleClose();
       this.lastChecked = new Date().toISOString();
       return true;
     } catch {
@@ -88,12 +95,14 @@ export class McpProvider extends BaseProvider {
     let pingTimer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
-        Promise.all(this.clients.map((c) => c.tools())),
+        // Also refills the tool cache that invalidateTools() cleared.
+        this.discoverTools(),
         new Promise<never>((_, reject) => {
           pingTimer = setTimeout(() => reject(new Error("Ping timed out")), CONFIG.mcpPingTimeoutMs);
         }),
       ]);
       this.connected = true;
+      this.armIdleClose();
       this.lastChecked = new Date().toISOString();
       return { ok: true };
     } catch (err) {
@@ -106,6 +115,7 @@ export class McpProvider extends BaseProvider {
   }
 
   async dispose(): Promise<void> {
+    clearTimeout(this.idleTimer);
     await this.closeAllClients();
     this.cachedTools = null;
     this.connected = false;
@@ -130,9 +140,7 @@ export class McpProvider extends BaseProvider {
       if (this.clients.length === 0) {
         await this.createClients();
       }
-      const tools = await this.discoverAllTools();
-      this.cachedTools = tools;
-      return tools;
+      return await this.discoverTools();
     } catch (err) {
       await this.closeAllClients();
       this.cachedTools = null;
@@ -157,6 +165,18 @@ export class McpProvider extends BaseProvider {
   }
 
   // ── Private ──
+
+  /** Restarts the idle countdown; the subprocesses close when it ends with no tool call running. */
+  private armIdleClose(): void {
+    this.idle = false;
+    clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => {
+      if (this.inFlight > 0) return this.armIdleClose();
+      this.idle = true;
+      void this.closeAllClients();
+    }, CONFIG.mcpIdleCloseMs);
+    this.idleTimer.unref?.();
+  }
 
   /** Spawn MCP clients for all servers in parallel. */
   private createClients(): Promise<void> {
@@ -229,14 +249,45 @@ export class McpProvider extends BaseProvider {
     }
   }
 
+  /** One discovery at a time: concurrent callers (ping, chat start) share the same request. */
+  private discoverTools(): Promise<Record<string, any>> {
+    this.discovering ??= this.discoverAllTools()
+      .then((tools) => { this.cachedTools = tools; return tools; })
+      .finally(() => { this.discovering = null; });
+    return this.discovering;
+  }
+
   /** Discover tools from all connected clients and merge into a single record. */
   private async discoverAllTools(): Promise<Record<string, any>> {
     const toolSets = await Promise.all(this.clients.map((c) => c.tools()));
     const merged: Record<string, any> = {};
     for (const tools of toolSets) {
-      Object.assign(merged, tools);
+      for (const [name, t] of Object.entries<any>(tools)) {
+        this.liveTools[name] = t;
+        merged[name] = typeof t.execute === "function" ? { ...t, execute: (...args: unknown[]) => this.running(() => this.execute(name, args)) } : t;
+      }
     }
     return merged;
+  }
+
+  /** After an idle close the cached tools stay, so a call respawns the clients and runs on the fresh tool. */
+  private async execute(name: string, args: unknown[]): Promise<unknown> {
+    if (this.clients.length === 0) {
+      await this.createClients();
+      await this.discoverTools();
+    }
+    return this.liveTools[name].execute(...args);
+  }
+
+  /** A tool call keeps the clients open while it runs and restarts the idle countdown when it ends. */
+  private async running<T>(call: () => Promise<T>): Promise<T> {
+    this.inFlight++;
+    try {
+      return await call();
+    } finally {
+      this.inFlight--;
+      this.armIdleClose();
+    }
   }
 
   /** Close all clients, ignoring errors (processes may already be dead). */

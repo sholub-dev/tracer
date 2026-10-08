@@ -13,6 +13,7 @@ import {
   isAnalysisMessage,
   splitAtAnalysis,
 } from "@tracer-sh/shared";
+import { CONFIG } from "../../config.js";
 import { publicProcedure, router } from "../trpc.js";
 import { runInTransaction } from "../../db/driver.js";
 import { chatSessions, agentRuns, monitorTriggers, sessionTimers } from "../../db/schema.js";
@@ -47,6 +48,7 @@ export const sessionsRouter = router({
         notLike(chatSessions.id, `${SESSION_PREFIX.MONITORS}%`),
       ))
       .orderBy(desc(chatSessions.updatedAt))
+      .limit(CONFIG.sessionListLimit)
       .all())
       .map(s => ({ ...s, titlePending: s.title === DEFAULT_SESSION_TITLE }));
   }),
@@ -199,12 +201,12 @@ export const sessionsRouter = router({
         .from(chatSessions)
         .where(eq(chatSessions.id, input.id))
         .get();
-      if (!row) return { success: false, summaryCleared: false };
-      let messages: unknown[] = [];
+      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
+      let messages: unknown[];
       try {
         messages = decodeMessages(row.messages);
       } catch {
-        return { success: false, summaryCleared: false };
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Session messages are corrupted" });
       }
       const truncated = messages.slice(0, input.keepCount);
 

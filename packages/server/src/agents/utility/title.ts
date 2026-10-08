@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { unixNow } from "@tracer-sh/shared";
 import { chatSessions } from "../../db/schema.js";
 import { CONFIG } from "../../config.js";
-import { resolveModel } from "../../llm/resolve.js";
+import { resolveModel, utilityProviderOptions } from "../../llm/resolve.js";
 import { recordEachCall } from "../../llm/usage.js";
 import type { Db } from "../../db/driver.js";
 import { sessionChanged } from "../../lib/session-events.js";
@@ -20,6 +20,7 @@ export async function generateSessionTitle(db: Db, sessionId: string, userMessag
     const { text } = await generateText({
       model: resolved.model,
       temperature: 0,
+      providerOptions: utilityProviderOptions(resolved),
       instructions: "Generate a short title (3-8 words) for the user's request. Preserve any IDs, error names, service names, or specific identifiers from the message — these make the title useful. Focus on WHAT is being asked, not how. Output only the title, nothing else.",
       messages: [{ role: "user", content: userMessage }],
       abortSignal: timeoutSignal(CONFIG.utilityCallTimeoutMs),

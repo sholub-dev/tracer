@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { findingSchema, normalizeFinding } from "./finding.js";
 
 /** Progress part types streamed from sub-agents to the client */
 export type ProgressPart =
@@ -171,23 +172,48 @@ export function analysisSectionParts<P extends { type: string }>(parts: Readonly
   return [{ ...p, text: p.text.slice(marker.charIdx) }, ...parts.slice(marker.partIdx + 1)];
 }
 
+const importedText = z.object({ type: z.enum(["text", "reasoning"]), text: z.string() });
+const importedFile = z.object({
+  type: z.literal("file"),
+  mediaType: z.string(),
+  url: z.string().startsWith("data:"),
+  filename: z.string().optional(),
+});
+const importedFinding = z.object({ type: z.literal("tool-report_finding"), input: z.preprocess(normalizeFinding, findingSchema) });
+
+/**
+ * Keeps only inert parts of an imported message: text, reasoning, files and the report_finding card.
+ * Other tool parts and data parts are dropped, so an imported file cannot carry tool calls or results.
+ */
+export function sanitizeImportedParts(parts: ReadonlyArray<{ type: string }>): Array<{ type: string } & Record<string, unknown>> {
+  const out: Array<{ type: string } & Record<string, unknown>> = [];
+  for (const part of parts) {
+    const text = importedText.safeParse(part);
+    if (text.success) { out.push(text.data); continue; }
+    const file = importedFile.safeParse(part);
+    if (file.success) { out.push(file.data); continue; }
+    const finding = importedFinding.safeParse(part);
+    if (finding.success) {
+      out.push({ type: finding.data.type, toolCallId: crypto.randomUUID(), state: "output-available", input: finding.data.input, output: { recorded: true } });
+    }
+  }
+  return out;
+}
+
 /**
  * Schema for the JSON blob embedded in an analysis PNG. Lives in shared so
  * both the server (`importAnalysis` mutation input) and the web client (drop
  * handler validation) can use the same definition.
  *
- * Parts are accepted opaquely: text, reasoning, and tool parts (with their
- * inputs and outputs) all survive the round-trip so imported sessions render
- * identically to the original, including charts/tables backed by tool output.
- * Size is bounded by the export-time guard in the web client and the overall
- * tRPC body limit on the server.
+ * Parts are filtered by `sanitizeImportedParts` while parsing. Size is bounded
+ * by the export-time guard in the web client and the request body limit on the server.
  */
 export const ImportedAnalysisSchema = z.object({
   v: z.literal(1),
   kind: z.literal("analysis"),
   sourceTitle: z.string().max(400),
   sourceCreatedAt: z.number().int().nonnegative(),
-  parts: z.array(z.looseObject({ type: z.string() })).max(200),
+  parts: z.array(z.looseObject({ type: z.string() })).max(200).transform(sanitizeImportedParts),
 });
 
 export type ImportedAnalysis = z.infer<typeof ImportedAnalysisSchema>;

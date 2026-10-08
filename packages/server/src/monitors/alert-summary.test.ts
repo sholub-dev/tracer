@@ -4,7 +4,7 @@ import type { UIMessage } from "ai";
 import { alertFindingFromMessages, dismissalFromMessages, summaryFromMessages } from "./alert-summary.js";
 
 const valid = {
-  severity: "low", policy: "p", started: "s", status: "stopped", seenBefore: "no",
+  severity: "low", policy: "p", started: "s", status: "stopped",
   issues: [],
 };
 const call = (input: unknown) => ({ type: "tool-report_alert_summary", toolCallId: "x", state: "output-available", input, output: {} });

@@ -5,7 +5,7 @@ import Database from "better-sqlite3-multiple-ciphers";
 import { createNodeDb } from "../db/node-db.js";
 import { runSetup } from "../db/setup.js";
 import type { Db } from "../db/driver.js";
-import { appSettings, chatSessions, memoryOperations, monitors, monitorTriggers, syncRows, toolMemories } from "../db/schema.js";
+import { appSettings, chatSessions, providerConfigs, memoryOperations, monitors, monitorTriggers, syncRows, toolMemories } from "../db/schema.js";
 import { exportSnapshot, importSnapshot } from "./snapshot.js";
 import { exportSyncPayload, LOCAL_SETTING_KEYS, mergeSyncPayload } from "./sync.js";
 
@@ -113,24 +113,31 @@ test("memories with the same id on both sides both survive; operations follow th
   assert.equal(memoryA.uid?.length, 32);
 });
 
-test("monitor run state stays per device", async () => {
+test("monitor toggles sync newest wins, both ways; check state stays per device", async () => {
   const { a, b } = await pair();
-  await b.db.update(monitors).set({ enabled: 0 }).where(eq(monitors.id, "m1")).run();
-  await a.db.update(monitors).set({ name: "Renamed" }).where(eq(monitors.id, "m1")).run();
-  await stamp(a.db, "monitors", "m1", T0 + 5000);
+  await b.db.update(monitors).set({ enabled: 0, lastCheckedAt: 7 }).where(eq(monitors.id, "m1")).run();
+  await stamp(b.db, "monitors", "m1", T0 + 1000);
+  await sync(a.db, b.db);
+  assert.equal((await a.db.select().from(monitors).get())!.enabled, 0, "a toggle made on B reaches A");
+  assert.equal((await a.db.select().from(monitors).get())!.lastCheckedAt, null);
+
+  await a.db.update(monitors).set({ alertEnabled: 0, enabled: 1, name: "Renamed" }).where(eq(monitors.id, "m1")).run();
+  await stamp(a.db, "monitors", "m1", T0 + 2000);
   await sync(a.db, b.db);
   const onB = (await b.db.select().from(monitors).get())!;
   assert.equal(onB.name, "Renamed");
-  assert.equal(onB.enabled, 0);
+  assert.equal(onB.enabled, 1, "the newer toggle on A wins");
+  assert.equal(onB.alertEnabled, 0);
+  assert.equal(onB.lastCheckedAt, 7, "check state is not overwritten");
 
   await a.db.insert(monitors).values({ id: "m2", name: "New", query: "q", condition: "{}", lastStatus: "alerting", lastCheckedAt: 5 }).run();
   await sync(a.db, b.db);
   const arrived = (await b.db.select().from(monitors).where(eq(monitors.id, "m2")).get())!;
-  assert.equal(arrived.enabled, 0);
+  assert.equal(arrived.enabled, 1, "a new monitor arrives with its own toggle");
   assert.equal(arrived.lastStatus, "ok");
 
   const before = await logOf(a.db, "monitors", "m1");
-  await a.db.update(monitors).set({ lastCheckedAt: 9, lastStatus: "alerting", lastError: "x", enabled: 0, updatedAt: 99 }).where(eq(monitors.id, "m1")).run();
+  await a.db.update(monitors).set({ lastCheckedAt: 9, lastStatus: "alerting", lastError: "x", updatedAt: 99 }).where(eq(monitors.id, "m1")).run();
   assert.deepEqual(await logOf(a.db, "monitors", "m1"), before);
 });
 
@@ -233,4 +240,76 @@ test("an incremental export equals the full export filtered to the changed rows"
   // The memory did not change, yet it travels so the receiver can map the operation.
   assert.equal(part.tables.tool_memories.length, 1);
   assert.deepEqual(part.rows, full.rows.filter((r) => changed.has(`${r.tbl}\0${r.row_key}`)));
+});
+
+test("the Vertex config row stays on the desktop and a Vertex chat model leaves the phone's model alone", async () => {
+  const a = await freshDb();
+  const b = await freshDb();
+  await a.db.insert(providerConfigs).values({ type: "google-vertex", config: "{}" }).run();
+  await a.db.insert(providerConfigs).values({ type: "google", config: "{}" }).run();
+  await a.db.insert(appSettings).values({ key: "chat_model", value: JSON.stringify({ provider: "google-vertex", modelId: "m" }) }).run();
+  await b.db.insert(appSettings).values({ key: "chat_model", value: JSON.stringify({ provider: "google", modelId: "p" }) }).run();
+
+  const wired = clone(await exportSnapshot(a.db));
+  assert.deepEqual(wired.tables.provider_configs.map((r) => r.type), ["google"]);
+  await importSnapshot(b.db, wired);
+  assert.equal((await b.db.select().from(appSettings).where(eq(appSettings.key, "chat_model")).get())?.value, JSON.stringify({ provider: "google", modelId: "p" }));
+
+  await mergeSyncPayload(b.db, clone(await exportSyncPayload(a.db)));
+  assert.equal((await b.db.select().from(appSettings).where(eq(appSettings.key, "chat_model")).get())?.value, JSON.stringify({ provider: "google", modelId: "p" }));
+});
+
+test("sync carries no run state: sessions export as done and a merge never overwrites it", async () => {
+  const { a, b } = await pair();
+  await a.db.update(chatSessions).set({ status: "streaming", runScope: "unified", resumed: 0 }).where(eq(chatSessions.id, "s1")).run();
+  const exported = (await exportSyncPayload(a.db)).tables.chat_sessions[0];
+  assert.deepEqual([exported.status, exported.runScope, exported.resumed], ["done", null, 0]);
+  assert.equal((await exportSnapshot(a.db)).tables.chat_sessions[0].status, "done");
+
+  await b.db.update(chatSessions).set({ status: "streaming", runScope: "newrelic", resumed: 1, title: "Old" }).where(eq(chatSessions.id, "s1")).run();
+  await a.db.update(chatSessions).set({ title: "From A" }).where(eq(chatSessions.id, "s1")).run();
+  await stamp(a.db, "chat_sessions", "s1", T0 + 3000);
+  await sync(a.db, b.db);
+  const onB = (await b.db.select().from(chatSessions).where(eq(chatSessions.id, "s1")).get())!;
+  assert.equal(onB.title, "From A");
+  assert.deepEqual([onB.status, onB.runScope, onB.resumed], ["streaming", "newrelic", 1]);
+
+  await a.db.insert(chatSessions).values({ id: "s2", title: "Two", messages: "[]", status: "streaming", runScope: "unified" }).run();
+  await sync(a.db, b.db);
+  const arrived = (await b.db.select().from(chatSessions).where(eq(chatSessions.id, "s2")).get())!;
+  assert.deepEqual([arrived.status, arrived.runScope, arrived.resumed], ["done", null, 0]);
+});
+
+test("a table larger than one read page exports every row once", async () => {
+  const { db } = await freshDb();
+  const ids = Array.from({ length: 450 }, (_, i) => `s${String(i).padStart(3, "0")}`);
+  for (let i = 0; i < ids.length; i += 50) {
+    await db.insert(chatSessions).values(ids.slice(i, i + 50).map((id) => ({ id, title: id, messages: "[]" }))).run();
+  }
+  const exported = (await exportSnapshot(db)).tables.chat_sessions.map((r) => r.id);
+  assert.deepEqual([...exported].sort(), ids);
+  assert.equal((await exportSyncPayload(db)).tables.chat_sessions.length, 450);
+});
+
+test("incoming rows with unknown columns or unsafe integration settings are rejected", async () => {
+  const { a, b } = await pair();
+  const snapshot = clone(await exportSnapshot(a.db));
+  const bad = clone(snapshot);
+  bad.tables.chat_sessions[0].injected = 1;
+  await assert.rejects(importSnapshot(b.db, bad), /unknown column "injected"/);
+
+  const setting = (key: string, value: unknown) => {
+    const copy = clone(snapshot);
+    copy.tables.app_settings.push({ key, value: JSON.stringify(value), updatedAt: 1 });
+    return copy;
+  };
+  await assert.rejects(importSnapshot(b.db, setting("integration:slack", { webhookUrl: "https://evil.example/x" })), /invalid setting/);
+  await assert.rejects(importSnapshot(b.db, setting("integration:jira", { domain: "evil.example/x#", email: "e", apiToken: "t" })), /invalid setting/);
+  await assert.rejects(importSnapshot(b.db, setting("integration:other", {})), /invalid setting/);
+  await importSnapshot(b.db, setting("integration:slack", { webhookUrl: "https://hooks.slack.com/services/T/B/x" }));
+  await importSnapshot(b.db, setting("integration:jira", { domain: "acme.atlassian.net", email: "e", apiToken: "t" }));
+
+  const payload = clone(await exportSyncPayload(a.db));
+  payload.tables.chat_sessions[0].injected = 1;
+  await assert.rejects(mergeSyncPayload(b.db, payload), /unknown column/);
 });

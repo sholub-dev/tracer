@@ -44,3 +44,8 @@ export async function writeAppSetting(db: Db, key: string, value: unknown): Prom
     .onConflictDoUpdate({ target: appSettings.key, set: { value: json, updatedAt: now } })
     .run();
 }
+
+/** This device's id: stored as plain text, not JSON. Empty when unset. */
+export async function localDeviceId(db: Db): Promise<string> {
+  return (await db.select({ value: appSettings.value }).from(appSettings).where(eq(appSettings.key, "device_id")).get())?.value ?? "";
+}

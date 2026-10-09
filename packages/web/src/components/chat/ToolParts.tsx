@@ -174,8 +174,8 @@ export function Narration({ content, isAnimating }: { content: string; isAnimati
   return <Markdown text={content} isAnimating={isAnimating} className="max-w-[68ch] text-sm leading-relaxed text-ink-2" />;
 }
 
-function ProgressItems({ parts, isAnimating, resultsOnly = false }: { parts: ProgressPart[]; isAnimating: boolean; resultsOnly?: boolean }) {
-  if (resultsOnly) return <>{parts.map((p, i) => (p.type === "query" ? <ResultView key={i} data={p.results} totalRows={p.totalRows} /> : null))}</>;
+function ProgressItems({ parts, isAnimating, provider, resultsOnly = false }: { parts: ProgressPart[]; isAnimating: boolean; provider: string; resultsOnly?: boolean }) {
+  if (resultsOnly) return <>{parts.map((p, i) => (p.type === "query" ? <ResultView key={i} data={p.results} totalRows={p.totalRows} provider={provider} /> : null))}</>;
   let inAnalysis = false;
   return (
     <>
@@ -188,7 +188,7 @@ function ProgressItems({ parts, isAnimating, resultsOnly = false }: { parts: Pro
           return (
             <div key={i} className="space-y-2">
               {p.query && <QueryBlock query={p.query} />}
-              <ResultView data={p.results} totalRows={p.totalRows} />
+              <ResultView data={p.results} totalRows={p.totalRows} provider={provider} />
             </div>
           );
         }
@@ -331,11 +331,11 @@ function StepBody({ part, progressStore, isAnimating, resultsOnly = false }: { p
   const parts = stepParts(part, progress?.parts);
   if (parts.length > 0 || !complete) {
     const query = typeof part.input?.query === "string" ? part.input.query : null;
-    if (resultsOnly) return <ProgressItems parts={parts} isAnimating={running} resultsOnly />;
+    if (resultsOnly) return <ProgressItems parts={parts} isAnimating={running} provider={providerOf(part.type)} resultsOnly />;
     return (
       <>
         {parts.length === 0 && query && <QueryBlock query={query} />}
-        <ProgressItems parts={parts} isAnimating={running} />
+        <ProgressItems parts={parts} isAnimating={running} provider={providerOf(part.type)} />
         {running && <WorkingIndicator label={`Querying ${providerLabel(providerOf(part.type))}`} />}
       </>
     );
@@ -346,7 +346,7 @@ function StepBody({ part, progressStore, isAnimating, resultsOnly = false }: { p
   return (
     <>
       {query && !resultsOnly && <QueryBlock query={query} />}
-      {output != null && !(resultsOnly && isPlainObject(output)) && <ResultView data={output} />}
+      {output != null && !(resultsOnly && isPlainObject(output)) && <ResultView data={output} provider={providerOf(part.type)} />}
     </>
   );
 }
@@ -392,7 +392,7 @@ function ChartStep({ part, query, results, totalRows }: { part: ToolPart; query:
           </CollapsibleContent>
         )}
         <div className="mt-2">
-          <ResultView data={results} totalRows={totalRows} />
+          <ResultView data={results} totalRows={totalRows} provider={provider} />
         </div>
       </Collapsible>
     </li>

@@ -278,7 +278,9 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
 
   const extracted = extractGroups(result, monitor.provider);
   const value = sumGroups(extracted);
-  if (!evaluateCondition(condition, value)) {
+  // Rows came back but none holds a value: no data, so nothing to compare.
+  const noData = extracted.length === 0 && Array.isArray(result) && result.length > 0;
+  if (noData || !evaluateCondition(condition, value)) {
     await succeed(context, monitor.id, "ok", window.end);
     return;
   }

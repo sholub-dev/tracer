@@ -1,12 +1,12 @@
-import { Fragment, lazy, memo, Suspense, useState, type ComponentProps, type ReactNode } from "react";
+import { Fragment, lazy, memo, Suspense, useMemo, useState, type ComponentProps, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { Markdown } from "../../lib/markdown";
 import { hasErrorOutput } from "../../lib/chat-utils";
 import type { Threshold } from "./ChartView";
-import { HIDDEN_KEYS, formatValue, isPercentileResult, buildColumns, pivotCompareWith, coerceNumeric, type Column } from "../../lib/result-utils";
-import { KeyFigures } from "./KeyFigures";
+import { HIDDEN_KEYS, dropFlattenedRowCopies, formatValue, isPercentileResult, buildColumns, pivotCompareWith, coerceNumeric, type Column } from "../../lib/result-utils";
+import { KeyFigures, isFigureGroup } from "./KeyFigures";
 
 // Lazy so recharts and react-json-view-lite stay out of the chat entry chunk.
 const LazyTimeseriesChart = lazy(() => import("./ChartView").then((m) => ({ default: m.TimeseriesChart })));
@@ -131,6 +131,7 @@ function Td({ children, numeric }: { children: ReactNode; numeric?: boolean }) {
 }
 
 const isNumeric = (value: unknown) => coerceNumeric(value) !== null;
+const isFigure = (value: unknown) => isNumeric(value) || isFigureGroup(value);
 
 function DataTable({ columns, rows, totalRows }: { columns: Column[]; rows: Record<string, unknown>[]; totalRows?: number }) {
   const numeric = columns.map((col) => isNumeric(col.get(rows[0])));
@@ -171,7 +172,13 @@ function ValueList({ label, items, totalRows }: { label: string; items: readonly
   );
 }
 
-export default memo(function ResultView({ data, containerSize, threshold, chartType, totalRows }: { data: unknown; containerSize?: ContainerSize; threshold?: Threshold; chartType?: string; totalRows?: number }) {
+export default memo(function ResultView({ data, containerSize, threshold, chartType, totalRows, provider }: { data: unknown; containerSize?: ContainerSize; threshold?: Threshold; chartType?: string; totalRows?: number; provider?: string }) {
+  // One array per result, so charts keep their memos and an expanded table stays expanded when the view re-renders.
+  const normalized = useMemo(
+    () => dropFlattenedRowCopies(data, provider),
+    [data, provider],
+  );
+
   // Markdown summary from LLM summarizer
   if (typeof data === "string") {
     return (
@@ -200,7 +207,7 @@ export default memo(function ResultView({ data, containerSize, threshold, chartT
     return <ValueList label="Value" items={data} totalRows={totalRows} />;
   }
 
-  const rows = data as Record<string, unknown>[];
+  const rows = normalized as Record<string, unknown>[];
 
   // chartType override: when explicitly set, skip auto-detection
   if (chartType && chartType !== "auto") {
@@ -285,7 +292,7 @@ export default memo(function ResultView({ data, containerSize, threshold, chartT
     rows.length === 1 &&
     !("facet" in rows[0]) &&
     metricKeys.length > 0 &&
-    metricKeys.every((c) => isNumeric(c.get(rows[0])));
+    metricKeys.every((c) => isFigure(c.get(rows[0])));
 
   if (isScalar) return <KeyFigures columns={metricKeys} row={rows[0]} />;
 

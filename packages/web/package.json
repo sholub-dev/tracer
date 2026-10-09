@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "test": "tsx --test $(find src -name '*.test.ts' -o -name '*.test.tsx')",
     "build:ios": "vite build --mode ios"
   },
   "dependencies": {

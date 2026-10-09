@@ -123,5 +123,6 @@ export async function validateMonitor(
   }
   const groups = extractGroups(result, providerName);
   const sampleValue = sumGroups(groups);
-  return { condition, sampleValue, groups, wouldTrigger: evaluateCondition(condition, sampleValue) };
+  const noData = groups.length === 0 && Array.isArray(result) && result.length > 0;
+  return { condition, sampleValue, groups, wouldTrigger: !noData && evaluateCondition(condition, sampleValue) };
 }

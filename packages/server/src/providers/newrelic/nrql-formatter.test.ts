@@ -40,6 +40,15 @@ test("downsampled timeseries keeps the peak and low rows in time order", () => {
   assert.match(out, /plus the peak and low points\)$/);
 });
 
+test("downsampled timeseries keeps the peak and low rows of object members", () => {
+  const rows = Array.from({ length: 40 }, (_, i) => ({
+    beginTimeSeconds: i,
+    endTimeSeconds: `t${String(i).padStart(2, "0")}`,
+    "apdex.x": { score: i === 13 ? 0.2 : 0.9 },
+  }));
+  assert.ok(formatNrqlCsv(rows).includes("t13,"));
+});
+
 test("small non-integers keep three significant digits", () => {
   assert.equal(formatNrqlCsv([{ a: 0.004 }]), "a: 0.004");
   assert.equal(formatNrqlCsv([{ a: 0 }]), "a: 0");

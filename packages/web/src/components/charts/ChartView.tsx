@@ -116,7 +116,9 @@ function formatYAxis(value: unknown): string {
   if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (Math.abs(n) >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   if (Number.isInteger(n)) return n.toLocaleString();
-  return n.toFixed(2);
+  // Below 1, three significant digits keep small ticks apart: 0.0075 and 0.015 both read "0.01" at two decimals.
+  // From 1 up, two decimals keep 100.5 and 101 apart, which three significant digits would not.
+  return String(Number(Math.abs(n) < 1 ? n.toPrecision(3) : n.toFixed(2)));
 }
 
 // NerdGraph also flattens apdex fields (score, s, t, f, count) next to the apdex object; skip those copies.
@@ -146,7 +148,7 @@ function rightAxisFlags(series: Series[]): boolean[] {
 
 function SeriesLegend({ series, isVisible, onToggle, onRight }: { series: Series[]; isVisible: (name: string) => boolean; onToggle: (name: string) => void; onRight?: boolean[] }) {
   return (
-    <div className="chart-legend flex justify-center gap-x-4 overflow-hidden pt-3">
+    <div className="chart-legend flex flex-wrap justify-center gap-x-4 gap-y-1.5 pt-3">
       {series.slice(0, MAX_LEGEND_ENTRIES).map((s, i) => {
         const on = isVisible(s.name);
         return (
@@ -157,7 +159,7 @@ function SeriesLegend({ series, isVisible, onToggle, onRight }: { series: Series
             aria-pressed={on}
             onClick={() => onToggle(s.name)}
             className={cn(
-              "flex min-w-0 items-center gap-1.5 rounded-sm text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50",
+              "flex min-w-0 max-w-full items-center gap-1.5 rounded-sm text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50",
               !on && "line-through opacity-40",
             )}
           >
@@ -166,7 +168,7 @@ function SeriesLegend({ series, isVisible, onToggle, onRight }: { series: Series
               style={s.dashed ? { borderColor: seriesColor(i) } : { backgroundColor: seriesColor(i) }}
             />
             <span className="truncate">{shortName(s.name)}</span>
-            {onRight?.[i] && <span className="text-muted-foreground/70">(right axis)</span>}
+            {onRight?.[i] && <span className="shrink-0 whitespace-nowrap text-muted-foreground/70">(right axis)</span>}
           </button>
         );
       })}

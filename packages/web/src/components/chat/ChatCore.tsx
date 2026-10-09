@@ -102,7 +102,6 @@ export interface ChatCoreRef {
 const MessageRow = memo(function MessageRow({
   msg,
   msgIndex,
-  isLast,
   isAnimating,
   progressStore,
   compact,
@@ -111,7 +110,6 @@ const MessageRow = memo(function MessageRow({
 }: {
   msg: UIMessage;
   msgIndex: number;
-  isLast: boolean;
   isAnimating: boolean;
   progressStore: ProgressStore;
   compact: boolean;
@@ -121,9 +119,9 @@ const MessageRow = memo(function MessageRow({
   const view: RenderView = (options) => (
     <MessageView msg={msg} isAnimating={isAnimating} progressStore={progressStore} compact={compact} meta={meta} {...options} />
   );
-  // Off-screen replies skip layout/paint. The last row stays live for streaming; user rows stay unclipped for their floating actions.
+  // No content-visibility here: a skipped reply takes its real height only as it scrolls into view, and that moves the view under the reader.
   return (
-    <div data-role={msg.role} className={isLast || msg.role === "user" ? undefined : "[content-visibility:auto] [contain-intrinsic-size:auto_600px]"}>
+    <div data-role={msg.role}>
       <ErrorBoundary resetKey={msg}>{renderMessage ? renderMessage(msg, msgIndex, view) : view()}</ErrorBoundary>
     </div>
   );
@@ -465,7 +463,6 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
             key={msg.id || `msg-${msgIndex}`}
             msg={msgIndex === analysisOnlyIndex && analysisOnlyMsg ? analysisOnlyMsg : msg}
             msgIndex={msgIndex}
-            isLast={msgIndex === messages.length - 1}
             isAnimating={msg.id === lastId}
             progressStore={progressStore}
             compact={compact}

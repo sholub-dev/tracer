@@ -4,7 +4,7 @@ import { KeepAwake } from "@capacitor-community/keep-awake";
 import { CapacitorSQLite, SQLiteConnection } from "@capacitor-community/sqlite";
 import { unstable_localLink, type TRPCLink } from "@trpc/client";
 import superjson from "superjson";
-import { sessionChanges, startMobileServer } from "@tracer-sh/server/mobile";
+import { startMobileServer } from "@tracer-sh/server/mobile";
 import type { AppRouter } from "@tracer-sh/server/router";
 import { setCopyLink } from "./copy-link";
 import { RESUME_EVENT } from "./resume";
@@ -101,16 +101,9 @@ function runSchedulerInForeground(scheduler: { start(): void; stop(): Promise<vo
   });
 }
 
-/** Keeps the screen on while an agent run streams, so the owner can watch it. */
-async function keepAwakeWhileRunning(activeRuns: () => number) {
-  let awake = false;
-  // The generator resumes after the run's map entry changes, so the count is current.
-  for await (const _ of sessionChanges()) {
-    const running = activeRuns() > 0;
-    if (running === awake) continue;
-    awake = running;
-    await (running ? KeepAwake.keepAwake() : KeepAwake.allowSleep()).catch((err: unknown) => console.warn("KeepAwake:", err));
-  }
+/** Keeps the screen on while the app is open: iOS suspends the runtime, monitors included, once the phone locks. */
+function keepScreenOn() {
+  KeepAwake.keepAwake().catch((err: unknown) => console.warn("KeepAwake:", err));
 }
 
 /** The Camera app opens tracer://copy links; the dialog asks before anything is replaced. */
@@ -139,7 +132,7 @@ export async function startIosRuntime(): Promise<TRPCLink<AppRouter>[]> {
     server.fetch(input instanceof Request ? input : new Request(new URL(String(input), SERVER_ORIGIN), init)),
   );
   if (server.scheduler) runSchedulerInForeground(server.scheduler);
-  void keepAwakeWhileRunning(server.activeRuns);
+  keepScreenOn();
   listenForCopyLinks();
   Keyboard.setAccessoryBarVisible({ isVisible: false }).catch((err: unknown) => console.warn("Keyboard:", err));
   return [unstable_localLink({ router: server.router, createContext: server.createContext, transformer: superjson })];

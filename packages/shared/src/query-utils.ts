@@ -68,3 +68,42 @@ export function formatTimestamps(results: unknown, timeZone?: string): unknown {
     return out;
   });
 }
+
+export const isPlainObject = (v: unknown): v is Record<string, unknown> => v != null && typeof v === "object" && !Array.isArray(v);
+
+type Row = Record<string, unknown>;
+
+/**
+ * Some providers return an object-valued field and also copy all of its members into the row as extra keys.
+ * Decide once per result: find the copy keys from rows where every member of the object appears as a key with an
+ * equal value, and drop them from every row unless some row holds a different value under such a key.
+ * A real column that merely shares one name and value stays.
+ */
+export function dropFlattenedResultCopies<T extends Row>(rows: T[]): T[] {
+  const copies = new Map<string, Set<string>>();
+  for (const row of rows) {
+    for (const [objKey, o] of Object.entries(row)) {
+      if (!isPlainObject(o)) continue;
+      const members = Object.entries(o);
+      if (members.length > 0 && members.every(([k, v]) => v != null && typeof v !== "object" && row[k] === v)) {
+        const set = copies.get(objKey) ?? new Set<string>();
+        for (const [k] of members) set.add(k);
+        copies.set(objKey, set);
+      }
+    }
+  }
+  if (copies.size === 0) return rows;
+  for (const row of rows) {
+    for (const [objKey, keys] of copies) {
+      const o = row[objKey];
+      if (isPlainObject(o) && [...keys].some((k) => k in row && k in o && row[k] !== o[k])) return rows;
+    }
+  }
+  const drop = new Set([...copies.values()].flatMap((s) => [...s]));
+  return rows.map((row) => Object.fromEntries(Object.entries(row).filter(([k]) => !drop.has(k))) as T);
+}
+
+export function dropFlattenedCopies<T extends Row>(row: T): T {
+  const [out] = dropFlattenedResultCopies([row]);
+  return out;
+}

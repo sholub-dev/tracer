@@ -3,7 +3,7 @@ import { z } from "zod";
 import { tool, type Tool, type UIMessage } from "ai";
 import { SESSION_KIND, type Finding } from "@tracer-sh/shared";
 import type { Db } from "../db/driver.js";
-import { chatSessions, monitorTriggers } from "../db/schema.js";
+import { chatSessions, monitors, monitorTriggers } from "../db/schema.js";
 import { extractAnalysis } from "../agents/analysis.js";
 import { CONFIG } from "../config.js";
 import { decodeMessages } from "../lib/messages-codec.js";
@@ -87,6 +87,31 @@ export async function readOutcome(db: Db, sessionId: string): Promise<Outcome> {
   } catch {
     return { analysis: "", report: null, latestReport: null, finding: null, dismissed: null };
   }
+}
+
+export interface AlertBrief {
+  name: string;
+  triggeredAt: number;
+  severity: AlertSummary["severity"] | "unknown";
+  verdict: string;
+  headline: string;
+  dismissed: boolean;
+}
+
+/** The banner text of a firing's session, read from its messages: the stored outcome lands after the session turns done. */
+export async function alertBrief(db: Db, sessionId: string): Promise<AlertBrief | null> {
+  const trigger = await db.select({ name: monitors.name, triggeredAt: monitorTriggers.triggeredAt }).from(monitorTriggers)
+    .innerJoin(monitors, eq(monitors.id, monitorTriggers.monitorId))
+    .where(eq(monitorTriggers.sessionId, sessionId)).orderBy(desc(monitorTriggers.triggeredAt)).get();
+  if (!trigger) return null;
+  const { report, finding, dismissed } = await readOutcome(db, sessionId);
+  return {
+    ...trigger,
+    severity: report?.severity ?? "unknown",
+    verdict: finding?.kind === "root_cause" ? finding.verdict?.replace("_", " ") ?? "" : "",
+    headline: (finding?.headline ?? "").replace(/\*\*|`/g, "").trim(),
+    dismissed: dismissed !== null,
+  };
 }
 
 export const outcomeSummary = (o: { analysis: string; finding: Finding | null }) => o.finding?.headline ?? firstSentence(o.analysis);

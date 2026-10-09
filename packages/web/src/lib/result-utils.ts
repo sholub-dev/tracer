@@ -1,4 +1,4 @@
-import { isUnixMs, isUnixSec } from "@tracer-sh/shared";
+import { isPlainObject, isUnixMs, isUnixSec, normalizeNewRelicRows } from "@tracer-sh/shared";
 
 export const HIDDEN_KEYS = new Set(["beginTimeSeconds", "endTimeSeconds", "inspectedCount"]);
 
@@ -26,18 +26,36 @@ export function isPercentileResult(value: unknown): boolean {
   return keys.length === 1 && !isNaN(Number(keys[0]));
 }
 
-/** Coerce a NerdGraph cell to a chartable number. Unwraps percentile and apdex objects; returns null otherwise. */
+/** Coerce a NerdGraph cell to a chartable number. Unwraps percentile objects; returns null otherwise. */
 export function coerceNumeric(value: unknown): number | null {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (isPercentileResult(value)) {
     const inner = Object.values(value as object)[0];
     return typeof inner === "number" && Number.isFinite(inner) ? inner : null;
   }
-  if (value != null && typeof value === "object" && "score" in value) {
-    const apdex = value as { score: unknown; count?: unknown };
-    return apdex.count === 0 ? null : coerceNumeric(apdex.score);
-  }
   return null;
+}
+
+/** A non-empty object whose leaves, at any depth, are all numbers, numeric values or null: it reads as a group of big numbers. */
+export function isNumericGroup(v: unknown): v is Record<string, unknown> {
+  if (!isGroup(v)) return false;
+  const members = Object.values(v);
+  return members.length > 0 && members.every((m) => m == null || coerceNumeric(m) !== null || (isGroup(m) && isNumericGroup(m)));
+}
+
+export const isGroup = (v: unknown): v is Record<string, unknown> => isPlainObject(v) && !isPercentileResult(v);
+
+/** Chart input: replace each object-valued column with one `<column>.<member>` column per member, in returned order. */
+export function expandObjectColumns(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+  if (!rows.some((r) => Object.values(r).some(isGroup))) return rows;
+  const expand = (row: Record<string, unknown>, prefix = ""): [string, unknown][] =>
+    Object.entries(row).flatMap(([k, v]) => (isGroup(v) ? expand(v, `${prefix}${k}.`) : [[`${prefix}${k}`, v] as [string, unknown]]));
+  const expanded = rows.map((r) => expand(r));
+  const keys = [...new Set(expanded.flatMap((e) => e.map(([k]) => k)))];
+  return expanded.map((e) => {
+    const m = new Map(e);
+    return Object.fromEntries(keys.filter((k) => m.has(k)).map((k) => [k, m.get(k)]));
+  });
 }
 
 export function formatValue(value: unknown, key?: string): string {
@@ -49,7 +67,7 @@ export function formatValue(value: unknown, key?: string): string {
     return value.toFixed(2);
   }
   if (Array.isArray(value)) {
-    if (value.length <= 5) return value.join(", ");
+    if (value.length <= 5) return value.map((v) => (v != null && typeof v === "object" ? JSON.stringify(v) : v)).join(", ");
     return `[${value.length} items]`;
   }
   if (typeof value === "object") {
@@ -159,4 +177,10 @@ export function pivotCompareWith(rows: Record<string, unknown>[]) {
   }
 
   return { facetLabel, valueKeys, periods, grouped };
+}
+
+/** New Relic chats saved before the server dropped flattened copies still hold them; other providers' rows are kept whole. */
+export function dropFlattenedRowCopies(data: unknown, provider?: string): unknown {
+  if (provider !== "newrelic" || !Array.isArray(data)) return data;
+  return data.every(isPlainObject) ? normalizeNewRelicRows(data) : data;
 }

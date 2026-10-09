@@ -3,7 +3,7 @@ import { Area, Bar, BarChart, CartesianGrid, Cell, ComposedChart, ReferenceArea,
 import { ChartContainer, ChartLegend, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
 import { cn } from "@/lib/utils";
 import { formatClock, formatDateTime, formatShortDate } from "../../lib/format";
-import { coerceNumeric } from "../../lib/result-utils";
+import { coerceNumeric, expandObjectColumns } from "../../lib/result-utils";
 
 const SKIP_KEYS = new Set(["beginTimeSeconds", "endTimeSeconds", "inspectedCount", "facet", "comparison"]);
 // Matches the legend reserve QueryChart adds for growWithLegend.
@@ -121,10 +121,12 @@ function formatYAxis(value: unknown): string {
   return String(Number(Math.abs(n) < 1 ? n.toPrecision(3) : n.toFixed(2)));
 }
 
-// NerdGraph also flattens apdex fields (score, s, t, f, count) next to the apdex object; skip those copies.
-function getMetricKeys(row: Record<string, unknown>): string[] {
-  const nested = Object.values(row).filter((v): v is Record<string, unknown> => v != null && typeof v === "object" && "score" in v);
-  return Object.keys(row).filter((k) => !SKIP_KEYS.has(k) && !isFacetDupe(row, k) && !nested.some((o) => o[k] === row[k]));
+// Union over all rows: a null first bucket must not hide the members a later row expands into.
+export function getMetricKeys(rows: Record<string, unknown>[]): string[] {
+  const keys = new Set<string>();
+  for (const row of rows) for (const k of Object.keys(row)) if (!SKIP_KEYS.has(k) && !isFacetDupe(row, k)) keys.add(k);
+  // An all-null raw key is the unexpanded form of an object whose members appear under "<key>." in other rows.
+  return [...keys].filter((k) => !([...keys].some((o) => o.startsWith(`${k}.`)) && rows.every((r) => r[k] == null)));
 }
 
 function isFacetDupe(row: Record<string, unknown>, key: string): boolean {
@@ -139,7 +141,7 @@ function isCountSeries(s: Series): boolean {
   return s.data.every((p) => p.y == null || Number.isInteger(p.y));
 }
 
-// Distinct metrics 10x smaller than the largest get a right axis, so e.g. Apdex (0-1) isn't flat next to request counts.
+// Distinct metrics 10x smaller than the largest get a right axis, so a 0-1 rate isn't flat next to request counts.
 function rightAxisFlags(series: Series[]): boolean[] {
   const peaks = series.map((s) => Math.max(0, ...s.data.map((p) => Math.abs(p.y ?? 0))));
   const top = Math.max(0, ...peaks);
@@ -357,7 +359,8 @@ function TimeseriesPlot({ series, containerSize, plotHeight, threshold, dualAxis
   );
 }
 
-export function TimeseriesChart({ rows, containerSize, threshold }: { rows: Record<string, unknown>[]; containerSize?: ContainerSize; threshold?: Threshold }) {
+export function TimeseriesChart({ rows: raw, containerSize, threshold }: { rows: Record<string, unknown>[]; containerSize?: ContainerSize; threshold?: Threshold }) {
+  const rows = useMemo(() => expandObjectColumns(raw), [raw]);
   const hasFacet = "facet" in rows[0];
   const hasComparison = "comparison" in rows[0];
   const series = useMemo(
@@ -371,14 +374,14 @@ export function TimeseriesChart({ rows, containerSize, threshold }: { rows: Reco
 }
 
 function simpleSeries(rows: Record<string, unknown>[]): Series[] {
-  return getMetricKeys(rows[0]).map((k) => ({
+  return getMetricKeys(rows).map((k) => ({
     name: k,
     data: rows.map((r) => ({ x: r.beginTimeSeconds as number, y: coerceNumeric(r[k]) })),
   }));
 }
 
 function facetSeries(rows: Record<string, unknown>[]): Series[] {
-  const metricKey = getMetricKeys(rows[0])[0];
+  const metricKey = getMetricKeys(rows)[0];
   if (!metricKey) return [];
   const facetLabel = (r: Record<string, unknown>) => (Array.isArray(r.facet) ? (r.facet as string[]).join(", ") : String(r.facet));
 
@@ -401,7 +404,7 @@ function facetSeries(rows: Record<string, unknown>[]): Series[] {
 }
 
 function compareSeries(rows: Record<string, unknown>[]): Series[] {
-  const mKey = getMetricKeys(rows[0])[0];
+  const mKey = getMetricKeys(rows)[0];
   if (!mKey) return [];
 
   const periodRows = new Map<string, Record<string, unknown>[]>();

@@ -5,7 +5,7 @@ import { SESSION_KIND, SESSION_PREFIX, unixNow } from "@tracer-sh/shared";
 import { publicProcedure, router } from "../trpc.js";
 import { runInTransaction } from "../../db/driver.js";
 import { chatSessions, monitors, monitorTriggers } from "../../db/schema.js";
-import { parseTriggerGroups } from "../../monitors/repeats.js";
+import { alertBrief, parseTriggerGroups } from "../../monitors/repeats.js";
 import { deleteMonitor, setMonitorToggles } from "../../monitors/store.js";
 import { ingestLagSeconds } from "../../monitors/triage.js";
 
@@ -33,6 +33,10 @@ export const monitorsRouter = router({
       lastRunAt: m.lastCheckedAt === null ? null : m.lastCheckedAt + ingestLagSeconds(m.query),
     }));
   }),
+
+  alertBrief: publicProcedure
+    .input(z.object({ sessionId: z.string() }))
+    .query(({ ctx, input }) => alertBrief(ctx.db, input.sessionId)),
 
   reorder: publicProcedure
     .input(z.object({ ids: z.array(z.string()) }))

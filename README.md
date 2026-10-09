@@ -9,7 +9,7 @@
 Tracer is an AI incident investigator that runs on your machine and on your iPhone.
 It uses your own API keys. There is no Tracer server, no account and no telemetry.
 
-![An investigation in Tracer](docs/screenshots/desktop-investigation.png)
+[![Tracer intro: ask, parallel queries, root cause, memory, monitors, iPhone sync, local-first](docs/screenshots/motion-intro.gif)](docs/screenshots/motion-intro.mp4)
 
 ## What it does
 
@@ -19,6 +19,8 @@ It uses your own API keys. There is no Tracer server, no account and no telemetr
 - **Takes any evidence.** Paste or drop screenshots, logs, code or PDFs into the chat.
 - **Shares results.** Export a post-mortem as Markdown, or an investigation as a PNG. Drop that PNG back into Tracer to reopen the full analysis.
 - **Remembers.** The agent keeps notes across sessions. Each session shows its cost.
+
+![An investigation in Tracer](docs/screenshots/desktop-investigation.png)
 
 ## Quick start
 

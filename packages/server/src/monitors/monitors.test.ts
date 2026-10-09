@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import Database from "better-sqlite3-multiple-ciphers";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { sql } from "drizzle-orm";
-import { substituteWindow } from "@tracer-sh/shared";
+import { normalizeNewRelicRows, substituteWindow } from "@tracer-sh/shared";
 import * as schema from "../db/schema.js";
 import type { Db } from "../db/driver.js";
 import { evaluateCondition, extractGroups, parseCondition, sumGroups } from "./condition.js";
@@ -68,6 +68,33 @@ test("extractGroups handles no facet, facet string, facet array and nulls", () =
   assert.deepEqual(extractGroups(null), []);
   assert.deepEqual(extractGroups([]), []);
   assert.equal(sumGroups([{ key: "a", count: 2 }, { key: "b", count: 3 }]), 5);
+});
+
+test("extractGroups reads the numbers inside object columns", () => {
+  assert.deepEqual(extractGroups([{ "percentile.duration": { "95": 1.5 } }]), [{ key: "", count: 1.5 }]);
+  assert.deepEqual(extractGroups([{ facet: "a", appName: "a", "apdex.duration": { score: 0.7, count: 9, f: 1, s: 5, t: 3 } }]), [{ key: "a", count: 0.7 }]);
+  assert.deepEqual(extractGroups([{ "percentile.duration": { "95": 1.5 }, count: 3 }]), [{ key: "", count: 3 }]);
+});
+
+const apdexRows = (score: number, count = 676) => [{ "apdex.d": { count, f: 2, s: 638, score, t: 36 }, count, f: 2, s: 638, score, t: 36 }];
+
+test("an apdex monitor reads the score, not the transaction count", () => {
+  const condition = parseCondition("< 0.9")!;
+  const fires = (score: number) => evaluateCondition(condition, sumGroups(extractGroups(normalizeNewRelicRows(apdexRows(score)))));
+  assert.equal(fires(0.85), true);
+  assert.equal(fires(0.97), false);
+});
+
+test("a faceted apdex result gives groups keyed by facet with the score as count", () => {
+  const rows = [
+    { facet: "a", "apdex.d": { count: 9, f: 1, s: 5, score: 0.7, t: 3 }, count: 9, f: 1, s: 5, score: 0.7, t: 3 },
+    { facet: "b", "apdex.d": { count: 0, f: 0, s: 0, score: 0, t: 0 }, count: 0, f: 0, s: 0, score: 0, t: 0 },
+  ];
+  assert.deepEqual(extractGroups(normalizeNewRelicRows(rows)), [{ key: "a", count: 0.7 }]);
+});
+
+test("an apdex window with no traffic is no data, not a score of 0", () => {
+  assert.deepEqual(extractGroups(normalizeNewRelicRows(apdexRows(0, 0))), []);
 });
 
 test("extractGroups for PostHog joins non-numeric columns as the key and uses the first number as count", () => {

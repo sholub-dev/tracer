@@ -4,6 +4,7 @@ import { Loader2 } from "lucide-react";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Shell } from "./components/layout/Shell";
 import { AppSidebar, type Page } from "./components/layout/Sidebar";
+import { AlertToaster } from "./components/layout/AlertBanner";
 import { Toaster } from "@/components/ui/sonner";
 import { CopyFromComputerDialog } from "@/components/settings/CopyFromComputerDialog";
 import { IS_IOS } from "./lib/platform";
@@ -180,6 +181,7 @@ export function App() {
         </ErrorBoundary>
       </Shell>
       {IS_IOS && <CopyFromComputerDialog />}
+      <AlertToaster />
       <Toaster
         position="bottom-center"
         theme="dark"

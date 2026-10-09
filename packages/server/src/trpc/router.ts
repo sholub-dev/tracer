@@ -30,3 +30,4 @@ export const appRouter = router({
 });
 
 export type AppRouter = typeof appRouter;
+export type { AlertBrief } from "../monitors/repeats.js";

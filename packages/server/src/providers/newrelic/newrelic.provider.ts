@@ -1,9 +1,10 @@
-import type {
-  ChatMode,
-  ChatToolWriter,
-  ChatToolMemoryContext,
-  PingResult,
-  ProviderToolKit,
+import {
+  normalizeNewRelicRows,
+  type ChatMode,
+  type ChatToolWriter,
+  type ChatToolMemoryContext,
+  type PingResult,
+  type ProviderToolKit,
 } from "@tracer-sh/shared";
 import type { NewRelicProviderConfig, NrqlResult } from "./types.js";
 import { BaseProvider } from "../base.provider.js";
@@ -63,7 +64,9 @@ export class NewRelicProvider extends BaseProvider {
     const results = response.data?.actor.account.nrql.results ?? [];
     // An UNTIL in the future returns empty buckets that read as a drop to zero.
     const now = Date.now() / 1000;
-    return results.filter((r: NrqlResult) => !(typeof r.beginTimeSeconds === "number" && r.beginTimeSeconds > now));
+    return normalizeNewRelicRows(
+      results.filter((r: NrqlResult) => !(typeof r.beginTimeSeconds === "number" && r.beginTimeSeconds > now)),
+    );
   }
 
   aiIssues(filter: AiIssuesFilter, startMs: number, endMs: number): Promise<AiIssue[]> {

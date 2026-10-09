@@ -24,6 +24,7 @@ import { IS_IOS } from "../../lib/platform";
 import { ConfirmDialog } from "../common/ConfirmDialog";
 import { IconButton } from "../common/IconButton";
 import { MoreActionsMenu } from "../common/MoreActionsMenu";
+import { useAlertBanners } from "./AlertBanner";
 import { RecentSessions } from "./RecentSessions";
 import { UpdateModal } from "./UpdateModal";
 
@@ -73,6 +74,8 @@ export function AppSidebar({
     onSelectSession(id);
     setOpenMobile(false);
   }, [onSelectSession, setOpenMobile]);
+
+  useAlertBanners(openSession, currentPage === "debug" ? currentSessionId : null);
 
   return (
     <Sidebar>

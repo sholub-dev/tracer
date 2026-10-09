@@ -15,7 +15,7 @@ function fmtVal(v: unknown): string {
     // toFixed(2) would turn 0.004 into "0.00"
     return Math.abs(v) < 1 ? Number(v.toPrecision(3)).toString() : v.toFixed(2);
   }
-  if (Array.isArray(v)) return v.length <= 5 ? v.join("; ") : `[${v.length} items]`;
+  if (Array.isArray(v)) return v.length <= 5 ? v.map((x) => (x != null && typeof x === "object" ? JSON.stringify(x) : x)).join("; ") : `[${v.length} items]`;
   if (typeof v === "object") return JSON.stringify(v);
   return String(v);
 }
@@ -69,23 +69,27 @@ function facetValue(row: Record<string, unknown>): string {
   return fmtVal(f);
 }
 
-/** Keep every 10th point, plus the max and min row of each numeric column, in time order. */
+// Object columns (apdex) hold their numbers as members.
+function numbers(v: unknown, path: string): [string, number][] {
+  if (typeof v === "number") return Number.isFinite(v) ? [[path, v]] : [];
+  if (v == null || typeof v !== "object" || Array.isArray(v)) return [];
+  return Object.entries(v).flatMap(([k, x]) => numbers(x, `${path}.${k}`));
+}
+
+/** Keep every 10th point, plus the max and min row of each number, in time order. */
 function downsample(rows: Record<string, unknown>[], keys: string[]): { rows: Record<string, unknown>[]; step: number } {
   const step = Math.ceil(rows.length / 10);
   const keep = new Set<number>();
   for (let i = 0; i < rows.length; i += step) keep.add(i);
-  for (const k of keys) {
-    let max = -1;
-    let min = -1;
-    rows.forEach((r, i) => {
-      const v = r[k];
-      if (typeof v !== "number" || !Number.isFinite(v)) return;
-      if (max < 0 || v > (rows[max][k] as number)) max = i;
-      if (min < 0 || v < (rows[min][k] as number)) min = i;
-    });
-    if (max >= 0) keep.add(max);
-    if (min >= 0) keep.add(min);
-  }
+  const max = new Map<string, { i: number; v: number }>();
+  const min = new Map<string, { i: number; v: number }>();
+  rows.forEach((r, i) => {
+    for (const [path, v] of keys.flatMap((k) => numbers(r[k], k))) {
+      if (!max.has(path) || v > max.get(path)!.v) max.set(path, { i, v });
+      if (!min.has(path) || v < min.get(path)!.v) min.set(path, { i, v });
+    }
+  });
+  for (const { i } of [...max.values(), ...min.values()]) keep.add(i);
   return { rows: rows.filter((_, i) => keep.has(i)), step };
 }
 

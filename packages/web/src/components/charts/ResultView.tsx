@@ -1,4 +1,4 @@
-import { lazy, memo, Suspense, useState, type ComponentProps, type ReactNode } from "react";
+import { Fragment, lazy, memo, Suspense, useState, type ComponentProps, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
@@ -54,10 +54,17 @@ export function JsonTree(props: ComponentProps<typeof LazyJsonTree>) {
   );
 }
 
+// Paths and dotted names have no spaces, so they get a break point after each separator instead of overflowing the cell.
+// A separator before a digit stays whole, so "1234.56" never wraps at its decimal point.
+// No lookbehind: Safari before 16.4 rejects it, and the iOS app targets iOS 15.
+const SEPARATOR = /([/._])(?!\d)/;
+
+// A tap shows the whole value: phones have no hover title. A drag that selects text to copy does not toggle it.
 function CellText({ value }: { value: string }) {
+  const [open, setOpen] = useState(false);
   return (
-    <span className="line-clamp-2 cursor-default" title={value}>
-      {value}
+    <span className={cn("cursor-default", !open && "line-clamp-2")} title={value} onClick={() => { if (!window.getSelection()?.toString()) setOpen(!open); }}>
+      {value.split(SEPARATOR).map((part, i) => <Fragment key={i}>{part}{i % 2 === 1 && <wbr />}</Fragment>)}
     </span>
   );
 }

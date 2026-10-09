@@ -4,7 +4,6 @@ import { appRouter } from "./trpc/router.js";
 import { startRuntime } from "./runtime.js";
 
 export type { CapacitorConnection };
-export { sessionChanges } from "./lib/session-events.js";
 
 /** Starts the server inside the iOS app: no HTTP listener, no API v1, no static files, no GCP. */
 export async function startMobileServer({ connection, llmFetch }: { connection: CapacitorConnection; llmFetch: typeof fetch }) {
@@ -17,7 +16,5 @@ export async function startMobileServer({ connection, llmFetch }: { connection: 
     router: appRouter,
     createContext: async () => context,
     scheduler,
-    /** Agent runs in progress, monitor investigations included. */
-    activeRuns: () => context.activeStreams.size,
   };
 }

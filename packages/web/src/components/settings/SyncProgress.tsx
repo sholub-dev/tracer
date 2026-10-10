@@ -16,6 +16,18 @@ function useNow(active: boolean): number {
   return now;
 }
 
+/** True once `active` has stayed true for `ms`. */
+function useAfter(active: boolean, ms: number): boolean {
+  const [passed, setPassed] = useState(false);
+  useEffect(() => {
+    setPassed(false);
+    if (!active) return;
+    const timer = setTimeout(() => setPassed(true), ms);
+    return () => clearTimeout(timer);
+  }, [active, ms]);
+  return passed;
+}
+
 /** The steps of one sync. The computer and the phone render the same view of the same session. */
 export function SyncProgress({ session, device, children }: { session: SyncSession; device: Device; children?: ReactNode }) {
   const states = stepStates(session);
@@ -25,6 +37,8 @@ export function SyncProgress({ session, device, children }: { session: SyncSessi
   const waitsForPerson = phase === "waiting" || phase === "approval";
   const now = useNow(waitsForPerson);
   const fraction = progressFraction(session.bytes);
+  // Most syncs move their data in under a second; a bar that flashes from half to full looks broken.
+  const showBar = useAfter(phase === "transfer", 1000);
 
   return (
     <div className="min-w-0 flex-1 basis-56 space-y-4">
@@ -58,7 +72,7 @@ export function SyncProgress({ session, device, children }: { session: SyncSessi
                       {stepMessage(session, device)}
                     </p>
                     {phase === "approval" && session.mode && <p className="text-muted-foreground">{modeText(session.mode, device)}</p>}
-                    {phase === "transfer" && (
+                    {phase === "transfer" && showBar && (
                       <div className="space-y-1">
                         <div
                           role="progressbar"
@@ -69,7 +83,7 @@ export function SyncProgress({ session, device, children }: { session: SyncSessi
                           className="h-1.5 overflow-hidden rounded-full bg-muted"
                         >
                           <div
-                            className={cn("h-full rounded-full bg-primary transition-[width]", fraction === null && "w-1/3 animate-pulse")}
+                            className={cn("h-full rounded-full bg-primary transition-[width] duration-700 ease-out", fraction === null && "w-1/3 animate-pulse")}
                             style={fraction === null ? undefined : { width: `${fraction * 100}%` }}
                           />
                         </div>

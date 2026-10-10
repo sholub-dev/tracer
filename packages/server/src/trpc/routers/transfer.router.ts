@@ -2,7 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { publicProcedure, router } from "../trpc.js";
 import { getSetting } from "../../transfer/peer.js";
-import { inspectCopy, receiveCopy } from "../../transfer/receive.js";
+import { cancelReceive, inspectCopy, receiveStatus, startReceive } from "../../transfer/receive.js";
 
 // Loaded on demand: it opens a network listener, which only the desktop server can do.
 const sender = () => import("../../transfer/send.js");
@@ -33,6 +33,7 @@ export const transferRouter = router({
     }
   }),
 
+  /** Starts the sync and returns at once; `receiveStatus` shows how it goes. */
   receive: publicProcedure.input(z.object({ link: z.string() })).mutation(async ({ ctx, input }) => {
     const assertIdle = () => {
       if (ctx.activeStreams.size > 0) {
@@ -41,11 +42,16 @@ export const transferRouter = router({
     };
     assertIdle();
     try {
-      // Checked again after the download: a monitor or timer can start a run while the copy arrives.
-      return await receiveCopy(ctx.db, input.link, assertIdle);
+      // Checked again after the download: a monitor or timer can start a run while the data arrives.
+      const { done, session } = await startReceive(ctx.db, input.link, assertIdle);
+      // The failure is part of the status.
+      done.catch(() => undefined);
+      return session;
     } catch (err) {
       if (err instanceof TRPCError) throw err;
       throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : String(err) });
     }
   }),
+  receiveStatus: publicProcedure.query(() => receiveStatus()),
+  cancelReceive: publicProcedure.mutation(() => cancelReceive()),
 });

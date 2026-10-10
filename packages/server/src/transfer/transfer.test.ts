@@ -7,7 +7,7 @@ import { appSettings, chatSessions, monitors, monitorTriggers, providerConfigs, 
 import { limits, MAX_SYNC_BYTES, MAX_UNPACKED_BYTES, randomSecret, seal, TooLargeError, unseal } from "./crypto.js";
 import { exportSnapshot, FORMAT, importSnapshot } from "./snapshot.js";
 import { exportSyncPayload } from "./sync.js";
-import { inspectCopy, parseCopyLink, receiveCopy } from "./receive.js";
+import { cancelReceive, inspectCopy, parseCopyLink, receiveCopy, receiveStatus, startReceive } from "./receive.js";
 import { approve, deny, sendStatus, startSend, stopSend } from "./send.js";
 import { getMark, getSetting } from "./peer.js";
 import { eq } from "drizzle-orm";
@@ -37,7 +37,7 @@ async function until(check: () => boolean) {
 async function receiveWithApproval(phone: Awaited<ReturnType<typeof freshDb>>, link: string) {
   const done = receiveCopy(phone, link);
   done.catch(() => {});
-  await until(() => sendStatus().state === "approval");
+  await until(() => sendStatus()?.phase === "approval");
   approve();
   return done;
 }
@@ -100,8 +100,9 @@ test("replace of too much data fails on the phone with the size; the computer sh
   assert.ok(fullCopy.bytes > 2000);
   await assert.rejects(receiveWithApproval(phone, link), /data to sync is [\d.]+ MB after compression/);
   assert.equal((await phone.select().from(chatSessions).all()).length, 0);
-  assert.equal(sendStatus().state, "failed");
-  assert.match(sendStatus().error ?? "", /after compression/);
+  assert.equal(sendStatus()?.phase, "failed");
+  assert.equal(sendStatus()?.error?.side, "computer");
+  assert.match(sendStatus()?.error?.message ?? "", /after compression/);
 });
 
 test("startSend returns an estimate of the compressed size of a full copy", async (t) => {
@@ -138,10 +139,10 @@ test("send serves one copy, once; receive imports it", async (t) => {
   const target = await freshDb();
   const { link, qrSvg } = await startSend(source, () => 0);
   assert.match(qrSvg, /^<svg/);
-  assert.equal(sendStatus().state, "waiting");
+  assert.equal(sendStatus()?.phase, "waiting");
 
   await receiveWithApproval(target, link);
-  assert.equal(sendStatus().state, "sent");
+  assert.equal(sendStatus()?.phase, "done");
   assert.equal((await exportSnapshot(target)).tables.chat_sessions.length, 1);
   await assert.rejects(receiveCopy(target, link), /does not answer|used or expired/);
 });
@@ -178,9 +179,9 @@ test("replace waits for approval, then copies and records the peer", async (t) =
   assert.equal((await inspectCopy(phone, link)).mode, "replace");
 
   const done = receiveCopy(phone, link);
-  await until(() => sendStatus().state === "approval");
-  assert.equal(sendStatus().mode, "replace");
-  assert.match(sendStatus().phoneName ?? "", /^iPhone /);
+  await until(() => sendStatus()?.phase === "approval");
+  assert.equal(sendStatus()?.mode, "replace");
+  assert.match(sendStatus()?.phoneName ?? "", /^iPhone /);
   approve();
   assert.equal((await done).mode, "replace");
 
@@ -219,8 +220,8 @@ test("merge keeps rows from both devices", async (t) => {
     const ids = (await db.select().from(chatSessions).all()).map((r) => r.id).sort();
     assert.deepEqual(ids, ["only-computer", "only-phone", "s1"]);
   }
-  assert.equal(sendStatus().state, "sent");
-  assert.ok((sendStatus().applied ?? 0) >= 1);
+  assert.equal(sendStatus()?.phase, "done");
+  assert.ok((sendStatus()?.result?.computer?.applied ?? 0) >= 1);
   assert.equal(await setting(phone, "sync_peer_id"), await setting(computer, "device_id"));
   assert.match((await setting(computer, "sync_peer_name")) ?? "", /^iPhone /);
   assert.ok(Number(await setting(computer, "sync_last_at")) > 0);
@@ -234,7 +235,7 @@ test("replace refuses while an investigation runs on the computer", async (t) =>
   const phone = await freshDb();
   const { link } = await startSend(computer, () => 1);
   const done = receiveCopy(phone, link);
-  await until(() => sendStatus().state === "approval");
+  await until(() => sendStatus()?.phase === "approval");
   approve();
   await assert.rejects(done, /investigation is running/);
   assert.equal((await phone.select().from(chatSessions).all()).length, 0);
@@ -260,15 +261,15 @@ test("nothing is exchanged before approval; a second request gets 409", async (t
   const request = await seal(JSON.stringify({ deviceId: "p-1", name: "iPhone 0001", mode: "merge", format: FORMAT }), key);
 
   assert.equal((await post(link, "/request", await seal("{}", randomSecret()))).status, 403);
-  assert.equal(sendStatus().state, "waiting");
+  assert.equal(sendStatus()?.phase, "waiting");
   assert.equal((await fetch(from)).status, 403);
 
   assert.equal((await post(link, "/request", request)).status, 200);
-  assert.equal(sendStatus().state, "approval");
+  assert.equal(sendStatus()?.phase, "approval");
   assert.equal((await post(link, "/request", request)).status, 409);
   assert.equal((await fetch(from)).status, 403);
   assert.equal((await post(link, "/merge", await seal("{}", key))).status, 403);
-  assert.equal(((await (await fetch(new URL(from.pathname + "/status", from))).json()) as { state: string }).state, "approval");
+  assert.equal(((await (await fetch(new URL(from.pathname + "/status", from))).json()) as { phase: string }).phase, "approval");
 });
 
 test("deny ends the session and the phone sees why", async (t) => {
@@ -278,10 +279,10 @@ test("deny ends the session and the phone sees why", async (t) => {
   const { link } = await startSend(computer, () => 0);
   const done = receiveCopy(phone, link);
   const outcome = assert.rejects(done, /denied/);
-  await until(() => sendStatus().state === "approval");
+  await until(() => sendStatus()?.phase === "approval");
   deny();
   await outcome;
-  assert.equal(sendStatus().state, "denied");
+  assert.equal(sendStatus()?.phase, "denied");
   assert.equal((await phone.select().from(chatSessions).all()).length, 0);
 });
 
@@ -293,7 +294,7 @@ test("merge refuses while an investigation runs", async (t) => {
   const { link } = await startSend(computer, () => 1);
   const done = receiveCopy(phone, link);
   const outcome = assert.rejects(done, /investigation is running/);
-  await until(() => sendStatus().state === "approval");
+  await until(() => sendStatus()?.phase === "approval");
   approve();
   await outcome;
 });
@@ -306,7 +307,7 @@ async function syncOnce(computer: Awaited<ReturnType<typeof freshDb>>, phone: Aw
   globalThis.fetch = (async (url: URL, init?: RequestInit) => {
     const response = await realFetch(url, init);
     const last = new URL(url).pathname.split("/").pop();
-    const path = last === "merge" ? "merge" : last === "status" || last === "request" ? last : "copy";
+    const path = last === "merge" ? "merge" : last === "status" || last === "request" || last === "progress" || last === "cancel" ? last : "copy";
     const text = await response.clone().text();
     if (path === "merge" || path === "copy") sizes[path] = text.length;
     if (path === "merge") sizes.sent = String(init?.body).length;
@@ -430,13 +431,13 @@ test("an old phone gets a 409 with the update message", async (t) => {
   assert.match(await response.text(), /Update Tracer on the phone/);
   const noFormat = await post(link, "/request", await seal(JSON.stringify({ deviceId: "p-1", name: "iPhone", mode: "replace" }), key));
   assert.equal(noFormat.status, 409);
-  assert.equal(sendStatus().state, "waiting");
+  assert.equal(sendStatus()?.phase, "waiting");
 });
 
 test("a phone asks an old computer and is told to update it", async (t) => {
   const phone = await freshDb();
   const { createServer } = await import("node:http");
-  const server = createServer((req, res) => res.end(JSON.stringify({ state: "waiting" })));
+  const server = createServer((req, res) => res.end(JSON.stringify({ phase: "waiting" })));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   t.after(() => server.close());
   const { port } = server.address() as { port: number };
@@ -454,5 +455,131 @@ test("an old-form reply to the phone gives the update message", async () => {
   const k = await crypto.subtle.importKey("raw", Buffer.from(key, "base64url"), "AES-GCM", false, ["encrypt"]);
   const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, k, new TextEncoder().encode("{}"));
   await assert.rejects(unseal(`${Buffer.from(iv).toString("base64url")}.${Buffer.from(data).toString("base64url")}`, key), (err: Error) => err.constructor.name === "OldFormError");
-  assert.equal(FORMAT, 4);
+  assert.equal(FORMAT, 5);
+});
+
+const ask = async (link: string, mode: "merge" | "replace") =>
+  post(link, "/request", await seal(JSON.stringify({ deviceId: "p-1", name: "iPhone 0001", mode, format: FORMAT }), keyOf(link)));
+const report = async (link: string, body: object) => post(link, "/progress", await seal(JSON.stringify(body), keyOf(link)));
+const statusOf = async (link: string) => {
+  const from = new URL(new URLSearchParams(link.slice(link.indexOf("?") + 1)).get("from")!);
+  return (await (await fetch(new URL(from.pathname + "/status", from))).json()) as ReturnType<typeof sendStatus> & { format: number };
+};
+
+test("the shared status runs waiting, approval, transfer, apply; only the phone report ends it", async (t) => {
+  t.after(stopSend);
+  const { link, session } = await startSend(await seededDb(), () => 0);
+  assert.equal(session.phase, "waiting");
+  assert.ok(session.expiresAt > Date.now());
+  assert.equal((await statusOf(link)).format, FORMAT);
+
+  assert.equal((await ask(link, "replace")).status, 200);
+  const asked = await statusOf(link);
+  assert.deepEqual([asked?.phase, asked?.mode, asked?.phoneName], ["approval", "replace", "iPhone 0001"]);
+  // The phone cannot report before the computer allowed the request.
+  assert.equal((await report(link, { phase: "done" })).status, 409);
+
+  approve();
+  assert.equal((await statusOf(link))?.phase, "transfer");
+  const from = new URL(new URLSearchParams(link.slice(link.indexOf("?") + 1)).get("from")!);
+  const data = await fetch(from);
+  assert.equal(data.status, 200);
+  assert.equal(Number(data.headers.get("content-length")), (await data.text()).length);
+  await until(() => sendStatus()?.phase === "apply");
+  // The computer sent everything, but the phone has not saved it.
+  assert.equal((await report(link, { phase: "done", result: { applied: 3, deleted: 1 } })).status, 200);
+  const done = await statusOf(link);
+  assert.equal(done?.phase, "done");
+  assert.deepEqual(done?.result, { computer: { applied: 0, deleted: 0 }, phone: { applied: 3, deleted: 1 } });
+});
+
+test("a failure the phone reports shows on the computer with the side phone", async (t) => {
+  t.after(stopSend);
+  const { link } = await startSend(await seededDb(), () => 0);
+  await ask(link, "replace");
+  approve();
+  assert.equal((await report(link, { phase: "failed", error: "No space left on the phone." })).status, 200);
+  const status = await statusOf(link);
+  assert.equal(status?.phase, "failed");
+  assert.deepEqual(status?.error, { message: "No space left on the phone.", side: "phone" });
+});
+
+test("a merge that fails while the phone saves tells the computer it saved its part", async (t) => {
+  t.after(stopSend);
+  const computer = await seededDb();
+  const phone = await freshDb();
+  await receiveWithApproval(phone, (await startSend(computer, () => 0)).link);
+  await computer.insert(chatSessions).values({ id: "only-computer", title: "C", messages: "[]", status: "done" }).run();
+
+  const { link } = await startSend(computer, () => 0);
+  const { done } = await startReceive(phone, link, () => { throw new Error("An investigation is running."); });
+  done.catch(() => {});
+  await until(() => sendStatus()?.phase === "approval");
+  approve();
+  await assert.rejects(done, /investigation is running/);
+  assert.equal(sendStatus()?.phase, "failed");
+  assert.deepEqual(sendStatus()?.error, { message: "An investigation is running.", side: "phone" });
+  assert.equal(sendStatus()?.mode, "merge");
+  assert.ok(sendStatus()?.result?.computer);
+  assert.deepEqual([receiveStatus()?.phase, receiveStatus()?.error?.side], ["failed", "phone"]);
+});
+
+test("the phone view follows the sync and shows the bytes and both counts", async (t) => {
+  t.after(stopSend);
+  const computer = await seededDb();
+  const phone = await freshDb();
+  const { link } = await startSend(computer, () => 0);
+  const { done, session } = await startReceive(phone, link);
+  assert.equal(session.phase, "approval");
+  assert.equal(session.mode, "replace");
+  await until(() => sendStatus()?.phase === "approval");
+  approve();
+  await done;
+  const view = receiveStatus()!;
+  assert.equal(view.phase, "done");
+  assert.ok(view.bytes && view.bytes.total > 0 && view.bytes.done === view.bytes.total);
+  assert.deepEqual(sendStatus()?.bytes, view.bytes);
+  assert.deepEqual(view.result?.computer, { applied: 0, deleted: 0 });
+  assert.ok((view.result?.phone?.applied ?? 0) > 0);
+  assert.deepEqual(sendStatus()?.result, view.result);
+});
+
+test("a cancel on the phone ends the sync on the computer", async (t) => {
+  t.after(stopSend);
+  const { link } = await startSend(await seededDb(), () => 0);
+  const phone = await freshDb();
+  const { done } = await startReceive(phone, link);
+  const outcome = assert.rejects(done);
+  await until(() => sendStatus()?.phase === "approval");
+  await cancelReceive();
+  await outcome;
+  assert.equal(sendStatus()?.phase, "cancelled");
+  assert.equal(sendStatus()?.error?.side, "phone");
+  assert.equal(receiveStatus()?.phase, "cancelled");
+  assert.equal((await phone.select().from(chatSessions).all()).length, 0);
+});
+
+test("a cancel on the computer shows as cancelled on the phone, not as expired", async (t) => {
+  t.after(stopSend);
+  const { link } = await startSend(await seededDb(), () => 0);
+  const { done } = await startReceive(await freshDb(), link);
+  const outcome = assert.rejects(done, /cancelled/);
+  await until(() => sendStatus()?.phase === "approval");
+  stopSend();
+  await outcome;
+  assert.equal(receiveStatus()?.phase, "cancelled");
+  assert.deepEqual(receiveStatus()?.error, { message: "Cancelled on the computer.", side: "computer" });
+  // The status stays readable for a moment after the end.
+  assert.equal((await statusOf(link))?.phase, "cancelled");
+});
+
+test("only one sync runs on the phone at a time", async (t) => {
+  t.after(stopSend);
+  const { link } = await startSend(await seededDb(), () => 0);
+  const phone = await freshDb();
+  const { done } = await startReceive(phone, link);
+  done.catch(() => {});
+  await assert.rejects(startReceive(phone, link), /already running/);
+  stopSend();
+  await done.catch(() => {});
 });

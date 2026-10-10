@@ -1,4 +1,4 @@
-import { isPlainObject, isUnixMs, isUnixSec, normalizeNewRelicRows } from "@tracer-sh/shared";
+import { isPlainObject, mainMemberKey, isUnixMs, isUnixSec, normalizeNewRelicRows } from "@tracer-sh/shared";
 
 export const HIDDEN_KEYS = new Set(["beginTimeSeconds", "endTimeSeconds", "inspectedCount"]);
 
@@ -56,6 +56,16 @@ export function expandObjectColumns(rows: Record<string, unknown>[]): Record<str
     const m = new Map(e);
     return Object.fromEntries(keys.filter((k) => m.has(k)).map((k) => [k, m.get(k)]));
   });
+}
+
+/** Monitor input: each object column keeps only its main member, the value the monitor compares. */
+export function mainMemberColumns(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+  const main = (v: unknown): unknown => {
+    if (!isPlainObject(v)) return v;
+    const key = mainMemberKey(v);
+    return key === undefined ? null : main(v[key]);
+  };
+  return rows.map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, main(v)])));
 }
 
 export function formatValue(value: unknown, key?: string): string {

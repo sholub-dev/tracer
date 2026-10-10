@@ -5,8 +5,8 @@ import { cn } from "@/lib/utils";
 import { Markdown } from "../../lib/markdown";
 import { hasErrorOutput } from "../../lib/chat-utils";
 import type { Threshold } from "./ChartView";
-import { HIDDEN_KEYS, dropFlattenedRowCopies, formatValue, isPercentileResult, buildColumns, pivotCompareWith, coerceNumeric, type Column } from "../../lib/result-utils";
-import { KeyFigures, isFigureGroup } from "./KeyFigures";
+import { HIDDEN_KEYS, dropFlattenedRowCopies, formatValue, isNumericGroup, isPercentileResult, buildColumns, pivotCompareWith, coerceNumeric, type Column } from "../../lib/result-utils";
+import { KeyFigures } from "./KeyFigures";
 
 // Lazy so recharts and react-json-view-lite stay out of the chat entry chunk.
 const LazyTimeseriesChart = lazy(() => import("./ChartView").then((m) => ({ default: m.TimeseriesChart })));
@@ -131,7 +131,7 @@ function Td({ children, numeric }: { children: ReactNode; numeric?: boolean }) {
 }
 
 const isNumeric = (value: unknown) => coerceNumeric(value) !== null;
-const isFigure = (value: unknown) => isNumeric(value) || isFigureGroup(value);
+const isFigure = (value: unknown) => isNumeric(value) || isNumericGroup(value);
 
 function DataTable({ columns, rows, totalRows }: { columns: Column[]; rows: Record<string, unknown>[]; totalRows?: number }) {
   const numeric = columns.map((col) => isNumeric(col.get(rows[0])));

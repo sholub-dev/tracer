@@ -1,6 +1,6 @@
 import { memo, useRef, useState } from "react";
 import { AlertCircle, ClipboardCheck, Copy, History, LayoutGrid, Loader2, Timer, type LucideIcon } from "lucide-react";
-import { CLIENT_TOOL_NAMES, type ProgressPart } from "@tracer-sh/shared";
+import { CLIENT_TOOL_NAMES, isPlainObject, type ProgressPart } from "@tracer-sh/shared";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { Markdown } from "../../lib/markdown";
@@ -127,8 +127,6 @@ function stepTitle(part: ToolPart, provider: string): string {
 function isRowResult(results: unknown): boolean {
   return Array.isArray(results) && results.length > 0 && results.every((r) => r !== null && typeof r === "object");
 }
-
-const isPlainObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
 // A tool that returns its records as rows, or as one `{ key: rows }` field, shows them like a query result.
 function rowsOf(output: unknown): unknown[] | null {

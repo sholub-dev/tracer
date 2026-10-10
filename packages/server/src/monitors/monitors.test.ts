@@ -6,9 +6,9 @@ import { sql } from "drizzle-orm";
 import { normalizeNewRelicRows, substituteWindow } from "@tracer-sh/shared";
 import * as schema from "../db/schema.js";
 import type { Db } from "../db/driver.js";
-import { evaluateCondition, extractGroups, parseCondition, sumGroups } from "./condition.js";
+import { evaluateCondition, evaluateGroups, extractGroups, parseCondition, sumGroups } from "./condition.js";
 import { byRelevance, classifyGroups, outcomeSummary, readPastSessionTool } from "./repeats.js";
-import { isFailedWindow, nextWindow } from "./scheduler.js";
+import { isFailedWindow, nextWindow, openWindow } from "./scheduler.js";
 import { validateMonitor } from "./validate.js";
 import { summaryFromMessages } from "./alert-summary.js";
 import type { UIMessage } from "ai";
@@ -54,26 +54,26 @@ test("evaluateCondition applies each operator", () => {
 });
 
 test("extractGroups handles no facet, facet string, facet array and nulls", () => {
-  assert.deepEqual(extractGroups([{ count: 4 }]), [{ key: "", count: 4 }]);
+  assert.deepEqual(extractGroups([{ count: 4 }]), [{ key: "", count: 4, additive: true }]);
   assert.deepEqual(
     extractGroups([{ facet: "svc-a", "entity.name": "svc-a", count: 2 }, { facet: "svc-b", "entity.name": "svc-b", count: 3 }]),
-    [{ key: "svc-a", count: 2 }, { key: "svc-b", count: 3 }],
+    [{ key: "svc-a", count: 2, additive: true }, { key: "svc-b", count: 3, additive: true }],
   );
   assert.deepEqual(
     extractGroups([{ facet: ["svc-a", 500], appName: "svc-a", httpResponseCode: 500, count: 7 }]),
-    [{ key: "svc-a, 500", count: 7 }],
+    [{ key: "svc-a, 500", count: 7, additive: true }],
   );
-  assert.deepEqual(extractGroups([{ facet: 500, httpResponseCode: 500, count: 500 }]), [{ key: "500", count: 500 }]);
-  assert.deepEqual(extractGroups([{ "uniqueCount.x": null }]), [{ key: "", count: 0 }]);
+  assert.deepEqual(extractGroups([{ facet: 500, httpResponseCode: 500, count: 500 }]), [{ key: "500", count: 500, additive: true }]);
+  assert.deepEqual(extractGroups([{ "uniqueCount.x": null }]), [{ key: "", count: 0, additive: true }]);
   assert.deepEqual(extractGroups(null), []);
   assert.deepEqual(extractGroups([]), []);
-  assert.equal(sumGroups([{ key: "a", count: 2 }, { key: "b", count: 3 }]), 5);
+  assert.equal(sumGroups([{ key: "a", count: 2, additive: true }, { key: "b", count: 3, additive: true }]), 5);
 });
 
 test("extractGroups reads the numbers inside object columns", () => {
-  assert.deepEqual(extractGroups([{ "percentile.duration": { "95": 1.5 } }]), [{ key: "", count: 1.5 }]);
-  assert.deepEqual(extractGroups([{ facet: "a", appName: "a", "apdex.duration": { score: 0.7, count: 9, f: 1, s: 5, t: 3 } }]), [{ key: "a", count: 0.7 }]);
-  assert.deepEqual(extractGroups([{ "percentile.duration": { "95": 1.5 }, count: 3 }]), [{ key: "", count: 3 }]);
+  assert.deepEqual(extractGroups([{ "percentile.duration": { "95": 1.5 } }]), [{ key: "", count: 1.5, additive: false }]);
+  assert.deepEqual(extractGroups([{ facet: "a", appName: "a", "apdex.duration": { score: 0.7, count: 9, f: 1, s: 5, t: 3 } }]), [{ key: "a", count: 0.7, additive: false }]);
+  assert.deepEqual(extractGroups([{ "percentile.duration": { "95": 1.5 }, count: 3 }]), [{ key: "", count: 3, additive: true }]);
 });
 
 const apdexRows = (score: number, count = 676) => [{ "apdex.d": { count, f: 2, s: 638, score, t: 36 }, count, f: 2, s: 638, score, t: 36 }];
@@ -90,7 +90,53 @@ test("a faceted apdex result gives groups keyed by facet with the score as count
     { facet: "a", "apdex.d": { count: 9, f: 1, s: 5, score: 0.7, t: 3 }, count: 9, f: 1, s: 5, score: 0.7, t: 3 },
     { facet: "b", "apdex.d": { count: 0, f: 0, s: 0, score: 0, t: 0 }, count: 0, f: 0, s: 0, score: 0, t: 0 },
   ];
-  assert.deepEqual(extractGroups(normalizeNewRelicRows(rows)), [{ key: "a", count: 0.7 }]);
+  assert.deepEqual(extractGroups(normalizeNewRelicRows(rows)), [{ key: "a", count: 0.7, additive: false }]);
+});
+
+const nrFires = (cond: string, rows: Record<string, unknown>[]) => {
+  const groups = extractGroups(normalizeNewRelicRows(rows));
+  return evaluateGroups(parseCondition(cond)!, groups);
+};
+const apdexFacet = (facet: string, score: number) => ({ facet, "apdex.d": { count: 9, f: 1, s: 5, score, t: 3 }, count: 9, f: 1, s: 5, score, t: 3 });
+
+test("a faceted apdex monitor judges each facet on its own", () => {
+  const all = nrFires("< 0.8", [apdexFacet("a", 0.5), apdexFacet("b", 0.5), apdexFacet("c", 0.5)]);
+  assert.equal(all.fires, true);
+  assert.deepEqual(all.groups.map((g) => g.key), ["a", "b", "c"]);
+  const some = nrFires("< 0.8", [apdexFacet("a", 0.5), apdexFacet("b", 0.95)]);
+  assert.deepEqual(some.groups.map((g) => g.key), ["a"]);
+  assert.equal(some.value, 0.5);
+  assert.equal(nrFires("< 0.8", [apdexFacet("a", 0.9), apdexFacet("b", 0.95)]).fires, false);
+});
+
+test("a faceted average is judged per facet and records the worst firing value", () => {
+  const rows = [{ facet: "a", "average.duration": 1 }, { facet: "b", "average.duration": 3 }, { facet: "c", "average.duration": 2.5 }];
+  const e = nrFires("> 2", rows);
+  assert.equal(e.fires, true);
+  assert.deepEqual(e.groups.map((g) => g.key), ["b", "c"]);
+  assert.equal(e.value, 3);
+  assert.equal(nrFires("< 2", rows).value, 1);
+});
+
+test("faceted counts still sum and all groups fire", () => {
+  const rows = ["a", "b", "c", "d", "e"].map((facet) => ({ facet, count: 5 }));
+  const e = nrFires("> 20", rows);
+  assert.equal(e.fires, true);
+  assert.equal(e.value, 25);
+  assert.equal(e.groups.length, 5);
+  assert.equal(nrFires("> 30", rows).fires, false);
+});
+
+test("an aliased column stays additive", () => {
+  const groups = extractGroups([{ facet: "a", errors: 4 }, { facet: "b", errors: 3 }]);
+  assert.deepEqual(groups.map((g) => g.additive), [true, true]);
+  assert.equal(evaluateGroups(parseCondition("> 5")!, groups).value, 7);
+});
+
+test("a percentile object reads its highest key", () => {
+  const e = nrFires("> 2", [{ "percentile.duration": { "50": 0.4, "99": 2.1 } }]);
+  assert.equal(e.fires, true);
+  assert.equal(e.value, 2.1);
 });
 
 test("an apdex window with no traffic is no data, not a score of 0", () => {
@@ -98,16 +144,16 @@ test("an apdex window with no traffic is no data, not a score of 0", () => {
 });
 
 test("extractGroups for PostHog joins non-numeric columns as the key and uses the first number as count", () => {
-  assert.deepEqual(extractGroups([{ count: 4 }], "posthog"), [{ key: "", count: 4 }]);
+  assert.deepEqual(extractGroups([{ count: 4 }], "posthog"), [{ key: "", count: 4, additive: true }]);
   assert.deepEqual(
     extractGroups([{ url: "/a", browser: "Chrome", count: 2 }, { url: "/b", browser: null, count: 3 }], "posthog"),
-    [{ key: "/a, Chrome", count: 2 }, { key: "/b, (none)", count: 3 }],
+    [{ key: "/a, Chrome", count: 2, additive: true }, { key: "/b, (none)", count: 3, additive: true }],
   );
-  assert.deepEqual(extractGroups([{ url: "/a" }], "posthog"), [{ key: "/a", count: 0 }]);
+  assert.deepEqual(extractGroups([{ url: "/a" }], "posthog"), [{ key: "/a", count: 0, additive: true }]);
   assert.deepEqual(extractGroups(null, "posthog"), []);
-  assert.deepEqual(extractGroups([{ url: "/a", count: "12" }], "posthog"), [{ key: "/a", count: 12 }]);
+  assert.deepEqual(extractGroups([{ url: "/a", count: "12" }], "posthog"), [{ key: "/a", count: 12, additive: true }]);
   // PostHog rows have no facet, so NR parsing would lose the group.
-  assert.deepEqual(extractGroups([{ url: "/a", count: 2 }]), [{ key: "", count: 2 }]);
+  assert.deepEqual(extractGroups([{ url: "/a", count: 2 }]), [{ key: "", count: 2, additive: true }]);
 });
 
 test("substituteWindow uses epoch seconds for PostHog and epoch ms for New Relic", () => {
@@ -180,12 +226,22 @@ test("nextWindow ends windows on clock boundaries, runs them after the lag, and 
   assert.deepEqual(nextWindow(t(10, 45), 300, t(10, 51, 0), lag), { start: t(10, 45), end: t(10, 50) });
   // An alert at 6:19 is in the window checked right after 6:20 once the lag passes.
   assert.deepEqual(nextWindow(t(6, 15), 300, t(6, 20, 15), 15), { start: t(6, 15), end: t(6, 20) });
-  // An unaligned end from before this change catches up at the next boundary.
-  assert.deepEqual(nextWindow(t(10, 44), 300, t(10, 46, 2), lag), { start: t(10, 44), end: t(10, 45) });
+  // A check at an unaligned time (10:44) leaves the next boundary window a full period long.
+  assert.deepEqual(nextWindow(t(10, 44), 300, t(10, 46, 2), lag), { start: t(10, 40), end: t(10, 45) });
+  assert.equal(nextWindow(t(10, 46), 300, t(10, 46, 2), lag), null);
+  assert.equal(nextWindow(t(10, 45), 300, t(10, 46, 2), lag), null);
   // After sleep, one window covers the whole gap.
   // A long sleep is not summed into one check: the window covers at most two periods.
   assert.deepEqual(nextWindow(t(10, 45), 300, t(12, 1), lag), { start: t(11, 50), end: t(12, 0) });
   assert.deepEqual(nextWindow(t(11, 55), 300, t(12, 1), lag), { start: t(11, 55), end: t(12, 0) });
+});
+
+test("openWindow spans a full period ending at now minus the lag and skips a monitor checked in the last minute", () => {
+  const now = 100_000;
+  assert.deepEqual(openWindow(null, 300, now, 60), { start: now - 360, end: now - 60 });
+  assert.deepEqual(openWindow(now - 200, 300, now, 60), { start: now - 360, end: now - 60 });
+  assert.equal(openWindow(now - 100, 300, now, 60), null);
+  assert.equal(openWindow(now - 60, 300, now, 60), null);
 });
 
 test("isFailedWindow skips only the window end that failed", () => {
@@ -208,6 +264,22 @@ test("validateMonitor checks provider-specific rules", async () => {
   assert.match((await err({ ...base, provider: "posthog", chartQuery: "SELECT 1" }))!, /\{\{SINCE\}\}/);
   assert.equal(await err({ ...base, provider: "posthog", chartQuery: hog }), null);
   assert.match((await err({ ...base, provider: "newrelic", query: "SELECT count(*) FROM Log SINCE {{SINCE}} UNTIL {{UNTIL}} TIMESERIES" }))!, /TIMESERIES/);
+});
+
+test("validateMonitor preview follows the scheduler rule", async () => {
+  const rows = normalizeNewRelicRows([apdexFacet("a", 0.5), apdexFacet("b", 0.95)]);
+  const registry = {
+    whenLoaded: async () => {},
+    getProvider: () => ({ connected: true, executeRawQuery: async () => rows }),
+  } as unknown as ProviderRegistry;
+  const r = await validateMonitor(registry, {
+    provider: "newrelic", query: "SELECT apdex(duration) FROM Transaction FACET appName SINCE {{SINCE}} UNTIL {{UNTIL}}",
+    condition: "< 0.8", frequencySeconds: 300,
+  }, { runQuery: true });
+  assert.ok(!("error" in r));
+  assert.equal(r.wouldTrigger, true);
+  assert.equal(r.sampleValue, 0.5);
+  assert.deepEqual(r.groups?.map((g) => g.key), ["a"]);
 });
 
 test("setMonitorToggles changes only the given toggles and resets the window when Run turns on", async () => {

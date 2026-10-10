@@ -71,6 +71,16 @@ export function formatTimestamps(results: unknown, timeZone?: string): unknown {
 
 export const isPlainObject = (v: unknown): v is Record<string, unknown> => v != null && typeof v === "object" && !Array.isArray(v);
 
+/** The member of an object column that stands for it. Integer-like keys always enumerate in ascending order and
+ * alerts care about the tail, so when every key is numeric (percentiles) it is the highest; otherwise the first. */
+export function mainMemberKey(obj: Record<string, unknown>): string | undefined {
+  const keys = Object.keys(obj);
+  if (keys.length > 0 && keys.every((k) => k.trim() !== "" && Number.isFinite(Number(k)))) {
+    return keys.reduce((hi, k) => (Number(k) > Number(hi) ? k : hi));
+  }
+  return keys[0];
+}
+
 type Row = Record<string, unknown>;
 
 /**

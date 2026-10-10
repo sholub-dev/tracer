@@ -197,8 +197,13 @@ async function awaitApproval(current: Job, url: URL, options: CallOptions): Prom
     if (ENDED_BY_COMPUTER[phase]) throw new Error(ENDED_BY_COMPUTER[phase]);
     if (Date.now() > deadline) throw new Error(ENDED_BY_COMPUTER.expired);
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, POLL_INTERVAL_MS);
-      options.signal?.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+      const wake = () => {
+        clearTimeout(timer);
+        options.signal?.removeEventListener("abort", wake);
+        resolve();
+      };
+      const timer = setTimeout(wake, POLL_INTERVAL_MS);
+      options.signal?.addEventListener("abort", wake, { once: true });
     });
   }
 }
@@ -210,6 +215,12 @@ async function run(db: Db, link: string, current: Job, beforeImport?: () => void
   const { mode, abort: { signal }, own } = current;
   const at = (suffix: string) => new URL(from.pathname + suffix, from);
   const stopped = () => { if (signal.aborted) throw new Error(CANCELLED); };
+  // A cancel on the computer does not cut a transfer under way, so the phone asks before it writes anything.
+  const beforeWrite = async () => {
+    await readStatus(current, at("/status"), { signal, timeoutMs: 3000 }).catch(() => undefined);
+    stopped();
+    if (endedByComputer(current)) throw new Error(ENDED_BY_COMPUTER[current.remote!.phase]);
+  };
   const report = (body: Record<string, unknown>) => {
     current.reports = current.reports.then(async () => {
       try {
@@ -241,7 +252,7 @@ async function run(db: Db, link: string, current: Job, beforeImport?: () => void
     let result: SyncCounts;
     if (mode === "replace") {
       const text = check(await call(at(""), {}, transfer));
-      stopped();
+      await beforeWrite();
       own.phase = "apply";
       void report({ phase: "apply", bytes: own.bytes });
       const { at: theirs, snapshot } = await open<{ at: number; snapshot: Snapshot }>(text, key);
@@ -257,7 +268,7 @@ async function run(db: Db, link: string, current: Job, beforeImport?: () => void
       const startedAt = Date.now();
       const sent = await seal(JSON.stringify({ since: mark?.theirs, payload: await exportSyncPayload(db, mark?.mine) }), key);
       const text = check(await call(at("/merge"), { method: "POST", body: sent }, transfer));
-      stopped();
+      await beforeWrite();
       own.phase = "apply";
       void report({ phase: "apply", bytes: own.bytes });
       const { at: theirs, payload } = await open<{ at: number; payload: SyncPayload }>(text, key);
@@ -300,12 +311,13 @@ async function run(db: Db, link: string, current: Job, beforeImport?: () => void
  * so it can refuse when work started in the meantime.
  */
 export async function startReceive(db: Db, link: string, beforeImport?: () => void): Promise<{ done: Promise<{ mode: SyncMode; counts: Record<string, number> }>; session: SyncSession }> {
-  if (job && !finished(job)) {
-    throw new Error("A sync is already running on this phone.");
-  }
   const { name } = parseCopyLink(link);
   const { mode } = await inspectCopy(db, link);
   const deviceId = (await getSetting(db, "device_id")) ?? "";
+  // Checked after the reads: no await may sit between the check and the claim of `job`.
+  if (job && !finished(job)) {
+    throw new Error("A sync is already running on this phone.");
+  }
   const current: Job = {
     abort: new AbortController(),
     mode,

@@ -91,11 +91,17 @@ function failWhenIdle(fetchImpl: typeof fetch): typeof fetch {
   };
 }
 
-/** iOS suspends the WebView soon after the app leaves the foreground; monitors run only while it is in front. On return, open views re-check their session. */
-function runSchedulerInForeground(scheduler: { start(): void; stop(): Promise<void> }) {
+/**
+ * iOS suspends the WebView soon after the app leaves the foreground; monitors run only while it is in front.
+ * Every open checks all monitors at once. On the first open the check waits until the providers have connected.
+ * On return, open views re-check their session.
+ */
+function runSchedulerInForeground(scheduler: { start(): void; stop(): Promise<void>; checkNow(): void }, ready: Promise<unknown>) {
+  void ready.catch(() => {}).then(() => scheduler.checkNow());
   void App.addListener("appStateChange", ({ isActive }) => {
     if (isActive) {
       scheduler.start();
+      scheduler.checkNow();
       window.dispatchEvent(new Event(RESUME_EVENT));
     } else void scheduler.stop();
   });
@@ -131,7 +137,7 @@ export async function startIosRuntime(): Promise<TRPCLink<AppRouter>[]> {
   setServerFetch((input, init) =>
     server.fetch(input instanceof Request ? input : new Request(new URL(String(input), SERVER_ORIGIN), init)),
   );
-  if (server.scheduler) runSchedulerInForeground(server.scheduler);
+  if (server.scheduler) runSchedulerInForeground(server.scheduler, server.ready);
   keepScreenOn();
   listenForCopyLinks();
   Keyboard.setAccessoryBarVisible({ isVisible: false }).catch((err: unknown) => console.warn("Keyboard:", err));

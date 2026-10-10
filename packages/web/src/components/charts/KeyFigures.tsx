@@ -1,15 +1,12 @@
 import { formatValue, isNumericGroup, type Column } from "../../lib/result-utils";
 
-/** A non-empty object made only of numbers and null at every depth: shown as a labeled group of its members. */
-export const isFigureGroup = isNumericGroup;
-
 const TILES = "grid grid-cols-2 gap-x-4 gap-y-3 sm:flex sm:flex-wrap sm:gap-x-0 sm:divide-x sm:divide-border";
 
 function Figures({ entries }: { entries: [string, unknown][] }) {
   return (
     <dl className={TILES}>
       {entries.map(([key, value]) =>
-        isFigureGroup(value) ? (
+        isNumericGroup(value) ? (
           <div key={key} className="col-span-2 flex min-w-0 flex-col gap-1 sm:px-5 sm:first:pl-0 sm:last:pr-0">
             <dt className="text-xs break-words text-muted-foreground">{key}</dt>
             <dd><Figures entries={Object.entries(value)} /></dd>

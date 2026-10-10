@@ -3,7 +3,7 @@ import { Area, Bar, BarChart, CartesianGrid, Cell, ComposedChart, ReferenceArea,
 import { ChartContainer, ChartLegend, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
 import { cn } from "@/lib/utils";
 import { formatClock, formatDateTime, formatShortDate } from "../../lib/format";
-import { coerceNumeric, expandObjectColumns } from "../../lib/result-utils";
+import { coerceNumeric, expandObjectColumns, mainMemberColumns } from "../../lib/result-utils";
 
 const SKIP_KEYS = new Set(["beginTimeSeconds", "endTimeSeconds", "inspectedCount", "facet", "comparison"]);
 // Matches the legend reserve QueryChart adds for growWithLegend.
@@ -360,7 +360,8 @@ function TimeseriesPlot({ series, containerSize, plotHeight, threshold, dualAxis
 }
 
 export function TimeseriesChart({ rows: raw, containerSize, threshold }: { rows: Record<string, unknown>[]; containerSize?: ContainerSize; threshold?: Threshold }) {
-  const rows = useMemo(() => expandObjectColumns(raw), [raw]);
+  const monitored = !!threshold;
+  const rows = useMemo(() => expandObjectColumns(monitored ? mainMemberColumns(raw) : raw), [raw, monitored]);
   const hasFacet = "facet" in rows[0];
   const hasComparison = "comparison" in rows[0];
   const series = useMemo(

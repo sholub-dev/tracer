@@ -12,7 +12,7 @@ import type { StartSessionOptions } from "../agents/start-session.js";
 import { NewRelicProvider } from "../providers/newrelic/newrelic.provider.js";
 import type { AiIssue } from "../providers/newrelic/nerdgraph.client.js";
 import { recordIssues, reportIssueStatusTool } from "./triage.js";
-import { runDueMonitors } from "./scheduler.js";
+import { runDueMonitors, runMonitorsNow } from "./scheduler.js";
 
 const QUERY = "SELECT count(*) FROM NrAiIncident WHERE event = 'open' FACET conditionName SINCE {{SINCE}} UNTIL {{UNTIL}}";
 const now = () => Math.floor(Date.now() / 1000);
@@ -113,4 +113,32 @@ test("a session that fails to start leaves no alert issue rows", async () => {
   assert.equal(started.length, 1);
   assert.deepEqual(await db.select().from(alertIssues).all(), []);
   assert.deepEqual(await db.select().from(monitorTriggers).all(), []);
+});
+
+test("the check on open uses a full-period window ending at now minus the lag, skips recent and disabled monitors, and sets lastCheckedAt", async () => {
+  const { db, context } = await env([], { query: "SELECT count(*) FROM Transaction FACET name SINCE {{SINCE}} UNTIL {{UNTIL}}", triage: false });
+  const queries: string[] = [];
+  const provider = context.providers.getProvider("newrelic")!;
+  provider.executeRawQuery = async (query: string) => { queries.push(query); return []; };
+  const nothing = async () => ({ ok: true as const });
+  const t = now();
+
+  await runMonitorsNow(context, nothing);
+  assert.equal(queries.length, 1);
+  const checked = (await db.select().from(monitors).get())!.lastCheckedAt!;
+  assert.ok(Math.abs(checked - (t - 60)) <= 2);
+  const stamps = queries[0].match(/\d{10,}/g)!.map(Number);
+  assert.equal(stamps.length, 2);
+  assert.equal(stamps[1] - stamps[0], 300 * 1000 * 1);
+
+  await runMonitorsNow(context, nothing);
+  assert.equal(queries.length, 1, "checked in the last minute");
+
+  await db.update(monitors).set({ lastCheckedAt: t - 200 }).run();
+  await runMonitorsNow(context, nothing);
+  assert.equal(queries.length, 2);
+
+  await db.update(monitors).set({ lastCheckedAt: t - 600, enabled: 0 }).run();
+  await runMonitorsNow(context, nothing);
+  assert.equal(queries.length, 2, "disabled");
 });

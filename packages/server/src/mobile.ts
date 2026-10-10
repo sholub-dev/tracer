@@ -10,11 +10,12 @@ export async function startMobileServer({ connection, llmFetch }: { connection: 
   setLlmFetch(llmFetch);
   const { db, setupDriver } = createCapacitorDb(connection);
   await setupDriver.exec("PRAGMA foreign_keys = ON");
-  const { context, app, scheduler } = await startRuntime(db, setupDriver);
+  const { context, app, scheduler, ready } = await startRuntime(db, setupDriver);
   return {
     fetch: async (request: Request): Promise<Response> => app.fetch(request),
     router: appRouter,
     createContext: async () => context,
     scheduler,
+    ready,
   };
 }

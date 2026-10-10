@@ -29,7 +29,7 @@ export async function startRuntime(
   const context = createContext({ db, providers });
 
   // Non-blocking — don't delay server startup for provider connections; resumed runs need the provider tools
-  providers.initializeFromDb(db).then(() => {
+  const ready = providers.initializeFromDb(db).then(() => {
     console.log("Providers initialized:", providers.getAllProviders().map((p) => p.name));
   }).catch((err) => {
     console.warn("Provider initialization error:", err);
@@ -39,5 +39,5 @@ export async function startRuntime(
   const scheduler = FEATURES.monitors ? new MonitorScheduler(context) : null;
   scheduler?.start();
 
-  return { providers, context, app, scheduler };
+  return { providers, context, app, scheduler, ready };
 }

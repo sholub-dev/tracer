@@ -73,16 +73,17 @@ function DesktopPhoneSettings() {
     refetchInterval: (q) => (q.state.data && isSyncOver(q.state.data.phase) ? false : 1000),
   });
 
+  const session = status ?? code?.session;
+  const phase = session?.phase;
+  const over = !!phase && isSyncOver(phase);
+
   const shown = useRef(false);
-  shown.current = !!code;
+  // Once the phone saves the data, the sync runs to its end, as it does on the phone.
+  shown.current = !!code && phase !== "apply";
   const cancelOnUnmount = useRef(cancel.mutate);
   useEffect(() => () => {
     if (shown.current) cancelOnUnmount.current();
   }, []);
-
-  const session = status ?? code?.session;
-  const phase = session?.phase;
-  const over = !!phase && isSyncOver(phase);
 
   useEffect(() => {
     // The phone changed this computer's data and the last sync time: lists must reload.
@@ -140,7 +141,7 @@ function DesktopPhoneSettings() {
                     {phase === "done" ? "Sync again" : "Show a new code"}
                   </Button>
                 )}
-                {phase !== "approval" && (
+                {phase !== "approval" && phase !== "apply" && (
                   <Button variant="outline" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
                     {over ? "Close" : "Cancel"}
                   </Button>

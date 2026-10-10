@@ -3,7 +3,7 @@ import type { ProviderRegistry } from "../providers/registry.js";
 import { CONFIG } from "../config.js";
 import { requireTimeRangePlaceholders } from "../tools/query-validation.js";
 import { toChartRows } from "../providers/posthog/posthog-formatter.js";
-import { evaluateCondition, extractGroups, parseCondition, sumGroups, type Condition, type Group } from "./condition.js";
+import { evaluateGroups, extractGroups, isNoData, parseCondition, type Condition, type Group } from "./condition.js";
 
 export const MONITOR_PROVIDERS = ["newrelic", "posthog"] as const;
 export type MonitorProvider = (typeof MONITOR_PROVIDERS)[number];
@@ -122,7 +122,7 @@ export async function validateMonitor(
     if (chartError) return { error: chartError };
   }
   const groups = extractGroups(result, providerName);
-  const sampleValue = sumGroups(groups);
-  const noData = groups.length === 0 && Array.isArray(result) && result.length > 0;
-  return { condition, sampleValue, groups, wouldTrigger: !noData && evaluateCondition(condition, sampleValue) };
+  const evaluation = evaluateGroups(condition, groups);
+  const wouldTrigger = !isNoData(result, groups) && evaluation.fires;
+  return { condition, sampleValue: evaluation.value, groups: wouldTrigger && evaluation.groups.length > 0 ? evaluation.groups : groups, wouldTrigger };
 }

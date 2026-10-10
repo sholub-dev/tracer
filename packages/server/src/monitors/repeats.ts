@@ -11,7 +11,7 @@ import { redact } from "../integrations/slack.js";
 import { alertFindingFromMessages, dismissalFromMessages, firstSentence, latestRunSummary, summaryFromMessages, type AlertSummary } from "./alert-summary.js";
 import type { Group } from "./condition.js";
 
-export interface TriggerGroup extends Group {
+export interface TriggerGroup extends Omit<Group, "additive"> {
   sessionId: string | null;
   repeat: boolean;
 }
@@ -39,7 +39,7 @@ export function parseTriggerGroups(json: string): TriggerGroup[] {
 }
 
 /** A group repeats when an investigated trigger inside the repeat window covered the same key. */
-export async function classifyGroups(db: Db, monitorId: string, groups: Group[], now: number): Promise<TriggerGroup[]> {
+export async function classifyGroups(db: Db, monitorId: string, groups: Pick<Group, "key" | "count">[], now: number): Promise<TriggerGroup[]> {
   const recent = (await db
     .select({ groups: monitorTriggers.groups })
     .from(monitorTriggers)
@@ -51,7 +51,8 @@ export async function classifyGroups(db: Db, monitorId: string, groups: Group[],
     .orderBy(desc(monitorTriggers.triggeredAt))
     .all())
     .map((r) => parseTriggerGroups(r.groups));
-  return groups.map((g) => {
+  return groups.map(({ key, count }) => {
+    const g = { key, count };
     // An unfaceted group has no identity, so each trigger gets investigated.
     if (g.key === "") return { ...g, sessionId: null, repeat: false };
     for (const past of recent) {

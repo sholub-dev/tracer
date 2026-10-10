@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
-import { dropFlattenedCopies, dropFlattenedResultCopies, normalizeNewRelicRows } from "@tracer-sh/shared";
-import { buildColumns, coerceNumeric, dropFlattenedRowCopies, expandObjectColumns, formatValue } from "./result-utils";
+import { dropFlattenedCopies, dropFlattenedResultCopies, mainMemberKey, normalizeNewRelicRows } from "@tracer-sh/shared";
+import { buildColumns, coerceNumeric, dropFlattenedRowCopies, expandObjectColumns, formatValue, isNumericGroup, mainMemberColumns } from "./result-utils";
 import { getMetricKeys } from "../components/charts/ChartView";
-import { KeyFigures, isFigureGroup } from "../components/charts/KeyFigures";
+import { KeyFigures } from "../components/charts/KeyFigures";
 
 const apdexRow = { "apdex.x": { count: 676, f: 2, s: 638, score: 0.97, t: 36 }, count: 676, f: 2, s: 638, score: 0.97, t: 36 };
 
@@ -71,10 +71,10 @@ test("key figures group nested objects and break long values", () => {
 });
 
 test("a row of rich objects goes to the table, not to tiles", () => {
-  assert.equal(isFigureGroup({ type: "x", labels: { a: 1 } }), false);
-  assert.equal(isFigureGroup({ a: 1, b: "2", c: null, d: { e: 3 } }), false);
-  assert.equal(isFigureGroup({ a: 1, c: null, d: { e: 3, f: null } }), true);
-  assert.equal(isFigureGroup({}), false);
+  assert.equal(isNumericGroup({ type: "x", labels: { a: 1 } }), false);
+  assert.equal(isNumericGroup({ a: 1, b: "2", c: null, d: { e: 3 } }), false);
+  assert.equal(isNumericGroup({ a: 1, c: null, d: { e: 3, f: null } }), true);
+  assert.equal(isNumericGroup({}), false);
 });
 
 test("chart keys come from the union over all rows after expansion", () => {
@@ -123,4 +123,15 @@ test("normalizeNewRelicRows leaves objects with extra or missing keys, and other
 test("normalizeNewRelicRows returns the same reference when nothing changes", () => {
   const rows = [{ "apdex.x": { score: 0.97, count: 676, f: 2, s: 638, t: 36 } }, { n: 1 }];
   assert.equal(normalizeNewRelicRows(rows), rows);
+});
+
+test("a monitor chart draws only the main member of an object column", () => {
+  const rows = [{ t: 1, "apdex.d": { score: 0.9, count: 5 } }, { t: 2, "apdex.d": { score: 0.8, count: 6 } }];
+  assert.deepEqual(Object.keys(expandObjectColumns(mainMemberColumns(rows))[0]), ["t", "apdex.d"]);
+  assert.equal(expandObjectColumns(mainMemberColumns(rows))[1]["apdex.d"], 0.8);
+  assert.deepEqual(Object.keys(expandObjectColumns(rows)[0]), ["t", "apdex.d.score", "apdex.d.count"]);
+  const pct = [{ t: 1, p: { "50": 0.4, "99": 2.1 } }];
+  assert.equal(mainMemberColumns(pct)[0].p, 2.1);
+  assert.equal(mainMemberKey({ "50": 1, "99": 2 }), "99");
+  assert.equal(mainMemberKey({ score: 1, count: 2 }), "score");
 });

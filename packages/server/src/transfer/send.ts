@@ -56,6 +56,7 @@ function failure(err: unknown): string {
   if (err instanceof TooLargeError) return err.message;
   if (err instanceof HttpError && err.status === 408) return "The phone stopped sending data. Show a new code and try again.";
   if (err instanceof HttpError && err.status === 413) return `The phone sent more data than the limit allows (${Math.round(MAX_SYNC_BYTES / 1024 / 1024)} MB). Show a new code and try again.`;
+  if (err instanceof HttpError && err.message) return err.message;
   return "The sync failed on this computer. Show a new code and try again. If it fails again, restart Tracer.";
 }
 
@@ -259,6 +260,8 @@ export async function startSend(
     if (route === "POST /cancel") {
       let text: string;
       try { text = await unseal(await readBody(req), key); } catch (err) { if (err instanceof HttpError) throw err; return reply(res, 403); }
+      // `finish` ends whatever session is current: a new code may have replaced this one during the read.
+      if (current !== session) return reply(res, 404);
       if (text !== "{}" || !session.request) return reply(res, 400);
       finish("cancelled", { error: { message: "Cancelled on the phone.", side: "phone" } });
       return reply(res, 200);
@@ -304,7 +307,8 @@ export async function startSend(
             return reply(res, err instanceof OldFormError ? 409 : 403, err instanceof OldFormError ? UPDATE_PHONE : undefined);
           }
           // Checked after the upload: a monitor or timer can start a run while the data arrives.
-          if (activeRuns() > 0) return reply(res, 409, RUN_ACTIVE);
+          // Thrown, not replied: the sync ends here, so the screens name this computer, not the phone.
+          if (activeRuns() > 0) throw new HttpError(409, RUN_ACTIVE);
           // Read before the merge: the rows the phone just sent need not go back, and a size error leaves this computer unchanged.
           const at = Date.now();
           sealed = await seal(JSON.stringify({ at, payload: await exportSyncPayload(db, since) }), key);
@@ -314,7 +318,7 @@ export async function startSend(
           session.view.result = { computer: { applied: total(applied), deleted: total(deleted) } };
         } else {
           // A running investigation has not saved its answer yet, so the copy would miss it.
-          if (activeRuns() > 0) return reply(res, 409, RUN_ACTIVE);
+          if (activeRuns() > 0) throw new HttpError(409, RUN_ACTIVE);
           const at = Date.now();
           sealed = await seal(JSON.stringify({ at, snapshot: await exportSnapshot(db) }), key);
           session.view.result = { computer: { applied: 0, deleted: 0 } };

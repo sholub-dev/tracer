@@ -9,7 +9,7 @@ import { CONFIG } from "../config.js";
 import { localDeviceId } from "../db/config-reader.js";
 import { decodeMessages } from "../lib/messages-codec.js";
 import { failedWindowEnds } from "./store.js";
-import { evaluateCondition, extractGroups, parseCondition, sumGroups, type Group } from "./condition.js";
+import { evaluateGroups, extractGroups, isNoData, parseCondition, type Group } from "./condition.js";
 import { classifyGroups, pastSessions, pastSummary, readOutcome, readPastSessionTool, saveOutcome, type Outcome, type PastSession, type TriggerGroup } from "./repeats.js";
 import { withTimeout } from "./validate.js";
 import { getTimezone } from "../lib/current-context.js";
@@ -33,9 +33,23 @@ export function nextWindow(
   lagSeconds: number = CONFIG.monitorIngestLagSeconds,
 ): { start: number; end: number } | null {
   const end = Math.floor((now - lagSeconds) / frequencySeconds) * frequencySeconds;
+  if (lastCheckedAt !== null && end <= lastCheckedAt) return null;
+  // A check at an unaligned time (the app opening) must not shorten the next window: it still spans a full period.
   // After a long sleep the missed time is not summed into one check: the window covers at most two periods.
-  const start = Math.max(lastCheckedAt ?? end - frequencySeconds, end - 2 * frequencySeconds);
-  return end > start ? { start, end } : null;
+  const start = Math.max(Math.min(lastCheckedAt ?? end - frequencySeconds, end - frequencySeconds), end - 2 * frequencySeconds);
+  return { start, end };
+}
+
+/** A full-period window ending now (less the lag); null when the monitor was checked just before. */
+export function openWindow(
+  lastCheckedAt: number | null,
+  frequencySeconds: number,
+  now: number,
+  lagSeconds: number = CONFIG.monitorIngestLagSeconds,
+): { start: number; end: number } | null {
+  const end = now - lagSeconds;
+  if (lastCheckedAt !== null && lastCheckedAt >= end - CONFIG.monitorOpenSkipSeconds) return null;
+  return { start: end - frequencySeconds, end };
 }
 
 /** A failed window is retried at the next clock boundary, not every tick; the next window still starts at lastCheckedAt. */
@@ -47,7 +61,7 @@ function iso(seconds: number): string {
   return new Date(seconds * 1000).toISOString();
 }
 
-function groupLabel(g: Group): string {
+function groupLabel(g: Pick<Group, "key" | "count">): string {
   return g.key === "" ? `count ${g.count}` : `${g.key}: ${g.count}`;
 }
 
@@ -277,17 +291,16 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
   }
 
   const extracted = extractGroups(result, monitor.provider);
-  const value = sumGroups(extracted);
-  // Rows came back but none holds a value: no data, so nothing to compare.
-  const noData = extracted.length === 0 && Array.isArray(result) && result.length > 0;
-  if (noData || !evaluateCondition(condition, value)) {
+  const evaluation = evaluateGroups(condition, extracted);
+  const { value } = evaluation;
+  if (isNoData(result, extracted) || !evaluation.fires) {
     await succeed(context, monitor.id, "ok", window.end);
     return;
   }
 
   const now = unixNow();
   // A true condition with no rows (e.g. "< 1") still needs one group to track.
-  const groups = extracted.length > 0 ? extracted : [{ key: "", count: value }];
+  const groups = evaluation.groups.length > 0 ? evaluation.groups : [{ key: "", count: value, additive: true }];
   // Re-read toggles: the user may have changed them while the query ran.
   const current = await context.db.select({ enabled: monitors.enabled, alertEnabled: monitors.alertEnabled })
     .from(monitors).where(eq(monitors.id, monitor.id)).get();
@@ -358,12 +371,13 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
   await succeed(context, monitor.id, "triggered", window.end);
 }
 
-export async function runDueMonitors(context: Context, start = startAgentSession): Promise<void> {
+async function runMonitors(
+  context: Context, start: typeof startAgentSession, windowFor: (monitor: Monitor) => { start: number; end: number } | null,
+): Promise<void> {
   const enabled = await context.db.select().from(monitors).where(eq(monitors.enabled, 1)).all();
-  const now = unixNow();
   const queue = [...enabled];
   const runOne = async (monitor: Monitor) => {
-    const window = nextWindow(monitor.lastCheckedAt, monitor.frequencySeconds, now, ingestLagSeconds(monitor.query));
+    const window = windowFor(monitor);
     if (!window || isFailedWindow(failedWindowEnds, monitor.id, window.end)) return;
     try {
       await checkMonitor(context, monitor, window, start);
@@ -377,6 +391,17 @@ export async function runDueMonitors(context: Context, start = startAgentSession
     for (let monitor = queue.shift(); monitor; monitor = queue.shift()) await runOne(monitor);
   };
   await Promise.all(Array.from({ length: CONFIG.monitorMaxConcurrentChecks }, worker));
+}
+
+export async function runDueMonitors(context: Context, start = startAgentSession): Promise<void> {
+  const now = unixNow();
+  await runMonitors(context, start, (m) => nextWindow(m.lastCheckedAt, m.frequencySeconds, now, ingestLagSeconds(m.query)));
+}
+
+/** Checks every enabled monitor now, whether a clock boundary passed or not. Only the iOS app calls it, when it opens. */
+export async function runMonitorsNow(context: Context, start = startAgentSession): Promise<void> {
+  const now = unixNow();
+  await runMonitors(context, start, (m) => openWindow(m.lastCheckedAt, m.frequencySeconds, now, ingestLagSeconds(m.query)));
 }
 
 /**
@@ -427,18 +452,31 @@ export class MonitorScheduler {
     this.started = true;
   }
 
+  /** Checks every monitor now, then does the normal tick work. Waits for a tick in flight instead of dropping the check. */
+  checkNow(): void {
+    this.track((this.tickPromise ?? Promise.resolve()).then(() => this.run(runMonitorsNow)));
+  }
+
   private tick(): void {
     if (this.tickPromise) return;
-    this.tickPromise = isIdle(this.context.db)
+    this.track(this.run(runDueMonitors));
+  }
+
+  private track(work: Promise<void>): void {
+    const promise: Promise<void> = work.finally(() => { if (this.tickPromise === promise) this.tickPromise = null; });
+    this.tickPromise = promise;
+  }
+
+  private run(checkMonitors: (context: Context) => Promise<void>): Promise<void> {
+    return isIdle(this.context.db)
       .then(async (idle) => {
         if (idle) return;
-        await runDueMonitors(this.context);
+        await checkMonitors(this.context);
         await checkWatches(this.context);
         await fireDueTimers(this.context);
       })
       .then(() => this.pruneWhenDue())
-      .catch((err) => console.error("MonitorScheduler tick error:", err))
-      .finally(() => { this.tickPromise = null; });
+      .catch((err) => console.error("MonitorScheduler tick error:", err));
   }
 
   private async pruneWhenDue(): Promise<void> {

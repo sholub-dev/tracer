@@ -5,6 +5,7 @@ import { AVAILABLE_MODELS } from "./models";
 import { WEB_CONFIG } from "./config";
 import { IS_IOS } from "./platform";
 import { RESUME_EVENT } from "./resume";
+import { takeFreshKeys } from "./answer-cards";
 
 /** Chat scroll that follows content growth; any upward scroll pauses it until the bottom is reached again. A new `mountKey` re-attaches to a swapped container. */
 export function useChatScroll(mountKey?: unknown) {
@@ -75,17 +76,25 @@ export function useChatScroll(mountKey?: unknown) {
     // follow is paused, never stop it later.
     const cardsNow = () => [...el.querySelectorAll("[data-answer-card]")];
     const lastCard = (row: Element | undefined) => (row ? [...row.querySelectorAll("[data-answer-card]")].at(-1) : undefined);
+    // A card is identified by its position, not its element: when a run ends the card remounts, and that must not
+    // count as a new answer or the view would jump back up to it.
+    const keyOf = (card: Element) => {
+      const row = card.closest("[data-role]");
+      const rows = [...el.querySelectorAll("[data-role]")];
+      return `${row ? rows.indexOf(row) : -1}:${row ? [...row.querySelectorAll("[data-answer-card]")].indexOf(card) : 0}`;
+    };
     const lastRow = [...el.querySelectorAll("[data-role]")].at(-1);
     const openCard = lastRow?.getAttribute("data-role") === "assistant" ? lastCard(lastRow) : undefined;
-    const seen = new WeakSet<Element>(cardsNow().filter((c) => c !== openCard));
+    const seen = new Set<string>(cardsNow().filter((c) => c !== openCard).map(keyOf));
     let pinnedCard: Element | undefined;
     const anchor = (scroller: HTMLElement, card: Element) => {
       const header = scroller.querySelector("[data-page-header]")?.getBoundingClientRect().height ?? 0;
       scroller.scrollTo({ top: scroller.scrollTop + card.getBoundingClientRect().top - scroller.getBoundingClientRect().top - header - 16 });
     };
     const ro = new ResizeObserver(() => {
-      const fresh = cardsNow().filter((c) => !seen.has(c));
-      fresh.forEach((c) => seen.add(c));
+      const cards = cardsNow();
+      const freshKeys = new Set(takeFreshKeys(seen, cards.map(keyOf)));
+      const fresh = cards.filter((c) => freshKeys.has(keyOf(c)));
       const scroller = scrollRef.current;
       if (pinned.current && scroller) {
         // Content above the card keeps growing; the card may also remount or swap to the saved view.

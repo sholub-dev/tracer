@@ -98,6 +98,8 @@ export const CONFIG = {
   monitorIngestLagSeconds: 60,
   /** Shorter lag for monitors on NrAiIncident: New Relic writes its own alert events within seconds. */
   monitorIncidentLagSeconds: 15,
+  /** The iOS app's check on open skips a monitor checked within this many seconds of the new window's end. */
+  monitorOpenSkipSeconds: 60,
   monitorRepeatWindowSeconds: 86_400,
   triageWatchMaxSeconds: 86_400,
   triageLoopWindowSeconds: 86_400,

@@ -239,6 +239,8 @@ test("replace refuses while an investigation runs on the computer", async (t) =>
   approve();
   await assert.rejects(done, /investigation is running/);
   assert.equal((await phone.select().from(chatSessions).all()).length, 0);
+  assert.deepEqual([sendStatus()?.phase, sendStatus()?.error?.side], ["failed", "computer"]);
+  assert.equal(receiveStatus()?.error?.side, "computer");
 });
 
 test("inspect returns merge only for the computer the phone synced with", async (t) => {
@@ -582,4 +584,21 @@ test("only one sync runs on the phone at a time", async (t) => {
   await assert.rejects(startReceive(phone, link), /already running/);
   stopSend();
   await done.catch(() => {});
+});
+
+test("a cancel on the computer during the transfer stops the phone before it writes", async (t) => {
+  t.after(stopSend);
+  const realFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = realFetch; });
+  const { link } = await startSend(await seededDb(), () => 0);
+  const phone = await freshDb();
+  globalThis.fetch = (async (url: URL, init?: RequestInit) => {
+    const response = await realFetch(url, init);
+    // The data request: the token is the only path segment.
+    if (new URL(url).pathname.split("/").length === 2) stopSend();
+    return response;
+  }) as typeof fetch;
+  await assert.rejects(receiveWithApproval(phone, link), /computer cancelled/);
+  assert.equal((await phone.select().from(chatSessions).all()).length, 0);
+  assert.equal(receiveStatus()?.phase, "cancelled");
 });

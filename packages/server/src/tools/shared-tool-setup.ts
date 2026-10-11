@@ -81,8 +81,8 @@ export async function collectBaseTools(
   const providerFragmentCount = promptFragments.length;
   const hasProviderTools = Object.keys(tools).length > 0;
 
-  // Jira is a non-observability integration: when enabled (chat only — not the dashboard/monitor
-  // builders) its tools are always-on, independent of the active-provider filter above, so they're
+  // Jira is a non-observability integration: when enabled (chat only — not the monitor
+  // builder) its tools are always-on, independent of the active-provider filter above, so they're
   // available alongside whatever provider is selected.
   const jiraKit = includeIntegrations ? await getJiraChatTools(db) : null;
   if (jiraKit) {

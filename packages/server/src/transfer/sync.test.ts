@@ -322,3 +322,38 @@ test("a payload of another format gives the update message in both directions", 
     await assert.rejects(mergeSyncPayload(db, { ...payload, format }), /Update both apps/);
   }
 });
+
+test("tables and log rows from an older version for dashboards are skipped; the rest applies", async () => {
+  const { a, b } = await pair();
+  await a.db.insert(chatSessions).values({ id: "s2", title: "Two", messages: "[]" }).run();
+  const old = { id: "d1", title: "Old", createdAt: 1, updatedAt: 1 };
+  const payload = await wire(a.db);
+  payload.tables.dashboards = [old];
+  payload.tables.dashboard_widgets = [{ id: "w1", dashboardId: "d1", title: "W" }];
+  payload.rows.push({ tbl: "dashboards", row_key: "d1", changed_at: T0, deleted: 0 }, { tbl: "dashboard_widgets", row_key: "w1", changed_at: T0, deleted: 0 });
+  const { applied } = await mergeSyncPayload(b.db, payload);
+  assert.equal(applied.chat_sessions, 1);
+  assert.equal(await logOf(b.db, "dashboards", "d1"), undefined);
+
+  const snapshot = clone(await exportSnapshot(a.db));
+  snapshot.tables.dashboards = [old];
+  await importSnapshot(b.db, snapshot);
+  assert.equal((await b.db.select().from(chatSessions).all()).length, 2);
+});
+
+test("setup drops the old dashboard tables, their log rows and their builder sessions", async () => {
+  const { sqlite, setupDriver } = await freshDb();
+  sqlite.exec(`
+    CREATE TABLE dashboards (id TEXT PRIMARY KEY);
+    CREATE TABLE dashboard_widgets (id TEXT PRIMARY KEY, dashboard_id TEXT REFERENCES dashboards(id));
+    INSERT INTO dashboards VALUES ('d1');
+    INSERT INTO dashboard_widgets VALUES ('w1', 'd1');
+    INSERT INTO sync_rows (tbl, row_key, changed_at) VALUES ('dashboards', 'd1', 1), ('dashboard_widgets', 'w1', 1);
+    INSERT INTO chat_sessions (id, title, messages) VALUES ('__dashboard__:d1', 'Dashboard Builder', '[]'), ('s1', 'Kept', '[]');
+  `);
+  await runSetup(setupDriver);
+  const tables = sqlite.prepare(`SELECT name FROM sqlite_master WHERE name IN ('dashboards', 'dashboard_widgets')`).all();
+  assert.equal(tables.length, 0);
+  assert.equal((sqlite.prepare(`SELECT count(*) AS n FROM sync_rows WHERE tbl IN ('dashboards', 'dashboard_widgets')`).get() as { n: number }).n, 0);
+  assert.deepEqual(sqlite.prepare(`SELECT id FROM chat_sessions`).all(), [{ id: "s1" }]);
+});

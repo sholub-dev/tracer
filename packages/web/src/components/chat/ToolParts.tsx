@@ -1,5 +1,5 @@
 import { memo, useRef, useState } from "react";
-import { AlertCircle, ClipboardCheck, Copy, History, LayoutGrid, Loader2, Timer, type LucideIcon } from "lucide-react";
+import { AlertCircle, ClipboardCheck, Copy, History, Loader2, Timer, type LucideIcon } from "lucide-react";
 import { CLIENT_TOOL_NAMES, isPlainObject, type ProgressPart } from "@tracer-sh/shared";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
@@ -34,9 +34,6 @@ interface SubAgentOutput {
 }
 
 const SMALL_TOOLS: Record<string, { done: string; loading: string; errorLabel: string; icon: LucideIcon }> = {
-  [CLIENT_TOOL_NAMES.CREATE_WIDGET]: { done: "Widget created", loading: "Creating widget", errorLabel: "Widget error", icon: LayoutGrid },
-  [CLIENT_TOOL_NAMES.UPDATE_WIDGET]: { done: "Widget updated", loading: "Updating widget", errorLabel: "Widget error", icon: LayoutGrid },
-  [CLIENT_TOOL_NAMES.DELETE_WIDGET]: { done: "Widget deleted", loading: "Deleting widget", errorLabel: "Widget error", icon: LayoutGrid },
   "tool-read_past_session": { done: "Read a past investigation", loading: "Reading a past investigation", errorLabel: "Past investigation not available", icon: History },
   "tool-report_finding": { done: "Finding reported", loading: "Reporting finding", errorLabel: "Finding not recorded", icon: ClipboardCheck },
   "tool-report_issue_status": { done: "Reported alert status", loading: "Reporting alert status", errorLabel: "Alert status not recorded", icon: ClipboardCheck },
@@ -454,7 +451,7 @@ function smallToolLabel(part: ToolPart, spec: (typeof SMALL_TOOLS)[string]): str
   return spec.done;
 }
 
-/** Monitor saves, small tool lines (timer, widgets, triage reports) and anything else that is not a provider query. */
+/** Monitor saves, small tool lines (timer, triage reports) and anything else that is not a provider query. */
 export const OtherToolPart = memo(function OtherToolPart({ part, isAnimating }: { part: ToolPart; isAnimating: boolean }) {
   // Outputs present on mount come from history, not a save that just happened.
   const savedLive = useRef(part.state !== "output-available").current;

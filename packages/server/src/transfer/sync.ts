@@ -20,7 +20,6 @@ const tableOf = new Map(SYNCED);
 
 // Child table -> [foreign key property, parent table]: a child without its parent is skipped.
 const PARENTS: Record<string, [string, string][]> = {
-  dashboard_widgets: [["dashboardId", "dashboards"]],
   monitor_triggers: [["monitorId", "monitors"]],
   alert_issues: [["monitorId", "monitors"], ["triggerId", "monitor_triggers"]],
   memory_operations: [["sessionId", "chat_sessions"]],

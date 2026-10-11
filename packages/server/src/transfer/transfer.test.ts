@@ -439,7 +439,7 @@ test("an old phone gets a 409 with the update message", async (t) => {
 test("a phone asks an old computer and is told to update it", async (t) => {
   const phone = await freshDb();
   const { createServer } = await import("node:http");
-  const server = createServer((req, res) => res.end(JSON.stringify({ phase: "waiting" })));
+  const server = createServer((_req, res) => res.end(JSON.stringify({ phase: "waiting" })));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   t.after(() => server.close());
   const { port } = server.address() as { port: number };

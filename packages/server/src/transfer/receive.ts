@@ -29,7 +29,7 @@ export function parseCopyLink(link: string): { from: URL; key: string; name?: st
   // Not URL.parse: it needs iOS 18.
   try { from = new URL(params.get("from") ?? ""); } catch { /* checked below */ }
   const key = params.get("key");
-  if (!from || from.protocol !== "http:" || !PRIVATE_IPV4.test(from.hostname) || !key) {
+  if (from?.protocol !== "http:" || !PRIVATE_IPV4.test(from.hostname) || !key) {
     throw new Error("This is not a Tracer copy code.");
   }
   // Shown to the user, so it is untrusted text: no control characters, bounded length.

@@ -50,7 +50,7 @@ export function useParsedMessages(json: string | undefined): UIMessage[] | undef
 
 /** Only the analysis section of a kept compaction boundary; null when it has none. */
 function analysisOnly(msg: UIMessage | undefined): UIMessage | null {
-  if (!msg || msg.role !== "assistant") return null;
+  if (msg?.role !== "assistant") return null;
   const parts = analysisSectionParts(msg.parts);
   return parts ? { ...msg, parts } : null;
 }

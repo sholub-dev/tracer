@@ -28,7 +28,7 @@ async function env() {
   return { db, context };
 }
 
-const collect = async (context: Context, options: Awaited<ReturnType<typeof buildRunOptions>>) =>
+const collect = async (options: Awaited<ReturnType<typeof buildRunOptions>>) =>
   (await options.collectTools({} as never)).tools as Record<string, unknown>;
 
 test("user chat and unattended runs use their own retry delays", async () => {
@@ -41,7 +41,7 @@ test("user chat and unattended runs use their own retry delays", async () => {
 test("a chat turn inside a monitor session has no unscoped ack or close tool", async () => {
   const { context } = await env();
   await context.db.update(monitorTriggers).set({ reported: "done" }).run();
-  const tools = await collect(context, await chatRunOptions(context, "s1"));
+  const tools = await collect(await chatRunOptions(context, "s1"));
   assert.equal(tools.close_nr_issue, undefined);
   assert.ok(tools.query && tools.set_timer && tools.report_finding);
 });
@@ -60,7 +60,7 @@ test("a monitor run gets its extras and its completion hook, also when resumed",
 
 test("an unreported firing gets its report tool and hook on a chat turn", async () => {
   const { context } = await env();
-  const tools = await collect(context, await chatRunOptions(context, "s1"));
+  const tools = await collect(await chatRunOptions(context, "s1"));
   assert.ok(tools.report_alert_summary);
   assert.ok((await chatRunOptions(context, "s1")).onFailed);
 });

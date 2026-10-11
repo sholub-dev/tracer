@@ -9,8 +9,6 @@ export const SYNC_KEYS: Record<string, { key: string; time?: string }> = {
   app_settings: { key: "key", time: "updated_at" },
   tool_memories: { key: "uid", time: "created_at" },
   chat_sessions: { key: "id", time: "updated_at" },
-  dashboards: { key: "id", time: "updated_at" },
-  dashboard_widgets: { key: "id", time: "updated_at" },
   monitors: { key: "id", time: "updated_at" },
   monitor_triggers: { key: "id" },
   alert_issues: { key: "issue_id", time: "updated_at" },
@@ -62,29 +60,6 @@ export async function runSetup(sqlite: SetupDriver): Promise<void> {
       summary_created_at INTEGER,
       run_scope TEXT,
       resumed INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-    );
-
-    CREATE TABLE IF NOT EXISTS dashboards (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-    );
-
-    CREATE TABLE IF NOT EXISTS dashboard_widgets (
-      id TEXT PRIMARY KEY,
-      dashboard_id TEXT NOT NULL DEFAULT '' REFERENCES dashboards(id) ON DELETE CASCADE,
-      provider TEXT NOT NULL DEFAULT 'newrelic',
-      title TEXT NOT NULL,
-      query TEXT NOT NULL,
-      chart_type TEXT NOT NULL DEFAULT 'auto',
-      config TEXT NOT NULL DEFAULT '{}',
-      pos_x INTEGER NOT NULL DEFAULT 0,
-      pos_y INTEGER NOT NULL DEFAULT 0,
-      pos_w INTEGER NOT NULL DEFAULT 6,
-      pos_h INTEGER NOT NULL DEFAULT 6,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
@@ -149,9 +124,7 @@ export async function runSetup(sqlite: SetupDriver): Promise<void> {
     DROP INDEX IF EXISTS idx_alert_issues_due;
     CREATE INDEX IF NOT EXISTS idx_session_timers_fire ON session_timers(fire_at);
     CREATE INDEX IF NOT EXISTS idx_alert_issues_state ON alert_issues(state);
-    CREATE INDEX IF NOT EXISTS idx_widgets_dashboard ON dashboard_widgets(dashboard_id);
     CREATE INDEX IF NOT EXISTS idx_memories_tool ON tool_memories(tool_name);
-    CREATE INDEX IF NOT EXISTS idx_dashboards_updated ON dashboards(updated_at);
     DROP INDEX IF EXISTS idx_monitors_enabled;
     CREATE INDEX IF NOT EXISTS idx_triggers_monitor ON monitor_triggers(monitor_id, triggered_at);
     CREATE INDEX IF NOT EXISTS idx_triggers_session ON monitor_triggers(session_id);
@@ -247,15 +220,10 @@ export async function runSetup(sqlite: SetupDriver): Promise<void> {
     await sqlite.exec(`DELETE FROM app_settings WHERE key = 'chat_model' OR key LIKE 'sub_agent_model:%'`);
   }
 
-  // Migration: add FK constraints to existing tables that lack them.
-  // SQLite doesn't support ALTER TABLE ADD FOREIGN KEY, so we recreate tables.
-  await migrateForeignKeys(sqlite);
-
   await setupSync(sqlite, claimFirings);
 }
 
 async function setupSync(sqlite: SetupDriver, claimFirings: boolean): Promise<void> {
-  // Uids come after the foreign-key migration, which copies memory_operations column by column.
   for (const table of ["tool_memories", "memory_operations"]) {
     const names = (await sqlite.all(`PRAGMA table_info(${table})`) as { name: string }[]).map((c) => c.name);
     if (!names.includes("uid")) await sqlite.exec(`ALTER TABLE ${table} ADD COLUMN uid TEXT`);
@@ -269,6 +237,10 @@ async function setupSync(sqlite: SetupDriver, claimFirings: boolean): Promise<vo
       deleted INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (tbl, row_key)
     );
+    DROP TABLE IF EXISTS dashboard_widgets;
+    DROP TABLE IF EXISTS dashboards;
+    DELETE FROM sync_rows WHERE tbl IN ('dashboards', 'dashboard_widgets');
+    DELETE FROM chat_sessions WHERE id GLOB '__dashboard__*';
     UPDATE tool_memories SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL;
     UPDATE memory_operations SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_uid ON tool_memories(uid);
@@ -323,89 +295,4 @@ async function setupSync(sqlite: SetupDriver, claimFirings: boolean): Promise<vo
     );
   }
   await sqlite.exec(statements.join("\n"));
-}
-
-async function migrateForeignKeys(sqlite: SetupDriver): Promise<void> {
-  const fks = await sqlite.all("PRAGMA foreign_key_list(dashboard_widgets)");
-  if (fks.length > 0) return; // Already migrated
-
-  // Check if the table even exists (fresh install already has FKs from CREATE TABLE above)
-  const tableInfo = await sqlite.all("PRAGMA table_info(dashboard_widgets)");
-  if (tableInfo.length === 0) return; // Table doesn't exist yet
-
-  console.log("[db] Migrating tables to add foreign key constraints...");
-
-  // Must disable FKs for the migration (can't alter schema with FKs active)
-  await sqlite.exec("PRAGMA foreign_keys = OFF");
-
-  await sqlite.exec("BEGIN TRANSACTION");
-  try {
-    // Clean orphaned rows before migration
-    await sqlite.exec(`
-      DELETE FROM dashboard_widgets
-        WHERE dashboard_id != '' AND dashboard_id NOT IN (SELECT id FROM dashboards);
-      DELETE FROM memory_operations
-        WHERE session_id NOT IN (SELECT id FROM chat_sessions);
-    `);
-
-    // Recreate dashboard_widgets with FK
-    await sqlite.exec(`
-      ALTER TABLE dashboard_widgets RENAME TO _dashboard_widgets_old;
-      CREATE TABLE dashboard_widgets (
-        id TEXT PRIMARY KEY,
-        dashboard_id TEXT NOT NULL DEFAULT '' REFERENCES dashboards(id) ON DELETE CASCADE,
-        provider TEXT NOT NULL DEFAULT 'newrelic',
-        title TEXT NOT NULL,
-        query TEXT NOT NULL,
-        chart_type TEXT NOT NULL DEFAULT 'auto',
-        config TEXT NOT NULL DEFAULT '{}',
-        pos_x INTEGER NOT NULL DEFAULT 0,
-        pos_y INTEGER NOT NULL DEFAULT 0,
-        pos_w INTEGER NOT NULL DEFAULT 6,
-        pos_h INTEGER NOT NULL DEFAULT 6,
-        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-      );
-      INSERT INTO dashboard_widgets SELECT * FROM _dashboard_widgets_old;
-      DROP TABLE _dashboard_widgets_old;
-    `);
-
-    // Recreate memory_operations with FK
-    await sqlite.exec(`
-      ALTER TABLE memory_operations RENAME TO _memory_operations_old;
-      CREATE TABLE memory_operations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
-        operation TEXT NOT NULL,
-        memory_id INTEGER,
-        note TEXT,
-        created_at INTEGER NOT NULL DEFAULT (unixepoch())
-      );
-      INSERT INTO memory_operations SELECT * FROM _memory_operations_old;
-      DROP TABLE _memory_operations_old;
-    `);
-
-    // Recreate indexes on the new tables
-    await sqlite.exec(`
-      CREATE INDEX IF NOT EXISTS idx_widgets_dashboard ON dashboard_widgets(dashboard_id);
-      CREATE INDEX IF NOT EXISTS idx_memops_session ON memory_operations(session_id);
-    `);
-
-    await sqlite.exec("COMMIT");
-  } catch (err) {
-    await sqlite.exec("ROLLBACK");
-    await sqlite.exec("PRAGMA foreign_keys = ON");
-    throw err;
-  }
-
-  // Re-enable FKs after migration
-  await sqlite.exec("PRAGMA foreign_keys = ON");
-
-  // Verify migration
-  const check = await sqlite.all("PRAGMA foreign_key_check");
-  if (check.length > 0) {
-    console.warn("[db] Foreign key check found violations after migration:", check);
-  } else {
-    console.log("[db] Foreign key migration completed successfully.");
-  }
 }

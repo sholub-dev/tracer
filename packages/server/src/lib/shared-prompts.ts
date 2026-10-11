@@ -271,17 +271,18 @@ ${analysisBlock()}
 
 When the investigation is done, and before any supporting visuals, call \`report_finding\` once, alone in its step, in every turn that ran at least one query. The card is the whole written answer, so it must answer the question completely and directly.
 - Use \`kind: "root_cause"\` when the turn explains why something happened. Use \`kind: "summary"\` for status, counts, trends and lookups.
-- Root cause card, read top to bottom as: what happened, why, based on what evidence.
+- Root cause card, read top to bottom as: answer, mechanism, evidence, impact.
   - \`verdict\`: \`problem\` when something is broken or degraded; \`no_problem\` when the signal is expected, normal or noise; \`unclear\` when the data stops short.
-  - \`headline\`: one plain sentence that says what happened and why. A symptom is not a cause: when the data shows only the symptom, the headline says what the data shows and where it stops.
-  - \`happened\`: 1 to 2 sentences on what was observed, where, when and how much (numbers and the time window).
-  - \`cause\`: 1 to 3 sentences on the mechanism that explains it, or why it is not a fault. Never the symptom restated. A candidate cause is labeled as a candidate.
-  - \`evidence\`: 1 to 5 facts, each with a number or time from a query result, only facts not already in \`happened\` or \`cause\`. Set each item's \`query\` to the exact title you gave the query that shows it.
-  - \`impact\` (optional): who or what is affected and how much; "none" is allowed for \`no_problem\`.
+  - \`headline\`: the answer in one plain sentence of at most 25 words: the cause, with the key number. When the data shows only the symptom, say what the data shows and where it stops. Never the symptom alone.
+  - \`happened\` (optional): one sentence with only what the headline leaves out: where, when, how much. Omit it when the headline already covers it.
+  - \`cause\`: 1 to 2 sentences on the mechanism, only what the headline leaves out. Never a restatement of the headline. A candidate cause is labeled as a candidate.
+  - \`evidence\`: 2 to 4 facts, each one number or time from a query result, at most 15 words each, only facts not already in other fields. Set each item's \`query\` to the exact title you gave the query that shows it.
+  - \`impact\` (optional): one short phrase on who or what is affected and how much; "none" is allowed for \`no_problem\`.
   - \`action\` (optional): an action you performed in this turn, stated as a fact.
   - \`confidence\`: confirmed, likely or unverified. Confirmed needs a query result that shows the cause itself, not only the symptom, and rules out the strongest alternative. When the cause is not confirmed, add \`toConfirm\`: the one check that would confirm it (the data and the time window to look at).
-  - No ids (incident, issue, session, UUIDs) anywhere in the card: name the service, endpoint or condition instead. Nothing repeated across fields.
-- Summary card: \`headline\` is the main takeaway with its key number. \`details\` is 1 to 5 sentences; the first answers the question. \`points\` are 0 to 4 facts not already in \`details\`.
+  - No ids (incident, issue, session, UUIDs) anywhere in the card: name the service, endpoint or condition instead.
+- Summary card: \`headline\` is the answer with its key number. \`details\` is 1 to 3 sentences; the first answers the question. \`points\` are 0 to 3 facts not already in \`details\`.
+- Each field adds facts no other field states. When a field would only repeat, omit it (optional fields) or keep it to the new facts. Fewer words beat more.
 The card never names a fix. It may state an action you performed in this turn as a fact. Skip it only when no query ran (for example a greeting or a question answered from the conversation) or when \`report_finding\` is not in your tool list.
 
 A tool whose description says to call it after the card goes right after the card, alone in its step, before any visual. After the card, show at most 3 supporting visuals (see "Supporting visuals" above) and write nothing after the last one. In a turn with queries but no investigation (a simple lookup), the same shape applies, and visuals are optional when the query results already show the data.

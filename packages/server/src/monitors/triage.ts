@@ -164,7 +164,7 @@ export function reportIssueStatusTool(db: Db, allowedIds: string[], sessionId: s
       issues: z.array(z.object({
         issueId: z.string(),
         status: z.enum(ISSUE_STATUSES),
-        reason: z.string().describe("Why this status, in a few words with the key number, e.g. \"Apdex back to 0.97 since 13:58\". For stopped, name the result and the time of the last error. No customer data. " + SLACK_RULE),
+        reason: z.string().describe("Why this status, at most 12 words, with the key number, e.g. \"Apdex back to 0.97 since 13:58\". For stopped, name the result and the time of the last error. No customer data. " + SLACK_RULE),
       })),
     }),
     execute: async ({ severity, issues }) => {
@@ -207,14 +207,15 @@ export function decide(i: DecideInput): Decision {
 // The condition name is short; raw issue titles can be whole error messages.
 const nameOf = (r: { conditionName: string | null; title: string | null }) => r.conditionName || r.title || "unknown issue";
 
-function actionLine(state: string, title: string, reason?: string, why?: string | null): string {
+// The title is left out when the action covers one issue: the headline names it already.
+function actionLine(state: string, title: string, reason?: string, why?: string | null, single = false): string {
   const labels: Record<string, string> = {
     closed: "Acked and closed in New Relic",
-    watching: "Still ongoing, left open, re-check set",
+    watching: "Left open, re-check set",
     nr_closed: "Already closed in New Relic",
   };
   const label = labels[state] ?? `Left open (${reason ?? "unknown"})`;
-  return `${label}: ${clip(title, TITLE_MAX_CHARS)}${why ? `. Why: ${why}` : ""}`;
+  return `${single ? label : `${label}: ${clip(title, TITLE_MAX_CHARS)}`}${state === "closed" && why ? `. Why: ${why}` : ""}`;
 }
 
 // Counts earlier firings, not sibling issues of this one.
@@ -302,7 +303,7 @@ export async function applyTriage(context: Context, sessionId: string, recheck: 
   for (const row of rows) {
     if (row.state === "nr_closed" || row.state === "closed") {
       const agent = row.state === "closed";
-      lines.push(actionLine(row.state, nameOf(row), undefined, agent ? row.reason : null));
+      lines.push(actionLine(row.state, nameOf(row), undefined, agent ? row.reason : null, rows.length === 1));
       ping ||= agent && !recheck && row.severity === "high";
       continue;
     }
@@ -325,7 +326,7 @@ export async function applyTriage(context: Context, sessionId: string, recheck: 
       updatedAt: now,
     }).where(eq(alertIssues.issueId, row.issueId)).run();
     ping ||= d.ping;
-    if (!(recheck && watching)) lines.push(actionLine(d.outcome, nameOf(row), d.reason, row.reason));
+    if (!(recheck && watching)) lines.push(actionLine(d.outcome, nameOf(row), d.reason, row.reason, rows.length === 1));
   }
   return { action: lines.join("; "), ping };
 }
@@ -405,7 +406,7 @@ async function leaveOpen(context: Context, rows: IssueRow[], reason: string): Pr
   if (rows.length === 0) return;
   await setRows(context.db, rows, { state: "left_open" });
   await postUpdate(context, rows[0], {
-    action: rows.map((r) => actionLine("left_open", nameOf(r), reason)).join("; "), ping: true,
+    action: rows.map((r) => actionLine("left_open", nameOf(r), reason, null, rows.length === 1)).join("; "), ping: true,
   });
 }
 

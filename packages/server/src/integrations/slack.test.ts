@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isSlackWebhook, monitorAlert, parseMentions, postSlack, recheckUpdate, redact, triageUpdate, verdictOf } from "./slack.js";
+import { clip, isSlackWebhook, known, monitorAlert, parseMentions, postSlack, recheckUpdate, redact, triageUpdate, verdictOf } from "./slack.js";
 import type { Finding } from "@tracer-sh/shared";
 import type { AlertSummary } from "../monitors/alert-summary.js";
 
@@ -31,31 +31,47 @@ test("verdictOf hides unknowns and shows no summary text without a report", () =
     verdictOf(summary({
       severity: "high", policy: "Errors", started: "unknown",
       issues: [issue("`pay-api`", "/pay", "3 × Timeout", "unknown", "Checkout"), issue("unknown", "/cart", "1 × Timeout"), issue("n/a", "", "")],
-    }), finding({ headline: "**DB** timeouts after the 1.2 deploy.", cause: "Pool size dropped to 5 in 1.2.", confidence: undefined })),
+    }), finding({ headline: "**DB** timeouts after the 1.2 deploy.", confidence: undefined })),
     {
       severity: "high",
       summary: "DB timeouts after the 1.2 deploy.",
       verdict: "",
-      happened: "",
-      cause: "Pool size dropped to 5 in 1.2.",
-      confidence: "unverified",
-      facts: [["Policy", "Errors"]],
+      confidence: "",
+      facts: { policy: "Errors", started: "", status: "" },
       issues: [["pay-api", "/pay", "3 × Timeout", "", "Checkout"], ["", "/cart", "1 × Timeout", "", ""]],
+      evidence: [],
     },
   );
-  assert.deepEqual(verdictOf(null, null), { severity: "unknown", summary: "", verdict: "", happened: "", cause: "", confidence: "", facts: [], issues: [] });
+  assert.deepEqual(verdictOf(null, null), { severity: "unknown", summary: "", verdict: "", confidence: "", facts: { policy: "", started: "", status: "" }, issues: [], evidence: [] });
 });
 
-test("verdictOf takes the headline, verdict, happened, cause and confidence from the finding", () => {
-  const v = verdictOf(null, finding({ headline: "Pool exhausted.", verdict: "no_problem", happened: "The pool held 50 of 50.", cause: "A burst at 10:05.", confidence: "confirmed" }));
-  assert.deepEqual([v.summary, v.verdict, v.happened, v.cause, v.confidence], ["Pool exhausted.", "no problem", "The pool held 50 of 50.", "A burst at 10:05.", "confirmed"]);
-  const s = verdictOf(summary({ severity: "high" }), finding({ kind: "summary", headline: "Checkout is healthy.", details: "Errors stayed at 0.2%.", confidence: undefined }));
-  assert.deepEqual([s.severity, s.summary, s.happened, s.cause], ["high", "Checkout is healthy.", "", ""]);
+test("known hides none, unknown and n/a with any suffix", () => {
+  assert.equal(known("none (background analytics config failure)"), "");
+  assert.equal(known("None"), "");
+  assert.equal(known("Unknown."), "");
+  assert.equal(known("n/a"), "");
+  assert.equal(known("Checkout"), "Checkout");
+  assert.equal(known("nonexistent route"), "nonexistent route");
 });
 
-test("verdictOf strips inline markdown from happened and cause, then redacts", () => {
-  const v = verdictOf(null, finding({ headline: "Pool full.", verdict: "problem", happened: "**50 of 50** held; `PoolTimeoutError` for jo.d@corp.com today.", cause: "Retry loop in **checkout**.", confidence: "likely" }));
-  assert.deepEqual([v.happened, v.cause], ["50 of 50 held; PoolTimeoutError for [email] today.", "Retry loop in checkout."]);
+test("verdictOf takes the headline, verdict and confidence from a root-cause card only", () => {
+  const v = verdictOf(null, finding({ headline: "Pool exhausted.", verdict: "no_problem", confidence: "confirmed" }));
+  assert.deepEqual([v.summary, v.verdict, v.confidence], ["Pool exhausted.", "no problem", "confirmed"]);
+  const s = verdictOf(summary({ severity: "high" }), finding({ kind: "summary", headline: "Checkout is healthy.", details: "Errors stayed at 0.2%.", confidence: "confirmed" }));
+  assert.deepEqual([s.severity, s.summary, s.confidence], ["high", "Checkout is healthy.", ""]);
+});
+
+test("verdictOf shows card facts only when the alert lists no issues", () => {
+  const card = finding({ verdict: "problem", evidence: [{ fact: "**50 of 50** held for jo.d@corp.com" }, { fact: "b" }, { fact: "c" }, { fact: "d" }] });
+  assert.deepEqual(verdictOf(summary({}), card).evidence, ["50 of 50 held for [email]", "b", "c"]);
+  assert.deepEqual(verdictOf(summary({ issues: [issue("api", "/pay", "1 × Timeout")] }), card).evidence, []);
+  assert.deepEqual(verdictOf(summary({}), finding({ kind: "summary", headline: "h", points: ["p1", "p2"] })).evidence, ["p1", "p2"]);
+});
+
+test("clip cuts at a word boundary and hard-cuts when there is no space", () => {
+  assert.equal(clip("Left open, re-check set for later", 20), "Left open, re-check …");
+  assert.equal(clip("x".repeat(30), 10), `${"x".repeat(10)} …`);
+  assert.equal(clip("short", 10), "short");
 });
 
 test("redact masks personal data, keeps normal text", () => {
@@ -96,26 +112,57 @@ test("monitorAlert builds one compact section and a footer, escapes", () => {
     triggeredAt: 1_767_225_600,
     summary: summary({
       severity: "high", policy: "Errors", started: "10:02 UTC",
-      status: "stopped (last error at 10:09 UTC)", issues: [issue("pay-api", "/pay", "40 × Timeout", "Pay fails", "Checkout"), issue("unknown", "/cart", "1 × <Err>")],
+      status: "stopped at 10:09 UTC", issues: [issue("pay-api", "/pay", "40 × Timeout", "Pay fails", "Checkout"), issue("none (background)", "/cart", "1 × <Err>", "none (background)", "none")],
     }),
-    finding: finding({ headline: "Checkout is down & failing.", verdict: "problem", happened: "pay-api failed 40 requests.", cause: "pay-db ran out of connections [step 3]." }),
+    finding: finding({ headline: "Checkout is down & failing.", verdict: "problem", confidence: "confirmed" }),
     timeZone: "UTC",
     mentions: "U0123ABCD",
   });
-  assert.equal(text, "<@U0123ABCD> *[HIGH :red_circle: · problem] Checkout is down &amp; failing.*");
+  assert.equal(text, "<@U0123ABCD> *[HIGH :red_circle: · problem · confirmed] Checkout is down &amp; failing.*");
   assert.deepEqual(blocks, [
     { type: "section", text: { type: "mrkdwn", text: [
       text,
-      "*What happened:* pay-api failed 40 requests.",
-      "*Why (likely):* pay-db ran out of connections.",
-      "*Policy:* Errors",
-      "*Started:* 10:02 UTC",
-      "*Status:* stopped (last error at 10:09 UTC)",
       "• *pay-api* `/pay`: 40 × Timeout. Pay fails. Funnel: Checkout",
       "• `/cart`: 1 × &lt;Err&gt;",
+      "*Errors* · started 10:02 UTC · stopped at 10:09 UTC",
     ].join("\n") } },
     { type: "context", elements: [{ type: "mrkdwn", text: 'monitor "Errors &lt;prod&gt;" · Jan 1, 12:00 AM UTC' }] },
   ]);
+});
+
+test("monitorAlert renders a full alert short, at most 3 issues and the action", () => {
+  const { blocks } = monitorAlert({
+    name: "Mobile Apdex", triggeredAt: 0, timeZone: "UTC",
+    summary: summary({
+      severity: "low", policy: "Mobile APDEX (Tier MID)", started: "22:14 PDT", status: "ongoing",
+      issues: [
+        issue("ContentSquare", "/android/config/v2/{app}.json", "23 × HTTP 404", "none (background analytics config failure)", "none (background)"),
+        issue("Firebase", "/v1/projects/{id}/installations/{id}/authTokens:generate", "21 × network failure", "none", "none"),
+        issue("Crashlytics", "/spi/v2/platforms/android/gmp/{id}/settings", "5 × network failure", "unknown", "n/a"),
+      ],
+    }),
+    finding: finding({ headline: "Mobile Apdex dipped to 0.71 because third-party SDK errors weighed heavily at low traffic (19 requests in 10 min).", verdict: "no_problem", confidence: "confirmed" }),
+    action: "Left open, re-check set",
+  });
+  const text = (blocks[0] as { text: { text: string } }).text.text;
+  assert.equal(text, [
+    "*[LOW :large_green_circle: · no problem · confirmed] Mobile Apdex dipped to 0.71 because third-party SDK errors weighed heavily at low traffic (19 requests in 10 min).*",
+    "• *ContentSquare* `/android/config/v2/{app}.json`: 23 × HTTP 404",
+    "• *Firebase* `/v1/projects/{id}/installations/{id}/authTokens:generate`: 21 × network failure",
+    "• *Crashlytics* `/spi/v2/platforms/android/gmp/{id}/settings`: 5 × network failure",
+    "*Mobile APDEX (Tier MID)* · started 22:14 PDT · ongoing",
+    "*Action:* Left open, re-check set",
+  ].join("\n"));
+  assert.ok(text.length < 700, String(text.length));
+});
+
+test("monitorAlert shows 3 issues then +N more, and card facts when there are no issues", () => {
+  const many = summary({ issues: Array.from({ length: 5 }, (_, i) => issue(`svc${i}`, "/p", "1 × E")) });
+  const text = (monitorAlert({ name: "m", triggeredAt: 0, timeZone: "UTC", summary: many, finding: null }).blocks[0] as { text: { text: string } }).text.text;
+  assert.equal(text.split("\n").filter((l) => l.startsWith("• ")).length, 3);
+  assert.match(text, /\n\+2 more/);
+  const none = monitorAlert({ name: "m", triggeredAt: 0, timeZone: "UTC", summary: summary({}), finding: finding({ verdict: "problem", evidence: [{ fact: "Errors rose to 5%" }] }) }).blocks[0] as { text: { text: string } };
+  assert.match(none.text.text, /\n• Errors rose to 5%$/);
 });
 
 test("monitorAlert without a summary posts the no-root-cause fallback", () => {
@@ -126,7 +173,7 @@ test("monitorAlert without a summary posts the no-root-cause fallback", () => {
 test("monitorAlert stays under Slack's section limit", () => {
   const long = "x".repeat(400);
   const s = summary({ issues: Array.from({ length: 5 }, () => issue(long, long, long, long, long)) });
-  const section = monitorAlert({ name: "m", triggeredAt: 0, summary: s, finding: finding({ headline: long, happened: long.repeat(2), cause: long.repeat(2) }), timeZone: "UTC" }).blocks[0] as { text: { text: string } };
+  const section = monitorAlert({ name: "m", triggeredAt: 0, summary: s, finding: finding({ headline: long, evidence: [{ fact: long }] }), timeZone: "UTC" }).blocks[0] as { text: { text: string } };
   assert.ok(section.text.text.length <= 3000);
 });
 
@@ -144,7 +191,7 @@ test("monitorAlert always keeps the Action line and skips mentions when no ping 
   });
   const { blocks } = alert(false);
   assert.deepEqual(blocks[0], { type: "section", text: { type: "mrkdwn", text: [
-    "*[LOW :large_green_circle:] Noise.*", "*Policy:* Errors", "• *api* `/pay`: 1 × Timeout",
+    "*[LOW :large_green_circle:] Noise.*", "• *api* `/pay`: 1 × Timeout", "*Errors*",
     "*Action:* Acked and closed in New Relic: Errors on /pay &lt;x&gt; by [email]",
   ].join("\n") } });
   assert.equal((blocks[1] as { type: string }).type, "context");
@@ -173,4 +220,9 @@ test("redact removes bare domain links and keeps file names, decimals and senten
   assert.equal(redact("see nr.example.com/x/y?id=1 and docs.corp.io/a for details"), "see and for details");
   assert.equal(redact("Edited app.ts and config.json, latency 1.5 on v1.2. Done.Next step"), "Edited app.ts and config.json, latency 1.5 on v1.2. Done.Next step");
   assert.equal(redact("route /api/users.list/1 and src/app.ts/x"), "route /api/users.list/1 and src/app.ts/x");
+});
+
+test("verdictOf shows the card evidence when no alert details were reported", () => {
+  const v = verdictOf(null, finding({ headline: "Pool full.", verdict: "problem", confidence: "likely", evidence: [{ fact: "Pool held **50 of 50** at 10:05" }] }));
+  assert.deepEqual(v.evidence, ["Pool held 50 of 50 at 10:05"]);
 });

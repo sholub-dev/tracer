@@ -26,15 +26,15 @@ const baseFields = {
 
 const slackFields = {
   policy: z.string().describe("The name of the alert policy or condition that fired, never an id"),
-  started: z.string().describe("The first bad minute in the data, with time zone"),
-  status: z.string().describe("One of: stopped (last error at <time>); ongoing (errors in the latest minutes up to now); recurring (the repeat pattern, e.g. every hour since 06:00). Check the data up to now."),
+  started: z.string().describe("The first bad minute, time and time zone only, e.g. 22:14 PDT"),
+  status: z.string().describe("One of: ongoing; stopped at <time>; recurring <pattern, e.g. hourly since 06:00>. At most 6 words. Check the data up to now."),
   issues: z.array(z.object({
     service: z.string(),
     endpoint: z.string().describe("Route pattern such as /loans/{id}"),
-    errors: z.string().describe("<count> × <error class and code> (<error rate>)"),
-    userImpact: z.string().describe("What the user sees"),
-    journeyStep: z.string().describe("User journey step, or \"none (background)\""),
-  })).max(5).describe("One per endpoint, largest first"),
+    errors: z.string().describe("<count> × <error class or code>"),
+    userImpact: z.string().describe("What the user sees, or exactly \"none\""),
+    journeyStep: z.string().describe("The user journey step, or exactly \"none\""),
+  })).max(5).describe("Up to 3, one per endpoint, largest first"),
   notify: z.boolean().describe("Ping the people tagged in Slack: true when the impact needs a person now; on a re-check, true while it is still ongoing with user impact"),
 };
 

@@ -155,7 +155,7 @@ test("the monitor close tool leaves the row pending when New Relic fails to clos
   assert.deepEqual(await toolRun(monitorIssueTools(context, ["a"], "s1").close_nr_issue, "a"), { error: "boom" });
   assert.equal((await context.db.select().from(schema.alertIssues).get())?.state, "pending");
   await context.db.update(schema.alertIssues).set({ verdict: "stopped", severity: "low" }).run();
-  assert.match((await applyTriage(context, "s1", false))!.action, /Left open \(close failed\): Errors/);
+  assert.match((await applyTriage(context, "s1", false))!.action, /^Left open \(close failed\)$/);
 });
 
 test("the monitor ack and close tools refuse while the Settings switch is off", async () => {
@@ -202,6 +202,16 @@ test("applyTriage records what the agent did: closed, nr_closed, left open, watc
   assert.match(result!.action, /Left open \(not closed\): Errors/);
 });
 
+test("applyTriage omits the title for one issue, keeps it for several, and gives Why only for a close", async () => {
+  const { context } = fakeNewRelic({ a: "ACTIVATED", b: "ACTIVATED" });
+  await addIssue(context.db, "a", { verdict: "ongoing", severity: "low", reason: "errors continue" });
+  await addTimer(context.db);
+  assert.equal((await applyTriage(context, "s1", false))!.action, "Left open, re-check set");
+  await addIssue(context.db, "b", { verdict: "ongoing", severity: "low", reason: "errors continue" });
+  await context.db.update(schema.alertIssues).set({ state: "pending", watchUntil: null }).run();
+  assert.equal((await applyTriage(context, "s1", false))!.action, "Left open, re-check set: Errors; Left open, re-check set: Errors");
+});
+
 test("applyTriage pings for a high-severity close the agent made, not for a medium one", async () => {
   const { context } = fakeNewRelic({});
   await addIssue(context.db, "a", { state: "closed", verdict: "stopped", severity: "medium" });
@@ -227,7 +237,7 @@ test("applyTriage leaves an ongoing issue open and pings when no follow-up timer
   const row = await context.db.select().from(schema.alertIssues).get();
   assert.equal(row?.state, "left_open");
   assert.equal(result?.ping, true);
-  assert.match(result!.action, /Left open \(no re-check set\): Errors/);
+  assert.match(result!.action, /^Left open \(no re-check set\)$/);
 });
 
 test("a follow-up wake-up gives the close tool for its issues; the agent closes and the re-check reports it", async () => {
@@ -243,7 +253,7 @@ test("a follow-up wake-up gives the close tool for its issues; the agent closes 
   const result = await applyTriage(context, "s1", true, ["a"]);
   assert.equal((await context.db.select().from(schema.alertIssues).get())?.state, "closed");
   assert.deepEqual(resolved, ["a"]);
-  assert.match(result!.action, /Acked and closed in New Relic: Errors\. Why: errors back to 0 since 13:58$/);
+  assert.match(result!.action, /^Acked and closed in New Relic\. Why: errors back to 0 since 13:58$/);
 });
 
 test("a follow-up wake-up stops watching when triage is off or the 24h cap passed", async () => {

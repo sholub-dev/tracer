@@ -78,7 +78,9 @@ test("prompts tell the agent to report a finding in every turn that ran at least
     assert.ok(prompt.includes("`kind: \"root_cause\"`") && prompt.includes("`kind: \"summary\"`"), `${name}: missing finding kinds`);
     assert.ok(prompt.includes("the one check that would confirm it") && !prompt.includes("only place you may name an action"), `${name}: finding card must not allow an action`);
     assert.ok(prompt.includes("Skip it only when no query ran"), `${name}: missing skip rule`);
-    assert.ok(prompt.includes("`happened`: 1 to 2 sentences") && prompt.includes("`cause`: 1 to 3 sentences") && prompt.includes("No ids (incident, issue, session, UUIDs)") && prompt.includes("The card is the whole written answer"), `${name}: missing details rule`);
+    assert.ok(prompt.includes("`happened` (optional): one sentence") && prompt.includes("`cause`: 1 to 2 sentences") && prompt.includes("No ids (incident, issue, session, UUIDs)") && prompt.includes("The card is the whole written answer"), `${name}: missing details rule`);
+    assert.ok(prompt.includes("one plain sentence of at most 25 words: the cause, with the key number"), `${name}: missing headline rule`);
+    assert.ok(prompt.includes("Each field adds facts no other field states.") && !prompt.includes("Nothing repeated across fields"), `${name}: missing no-repeat rule`);
     assert.ok(prompt.includes("at most 3 tool calls") && prompt.includes("Nothing after the last visual"), `${name}: missing visuals rule`);
     for (const stale of ["Visual-first narrative", "End with a concise conclusion", "It does not replace the written answer"]) {
       assert.ok(!prompt.includes(stale), `${name}: stale rule "${stale}"`);

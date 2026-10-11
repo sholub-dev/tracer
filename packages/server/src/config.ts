@@ -142,12 +142,6 @@ export const CONFIG = {
   /** How often the server re-checks npm for a new version. */
   updateCheckIntervalMs: 60 * 60 * 1000,
 
-  // ── Dashboard defaults ──
-
-  widgetDefaultWidth: 6,
-  widgetDefaultHeight: 6,
-  gridColumns: 12,
-
   /** MCP subprocesses close after this long without a tool call, and restart on the next ping. */
   mcpIdleCloseMs: 15 * 60_000,
   /** Most sessions the session list returns, newest first. */

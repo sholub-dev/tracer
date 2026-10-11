@@ -4,9 +4,6 @@
  */
 
 export const FEATURES = {
-  /** Dashboard page with grid widgets. */
-  dashboards: false,
-
   /** Monitor page with alerting. */
   monitors: true,
 } as const;

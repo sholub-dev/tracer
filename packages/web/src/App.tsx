@@ -25,11 +25,10 @@ function lazyPage<P extends object>(load: () => Promise<ComponentType<P>>) {
 
 const Debug = lazyPage(() => import("./pages/Debug").then((m) => m.Debug));
 const Settings = lazyPage(() => import("./pages/Settings").then((m) => m.Settings));
-const Dashboard = __DASHBOARDS__ ? lazyPage(() => import("./pages/Dashboard").then((m) => m.Dashboard)) : null;
 const Monitors = FEATURES.monitors ? lazyPage(() => import("./pages/Monitors").then((m) => m.Monitors)) : null;
 
 function preloadPages() {
-  const load = () => [Debug, Settings, Dashboard, Monitors].forEach((p) => p?.preload());
+  const load = () => [Debug, Settings, Monitors].forEach((p) => p?.preload());
   if ("requestIdleCallback" in window) window.requestIdleCallback(load, { timeout: 3000 });
   else setTimeout(load, 1000);
 }
@@ -37,14 +36,12 @@ function preloadPages() {
 const validPages = new Set<string>([
   "debug",
   "settings",
-  ...(__DASHBOARDS__ ? ["dashboard"] : []),
   ...(FEATURES.monitors ? ["monitors"] : []),
 ]);
 
 interface RouteState {
   page: Page;
   sessionId: string | null;
-  dashboardId: string | null;
   builderSessionId: string | null;
 }
 
@@ -52,9 +49,8 @@ function getRouteFromPath(): RouteState {
   const segments = window.location.pathname.replace(/^\/+/, "").split("/");
   const page = segments[0] && validPages.has(segments[0]) ? (segments[0] as Page) : "debug";
   const sessionId = page === "debug" && segments[1] ? segments[1] : null;
-  const dashboardId = page === "dashboard" && segments[1] ? segments[1] : null;
   const builderSessionId = page === "monitors" && segments[1] === "chat" && segments[2] ? segments[2] : null;
-  return { page, sessionId, dashboardId, builderSessionId };
+  return { page, sessionId, builderSessionId };
 }
 
 // useSyncExternalStore needs the same object for the same URL, or it re-renders forever.
@@ -91,7 +87,6 @@ export function App() {
   const {
     page: currentPage,
     sessionId: currentSessionId,
-    dashboardId: currentDashboardId,
     builderSessionId: currentBuilderSessionId,
   } = useSyncExternalStore(subscribe, getRouteSnapshot);
 
@@ -124,14 +119,6 @@ export function App() {
     if (needsSessionId) startNewSession(true);
   }, [needsSessionId, startNewSession]);
 
-  const selectDashboard = useCallback((id: string) => {
-    pushPath(`/dashboard/${id}`);
-  }, []);
-
-  const newDashboard = useCallback(() => {
-    pushPath(`/dashboard/${crypto.randomUUID()}`);
-  }, []);
-
   const closeBuilderChat = useCallback(() => {
     pushPath("/monitors");
   }, []);
@@ -150,21 +137,11 @@ export function App() {
             currentSessionId={currentSessionId}
             onSelectSession={selectSession}
             onNewSession={newSession}
-            currentDashboardId={currentDashboardId}
-            onSelectDashboard={selectDashboard}
-            onNewDashboard={newDashboard}
           />
         }
       >
         <ErrorBoundary resetKey={window.location.pathname}>
         <Suspense fallback={<PageFallback />}>
-          {Dashboard && currentPage === "dashboard" && (
-            <Dashboard
-              key={currentDashboardId ?? "default"}
-              dashboardId={currentDashboardId}
-              onSelectDashboard={selectDashboard}
-            />
-          )}
           {currentPage === "debug" && currentSessionId && (
             <Debug key={currentSessionId} sessionId={currentSessionId} isNew={currentSessionId === newSessionId} onDeleted={() => startNewSession(true)} />
           )}

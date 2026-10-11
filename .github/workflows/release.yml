@@ -44,6 +44,14 @@ jobs:
         if: steps.version.outputs.release == 'true'
         run: pnpm install --frozen-lockfile
 
+      - name: Lint and typecheck
+        if: steps.version.outputs.release == 'true'
+        run: pnpm lint
+
+      - name: Test
+        if: steps.version.outputs.release == 'true'
+        run: pnpm -r test
+
       - name: Build
         if: steps.version.outputs.release == 'true'
         run: pnpm build

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useState, useEffect, useRef, type ReactNode } from "react";
 import { readUIMessageStream, type UIMessage, type UIMessageChunk } from "ai";
 import { ProgressStore } from "../../lib/progress-store";
 import { handleProgressData, stopChat, useCompactedMessages } from "../../lib/chat-utils";

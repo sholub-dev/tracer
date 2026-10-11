@@ -2,13 +2,12 @@ import type { Context as HonoContext, Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { streamSSE } from "hono/streaming";
 import { createUIMessageStreamResponse, type UIMessage } from "ai";
-import { dashboardSessionId, FEATURES, SESSION_PREFIX, unixNow } from "@tracer-sh/shared";
+import { SESSION_PREFIX, unixNow } from "@tracer-sh/shared";
 import { chatSessions } from "../../db/schema.js";
 import { sessionChanged } from "../../lib/session-events.js";
 import type { Context } from "../../trpc/context.js";
 import { loadSessionMessages, runChatAgent, SESSION_BUSY } from "../../agents/base-agent.js";
 import { chatRunOptions, monitorChatRunOptions } from "../../agents/chat-run.js";
-import { collectDashboardTools } from "../../tools/dashboard-tools.js";
 import { generateSessionTitle } from "../../agents/utility/title.js";
 import { CONFIG } from "../../config.js";
 
@@ -53,24 +52,6 @@ export function registerChatRoutes(app: Hono, context: Context): void {
         }
       }
       return result;
-    });
-  });
-
-  if (FEATURES.dashboards) app.post("/api/dashboard-chat", async (c) => {
-    const { id, message, dashboardId } = await c.req.json<{ id: string; message: UIMessage; dashboardId: string }>();
-    const sessionId = dashboardSessionId(dashboardId);
-    return replyWithRun(c, async () => {
-      const { messages, summary, summaryUpTo } = await loadSessionMessages(context.db, sessionId, message);
-      return runChatAgent({
-        sessionId,
-        messages,
-        summary,
-        summaryUpTo,
-        context,
-        retryDelaysMs: CONFIG.chatRetryDelaysMs,
-        collectTools: (writer) => collectDashboardTools(context.providers, context.db, writer, dashboardId),
-        sessionTitle: () => "Dashboard Builder",
-      });
     });
   });
 

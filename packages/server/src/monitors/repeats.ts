@@ -1,6 +1,6 @@
 import { and, desc, eq, gte, isNotNull, lt } from "drizzle-orm";
 import { z } from "zod";
-import { tool, type Tool, type UIMessage } from "ai";
+import { tool, type Tool } from "ai";
 import { SESSION_KIND, type Finding } from "@tracer-sh/shared";
 import type { Db } from "../db/driver.js";
 import { chatSessions, monitors, monitorTriggers } from "../db/schema.js";

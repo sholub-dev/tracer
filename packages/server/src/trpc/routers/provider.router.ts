@@ -245,7 +245,7 @@ export const providerRouter = router({
         };
         for (const m of data.publisherModels ?? []) {
           const id = m.name?.split("/").pop();
-          if (!id || !id.startsWith("gemini") || id.includes("embedding")) continue;
+          if (!id?.startsWith("gemini") || id.includes("embedding")) continue;
           if (seen.has(id)) continue;
           seen.add(id);
           models.push({ modelId: id, label: id });

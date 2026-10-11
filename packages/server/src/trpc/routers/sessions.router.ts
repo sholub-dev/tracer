@@ -43,10 +43,7 @@ export const sessionsRouter = router({
         updatedAt: chatSessions.updatedAt,
       })
       .from(chatSessions)
-      .where(and(
-        notLike(chatSessions.id, `${SESSION_PREFIX.DASHBOARD}%`),
-        notLike(chatSessions.id, `${SESSION_PREFIX.MONITORS}%`),
-      ))
+      .where(notLike(chatSessions.id, `${SESSION_PREFIX.MONITORS}%`))
       .orderBy(desc(chatSessions.updatedAt))
       .limit(CONFIG.sessionListLimit)
       .all())

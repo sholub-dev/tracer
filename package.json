@@ -1,6 +1,6 @@
 {
   "name": "tracer-sh",
-  "version": "0.7.16",
+  "version": "0.7.17",
   "type": "module",
   "description": "Local-first debugging & analysis platform",
   "license": "SEE LICENSE IN LICENSE",
@@ -25,7 +25,8 @@
     "dev": "concurrently --kill-others -n server,web -c blue,green \"pnpm --filter @tracer-sh/server dev\" \"pnpm --filter @tracer-sh/web dev\"",
     "build": "pnpm --filter @tracer-sh/shared build && pnpm --filter @tracer-sh/server build && pnpm --filter @tracer-sh/web build",
     "start": "node packages/server/dist/index.js",
-    "lint": "pnpm -r --parallel run typecheck",
+    "typecheck": "pnpm -r --parallel run typecheck",
+    "lint": "biome lint . && pnpm typecheck",
     "release": "bin/release.sh",
     "prepublishOnly": "if [ -z \"${CI:-}\" ]; then echo 'ERROR: Do not publish manually. Use: pnpm release <version>' && exit 1; fi && pnpm build"
   },
@@ -47,6 +48,7 @@
     }
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.15",
     "concurrently": "^10.0.5",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3"

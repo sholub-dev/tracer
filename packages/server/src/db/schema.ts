@@ -1,5 +1,4 @@
 import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
-import { sql } from "drizzle-orm";
 import { unixNow } from "@tracer-sh/shared";
 
 export const providerConfigs = sqliteTable("provider_configs", {
@@ -63,41 +62,6 @@ export const chatSessions = sqliteTable("chat_sessions", {
 }, (t) => [
   index("idx_sessions_status_kind").on(t.status, t.kind, t.id),
   index("idx_sessions_list").on(t.updatedAt, t.kind, t.status, t.id, t.title),
-]);
-
-export const dashboards = sqliteTable("dashboards", {
-  id: text("id").primaryKey(),
-  title: text("title").notNull(),
-  createdAt: integer("created_at")
-    .notNull()
-    .$defaultFn(() => unixNow()),
-  updatedAt: integer("updated_at")
-    .notNull()
-    .$defaultFn(() => unixNow()),
-}, (t) => [
-  index("idx_dashboards_updated").on(t.updatedAt),
-]);
-
-export const dashboardWidgets = sqliteTable("dashboard_widgets", {
-  id: text("id").primaryKey(),
-  dashboardId: text("dashboard_id").notNull().default("").references(() => dashboards.id, { onDelete: "cascade" }),
-  provider: text("provider").notNull().default("newrelic"),
-  title: text("title").notNull(),
-  query: text("query").notNull(),
-  chartType: text("chart_type").notNull().default("auto"),
-  config: text("config").notNull().default("{}"),
-  posX: integer("pos_x").notNull().default(0),
-  posY: integer("pos_y").notNull().default(0),
-  posW: integer("pos_w").notNull().default(6),
-  posH: integer("pos_h").notNull().default(6),
-  createdAt: integer("created_at")
-    .notNull()
-    .$defaultFn(() => unixNow()),
-  updatedAt: integer("updated_at")
-    .notNull()
-    .$defaultFn(() => unixNow()),
-}, (t) => [
-  index("idx_widgets_dashboard").on(t.dashboardId),
 ]);
 
 export const monitors = sqliteTable("monitors", {

@@ -20,7 +20,6 @@ export const DEFAULT_CHAT_MODE = "direct" as const;
 export const UNIFIED_SCOPE = "__unified__";
 
 export const SESSION_PREFIX = {
-  DASHBOARD: "__dashboard__",
   MONITORS: "__monitors__",
 } as const;
 
@@ -30,7 +29,3 @@ export const SESSION_KIND = {
   MONITOR: "monitor",
 } as const;
 export type SessionKind = (typeof SESSION_KIND)[keyof typeof SESSION_KIND];
-
-export function dashboardSessionId(dashboardId: string): string {
-  return `${SESSION_PREFIX.DASHBOARD}:${dashboardId}`;
-}

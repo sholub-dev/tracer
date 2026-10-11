@@ -15,7 +15,9 @@ import { isEmptyQuery, isFailedQuery, type SubAgentQuery } from "../agents/chat/
  */
 export function toolModelOutput(output: unknown): { type: "text"; value: string } {
   if (output && typeof output === "object" && "analysis" in output) {
-    return { type: "text", value: (output as { analysis: string }).analysis };
+    // Analysis carries raw query data, so a closing tag inside it must not end the wrapper.
+    const analysis = (output as { analysis: string }).analysis.replaceAll("</tool_result>", "&lt;/tool_result&gt;");
+    return { type: "text", value: `<tool_result>\n${analysis}\n</tool_result>` };
   }
   if (output && typeof output === "object" && "error" in output) {
     return { type: "text", value: `Error: ${(output as { error: string }).error}` };

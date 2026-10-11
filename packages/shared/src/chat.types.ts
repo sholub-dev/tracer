@@ -62,9 +62,6 @@ export function mergeProgressPart(
 
 /** Tool names as registered on the server */
 export const TOOL_NAMES = {
-  CREATE_WIDGET: "create_widget",
-  UPDATE_WIDGET: "update_widget",
-  DELETE_WIDGET: "delete_widget",
   SAVE_MONITOR: "save_monitor",
   DELETE_MONITOR: "delete_monitor",
   BEGIN_ANALYSIS: "begin_analysis",
@@ -105,7 +102,7 @@ export function isAnalysisMessage(msg: MessageLike): boolean {
  */
 export function compactionUpTo(messages: ReadonlyArray<MessageLike>, boundaryIdx: number): number | null {
   const boundary = messages[boundaryIdx];
-  if (!boundary || boundary.role !== "assistant") return null;
+  if (boundary?.role !== "assistant") return null;
   if (!isAnalysisMessage(boundary)) return boundaryIdx + 1;
   return boundaryIdx >= 1 ? boundaryIdx : null;
 }

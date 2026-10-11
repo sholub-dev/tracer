@@ -78,7 +78,7 @@ function SpikePill({ viewBox, text, flip = false }: { viewBox?: { x?: number; y?
   );
 }
 
-function useSeriesVisibility(series: Series[]) {
+function useSeriesVisibility() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const toggle = (name: string) =>
     setSelected((prev) => { const next = new Set(prev); if (next.has(name)) next.delete(name); else next.add(name); return next; });
@@ -210,7 +210,7 @@ function TimeseriesPlot({ series, containerSize, plotHeight, threshold, dualAxis
   threshold?: Threshold;
   dualAxis: boolean;
 }) {
-  const { toggle, isVisible } = useSeriesVisibility(series);
+  const { toggle, isVisible } = useSeriesVisibility();
   const gradientId = useId();
   const keys = useMemo(() => series.map((_, i) => `s${i}`), [series]);
   const counts = useMemo(() => series.map(isCountSeries), [series]);

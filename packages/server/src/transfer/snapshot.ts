@@ -12,8 +12,6 @@ export const TABLES: [string, SQLiteTable][] = [
   ["app_settings", schema.appSettings],
   ["tool_memories", schema.toolMemories],
   ["chat_sessions", schema.chatSessions],
-  ["dashboards", schema.dashboards],
-  ["dashboard_widgets", schema.dashboardWidgets],
   ["monitors", schema.monitors],
   ["monitor_triggers", schema.monitorTriggers],
   ["alert_issues", schema.alertIssues],

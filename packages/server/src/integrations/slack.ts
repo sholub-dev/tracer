@@ -100,28 +100,34 @@ export function mentionPrefix(mentions: string[]): string {
 }
 
 const DETAIL_MAX_CHARS = 300;
-const ROOT_CAUSE_MAX_CHARS = 600;
-const MAX_ISSUES = 5;
+const MAX_ISSUES = 3;
 const SEVERITY_DOTS: Record<string, string> = { high: ":red_circle:", medium: ":large_orange_circle:", low: ":large_green_circle:" };
 const SECTION_MAX_CHARS = 2900; // Slack rejects section text over 3000.
 
-export const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max)} …` : s);
+/** Cuts at the last space before `max`, so a word is never split; a hard cut when there is no space. */
+export const clip = (s: string, max: number) => {
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max);
+  const space = cut.lastIndexOf(" ");
+  return `${space > 0 ? cut.slice(0, space) : cut} …`;
+};
 // Redact before clipping: a cut value may no longer match the redact patterns.
 const tidy = (s: string, max = DETAIL_MAX_CHARS) => clip(redact(s.replace(/\*\*|`/g, "").replace(/^[ \t]*[-*][ \t]+/gm, "• ").trim()), max);
-const known = (s: string) => (/^(unknown|n\/a|none)?\.?$/i.test(s) ? "" : s);
+export const known = (s: string) => (/^(none|unknown|n\/a)(?![a-z0-9])/i.test(s) ? "" : s);
 
 export interface Verdict {
   severity: string;
   summary: string;
   /** "problem", "no problem", "unclear" or "" (summary cards and cards saved before verdicts). */
   verdict: string;
-  /** What happened and why, from a root-cause card ("" otherwise). */
-  happened: string;
-  cause: string;
+  /** Only for a root-cause card that has a verdict ("" otherwise). */
   confidence: string;
-  facts: [string, string][];
+  /** Policy, start and status, "" when missing or unknown. */
+  facts: { policy: string; started: string; status: string };
   /** Each issue: service, endpoint, errors, user impact, journey step ("" when unknown). */
   issues: string[][];
+  /** Facts from the card, used when the alert lists no issues. */
+  evidence: string[];
 }
 
 /** The answer card and the reported alert details, redacted and clipped, with unknowns hidden. */
@@ -131,18 +137,19 @@ export function verdictOf(summary: AlertSummary | null, finding: Finding | null)
   const head = {
     summary: finding ? tidy(finding.headline, SUMMARY_MAX_CHARS) : "",
     verdict: card?.verdict?.replace("_", " ") ?? "",
-    happened: card ? field(card.happened ?? "", ROOT_CAUSE_MAX_CHARS) : "",
-    cause: card ? field(card.cause ?? "", ROOT_CAUSE_MAX_CHARS) : "",
-    confidence: finding ? finding.confidence ?? "unverified" : "",
+    confidence: card?.verdict ? card.confidence ?? "unverified" : "",
   };
-  if (!summary) return { severity: "unknown", ...head, facts: [], issues: [] };
+  const cardFacts = finding?.kind === "summary" ? finding.points ?? [] : card?.evidence?.map((e) => e.fact) ?? [];
+  const evidenceFrom = (issues: string[][]) => (issues.length > 0 ? [] : cardFacts.map((f) => field(f)).filter(Boolean).slice(0, MAX_ISSUES));
+  if (!summary) return { severity: "unknown", ...head, facts: { policy: "", started: "", status: "" }, issues: [], evidence: evidenceFrom([]) };
+  const issues = (summary.issues ?? []).map((i) => [i.service, i.endpoint, i.errors, i.userImpact, i.journeyStep].map((v) => field(v)))
+    .filter((parts) => parts.some(Boolean));
   return {
     severity: summary.severity,
     ...head,
-    facts: ([["Policy", summary.policy], ["Started", summary.started], ["Status", summary.status]] as [string, string | undefined][])
-      .map(([l, v]): [string, string] => [l, field(v ?? "")]).filter(([, v]) => v),
-    issues: (summary.issues ?? []).map((i) => [i.service, i.endpoint, i.errors, i.userImpact, i.journeyStep].map((v) => field(v)))
-      .filter((parts) => parts.some(Boolean)),
+    facts: { policy: field(summary.policy ?? ""), started: field(summary.started ?? ""), status: field(summary.status ?? "") },
+    issues,
+    evidence: evidenceFrom(issues),
   };
 }
 
@@ -174,16 +181,17 @@ function issueLine([service = "", endpoint = "", error = "", experience = "", fu
 
 export function monitorAlert(a: MonitorAlert): Required<SlackPayload> {
   const time = formatLocalTime(a.triggeredAt, a.timeZone);
-  const { severity, summary, verdict, happened, cause, confidence, facts, issues } = verdictOf(a.summary, a.finding);
+  const { severity, summary, verdict, confidence, facts, issues, evidence } = verdictOf(a.summary, a.finding);
   const mentions = mentionsFor(a.mentions, a.ping);
   const name = redact(a.name);
-  const text = `${mentions}*[${[severity.toUpperCase(), SEVERITY_DOTS[severity], verdict && `· ${verdict}`].filter(Boolean).join(" ")}] ${escape(summary || `Monitor "${name}" fired; no root cause found`)}*`;
+  const tags = [severity.toUpperCase(), SEVERITY_DOTS[severity], verdict && `· ${verdict}`, verdict && confidence && `· ${confidence}`].filter(Boolean).join(" ");
+  const text = `${mentions}*[${tags}] ${escape(summary || `Monitor "${name}" fired; no root cause found`)}*`;
   const lines = [text];
-  if (happened) lines.push(`*What happened:* ${escape(happened)}`);
-  if (cause) lines.push(`*Why (${confidence}):* ${escape(cause)}`);
-  lines.push(...facts.map(([l, v]) => `*${l}:* ${escape(v)}`));
   lines.push(...issues.slice(0, MAX_ISSUES).map(issueLine));
   if (issues.length > MAX_ISSUES) lines.push(`+${issues.length - MAX_ISSUES} more`);
+  lines.push(...evidence.map((f) => `• ${escape(f)}`));
+  const when = [facts.policy && `*${escape(facts.policy)}*`, facts.started && `started ${escape(facts.started)}`, facts.status && escape(facts.status)].filter(Boolean);
+  if (when.length > 0) lines.push(when.join(" · "));
   const action = a.action ? clip(`*Action:* ${escape(redact(a.action))}`, SECTION_MAX_CHARS / 2) : "";
   const room = SECTION_MAX_CHARS - (action ? action.length + 1 : 0);
   // Drop whole lines, not mid-span, so Slack formatting stays closed; the action line always fits.

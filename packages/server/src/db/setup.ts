@@ -217,7 +217,7 @@ export async function runSetup(sqlite: SetupDriver): Promise<void> {
   // reset any saved chat model once, so every install starts on the new default.
   const marked = await sqlite.all(`INSERT OR IGNORE INTO app_settings (key, value) VALUES ('model_reset_0_3_7', 'true') RETURNING key`);
   if (marked.length > 0) {
-    await sqlite.exec(`DELETE FROM app_settings WHERE key = 'chat_model' OR key LIKE 'sub_agent_model:%'`);
+    await sqlite.exec(`DELETE FROM app_settings WHERE key = 'chat_model' OR key LIKE 'sub_agent_model:%';`);
   }
 
   await setupSync(sqlite, claimFirings);
@@ -237,10 +237,6 @@ async function setupSync(sqlite: SetupDriver, claimFirings: boolean): Promise<vo
       deleted INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (tbl, row_key)
     );
-    DROP TABLE IF EXISTS dashboard_widgets;
-    DROP TABLE IF EXISTS dashboards;
-    DELETE FROM sync_rows WHERE tbl IN ('dashboards', 'dashboard_widgets');
-    DELETE FROM chat_sessions WHERE id GLOB '__dashboard__*';
     UPDATE tool_memories SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL;
     UPDATE memory_operations SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_uid ON tool_memories(uid);
@@ -251,6 +247,8 @@ async function setupSync(sqlite: SetupDriver, claimFirings: boolean): Promise<vo
       BEGIN UPDATE memory_operations SET uid = lower(hex(randomblob(16))) WHERE id = NEW.id; END;
     INSERT OR IGNORE INTO app_settings (key, value) VALUES ('device_id', '${crypto.randomUUID()}');
   `);
+  // One line, ending in ";": on iOS a batch with DELETE FROM loses its newlines and its text after the last ";".
+  await sqlite.exec("DROP TABLE IF EXISTS dashboard_widgets; DROP TABLE IF EXISTS dashboards; DELETE FROM sync_rows WHERE tbl IN ('dashboards', 'dashboard_widgets'); DELETE FROM chat_sessions WHERE id GLOB '__dashboard__*';");
   // Firings from before this column ran on this device. Only once: a later NULL comes from a peer that lacks the column.
   if (claimFirings) await sqlite.exec(`UPDATE monitor_triggers SET device_id = (SELECT value FROM app_settings WHERE key = 'device_id') WHERE device_id IS NULL`);
 

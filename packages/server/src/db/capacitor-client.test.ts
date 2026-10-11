@@ -7,6 +7,15 @@ import { runInTransaction } from "./driver.js";
 import { runSetup } from "./setup.js";
 import { appSettings, providerConfigs } from "./schema.js";
 
+/** The plugin's rewrite in `execute`: lines are trimmed; a batch with DELETE FROM then loses its newlines and the text after its last ";". */
+function pluginRewrite(sql: string): string {
+  if (sql.includes("\n")) sql = sql.split("\n").filter(Boolean).map((l) => l.trim()).join("\n");
+  if (!/DELETE FROM/i.test(sql)) return sql;
+  const parts = sql.replace(/\n/g, "").split(";");
+  parts.pop();
+  return parts.join(";");
+}
+
 /** Mimics the plugin: async calls, rows as objects, and an implicit BEGIN unless `transaction` is false. */
 function fakeConnection(log: string[]): CapacitorConnection {
   const sqlite = new Database(":memory:");
@@ -27,7 +36,7 @@ function fakeConnection(log: string[]): CapacitorConnection {
     async execute(statements, transaction = true) {
       assert.equal(transaction, false, "execute must not open its own transaction");
       await tick();
-      sqlite.exec(statements);
+      sqlite.exec(pluginRewrite(statements));
       return {};
     },
   };

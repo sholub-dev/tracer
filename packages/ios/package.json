@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "pnpm --filter @tracer-sh/shared build && pnpm --filter @tracer-sh/web build:ios && cap sync ios",
-    "open": "cap open ios"
+    "open": "cap open ios",
+    "testflight": "./testflight.sh"
   },
   "dependencies": {
     "@capacitor-community/keep-awake": "8.0.1",

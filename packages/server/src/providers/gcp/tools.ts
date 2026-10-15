@@ -16,7 +16,7 @@ import { beginAnalysisTool, ANALYSIS_TOOL_NAME } from "../../tools/analysis-tool
 import type { McpProvider } from "../../mcp/mcp-provider.js";
 import { formatGcpResult } from "./gcp-formatter.js";
 import { extractMcpContent, isTransportError, detectTruncation } from "../../mcp/mcp-tools.js";
-import { getGcpAuth } from "./gcp-auth.js";
+import { getGcpAuth, clearGcpAuthCache, isReauthError } from "./gcp-auth.js";
 import {
   gcpDirectModeSystemPrompt,
   buildProjectConstraint,
@@ -56,6 +56,11 @@ export function createGcpDirectTools(
 
   const collectedQueries: SubAgentQuery[] = [];
   const directTools: Record<string, unknown> = {};
+  const noteReauth = (text: string) => {
+    if (!isReauthError(text)) return;
+    clearGcpAuthCache();
+    provider.connected = false;
+  };
 
   for (const [name, mcpTool] of Object.entries(rawMcpTools)) {
     const originalExecute = (mcpTool as any).execute.bind(mcpTool);
@@ -78,6 +83,8 @@ export function createGcpDirectTools(
         try {
           const result = await originalExecute(input);
           const normalized = extractMcpContent(result);
+          // MCP reports API failures as an isError result, not a thrown error.
+          if ((result as { isError?: boolean } | null)?.isError) noteReauth(typeof normalized === "string" ? normalized : JSON.stringify(normalized));
 
           if (detectTruncation(normalized)) {
             const errorMsg =
@@ -95,6 +102,7 @@ export function createGcpDirectTools(
           const message = err instanceof Error ? err.message : String(err);
           collectedQueries.push({ query: `${name}: ${queryStr}`, results: { error: message } });
           if (isTransportError(err)) provider.invalidateTools();
+          noteReauth(message);
           return { error: message };
         }
       },

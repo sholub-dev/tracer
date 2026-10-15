@@ -8,6 +8,8 @@ export const WEB_CONFIG = {
   sourcesStaleMs: 60_000,
   /** How often a failed data-source check repeats. */
   providerRetryMs: 15_000,
+  /** How often a passing data-source check repeats while the page is visible; credentials can lapse at any time. */
+  providerRecheckMs: 3 * 60 * 1000,
   updateCheckStaleTimeMs: 5 * 60 * 1000,
   updateCheckIntervalMs: 15 * 60 * 1000,
   gcpProjectsStaleTimeMs: 5 * 60 * 1000,

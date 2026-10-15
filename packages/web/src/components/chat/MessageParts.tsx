@@ -131,7 +131,8 @@ export const MessageParts = React.memo(
     };
 
     const finding = findingFromMessages([{ parts }]);
-    const queries = steps.flatMap(({ part }) => {
+    // Settling queries run after the analysis marker, so evidence can cite them too.
+    const queries = parts.filter((p) => isProviderTool(p.type)).flatMap((part) => {
       const { input, toolCallId } = part as ToolPart;
       const title = input?.title;
       return typeof title === "string" && title.trim() && toolCallId ? [{ title: title.trim(), toolCallId }] : [];

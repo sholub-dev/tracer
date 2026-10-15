@@ -34,8 +34,8 @@ export function Settings() {
         </div>
       </header>
       <div className="mx-auto flex max-w-[1000px] flex-col gap-6 px-4 py-6 sm:px-6 md:flex-row md:items-start md:gap-10 md:py-8">
-        <nav aria-label="Settings sections" className="shrink-0 md:sticky md:top-20 md:w-48 md:overflow-x-auto">
-          <ul className="flex flex-wrap gap-1 md:flex-col md:flex-nowrap">
+        <nav aria-label="Settings sections" className="-mx-4 shrink-0 overflow-x-auto px-4 sm:-mx-6 sm:px-6 md:sticky md:top-20 md:mx-0 md:w-48 md:px-0">
+          <ul className="flex gap-1 md:flex-col">
             {TABS.map(({ value, label, icon: Icon }) => (
               <li key={value}>
                 <button

@@ -103,7 +103,7 @@ export function AgentSettings() {
             control={
               values ? (
                 <Select value={values.timezone} onValueChange={(v) => set("timezone", v)}>
-                  <SelectTrigger id="timezone" className="w-48 bg-card">
+                  <SelectTrigger id="timezone" className="w-full bg-card sm:w-48">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent align="end" position="popper">

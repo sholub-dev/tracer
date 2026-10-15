@@ -4,6 +4,7 @@ import { ChartContainer, ChartLegend, ChartTooltip, ChartTooltipContent, type Ch
 import { cn } from "@/lib/utils";
 import { formatClock, formatDateTime, formatShortDate } from "../../lib/format";
 import { coerceNumeric, expandObjectColumns, mainMemberColumns } from "../../lib/result-utils";
+import { splitSeriesLabels } from "../../lib/series-labels";
 
 const SKIP_KEYS = new Set(["beginTimeSeconds", "endTimeSeconds", "inspectedCount", "facet", "comparison"]);
 // Matches the legend reserve QueryChart adds for growWithLegend.
@@ -22,9 +23,12 @@ interface Series {
   name: string;
   data: { x: number; y: number | null }[];
   dashed?: boolean;
+  /** Series that share a group share a color; a comparison period joins its current series. */
+  group?: number;
 }
 
 const seriesColor = (i: number) => `var(--chart-${(i % 5) + 1})`;
+const colorOf = (s: Series, i: number) => seriesColor(s.group ?? i);
 
 const SPIKE_RATIO = 2;
 const PEAK_LEAD = 1.5;
@@ -148,9 +152,10 @@ function rightAxisFlags(series: Series[]): boolean[] {
   return peaks.map((p) => p > 0 && p * 10 < top);
 }
 
-function SeriesLegend({ series, isVisible, onToggle, onRight }: { series: Series[]; isVisible: (name: string) => boolean; onToggle: (name: string) => void; onRight?: boolean[] }) {
+function SeriesLegend({ series, labels, prefix, isVisible, onToggle, onRight }: { series: Series[]; labels: string[]; prefix: string; isVisible: (name: string) => boolean; onToggle: (name: string) => void; onRight?: boolean[] }) {
   return (
     <div className="chart-legend flex flex-wrap justify-center gap-x-4 gap-y-1.5 pt-3">
+      {prefix && <span className="w-full truncate text-center text-xs text-muted-foreground/70" title={prefix}>{prefix}</span>}
       {series.slice(0, MAX_LEGEND_ENTRIES).map((s, i) => {
         const on = isVisible(s.name);
         return (
@@ -167,9 +172,9 @@ function SeriesLegend({ series, isVisible, onToggle, onRight }: { series: Series
           >
             <span
               className={cn("h-2 w-2 shrink-0 rounded-[2px]", s.dashed && "border border-dashed bg-transparent")}
-              style={s.dashed ? { borderColor: seriesColor(i) } : { backgroundColor: seriesColor(i) }}
+              style={s.dashed ? { borderColor: colorOf(s, i) } : { backgroundColor: colorOf(s, i) }}
             />
-            <span className="truncate">{shortName(s.name)}</span>
+            <span className="truncate">{shortName(labels[i])}</span>
             {onRight?.[i] && <span className="shrink-0 whitespace-nowrap text-muted-foreground/70">(right axis)</span>}
           </button>
         );
@@ -203,8 +208,10 @@ function ChartFrame({ config, containerSize, plotHeight, label, children }: {
   );
 }
 
-function TimeseriesPlot({ series, containerSize, plotHeight, threshold, dualAxis }: {
+function TimeseriesPlot({ series, containerSize, plotHeight, threshold, dualAxis, sharePrefix }: {
   series: Series[];
+  /** Metric keys may share a dotted prefix; facet values such as IPs must not. */
+  sharePrefix: boolean;
   containerSize?: ContainerSize;
   plotHeight: number;
   threshold?: Threshold;
@@ -230,7 +237,11 @@ function TimeseriesPlot({ series, containerSize, plotHeight, threshold, dualAxis
     return { data: rows, xs };
   }, [series]);
 
-  const config: ChartConfig = Object.fromEntries(series.map((s, i) => [keys[i], { label: onRight[i] ? `${s.name} (right axis)` : s.name, color: seriesColor(i) }]));
+  const { prefix, labels } = useMemo(
+    () => (sharePrefix ? splitSeriesLabels(series.map((s) => s.name)) : { prefix: "", labels: series.map((s) => s.name) }),
+    [series, sharePrefix],
+  );
+  const config: ChartConfig = Object.fromEntries(series.map((s, i) => [keys[i], { label: onRight[i] ? `${labels[i]} (right axis)` : labels[i], color: colorOf(s, i) }]));
   const min = xs[0] ?? 0;
   const max = xs[xs.length - 1] ?? 0;
   const span = max - min;
@@ -303,7 +314,12 @@ function TimeseriesPlot({ series, containerSize, plotHeight, threshold, dualAxis
             <ChartTooltipContent
               indicator="line"
               className="[&_.font-mono]:font-sans"
-              labelFormatter={(_, payload) => formatDateTime(Number(payload?.[0]?.payload?.x))}
+              labelFormatter={(_, payload) => (
+                <>
+                  {formatDateTime(Number(payload?.[0]?.payload?.x))}
+                  {prefix && <div className="text-xs font-normal text-muted-foreground">{prefix}</div>}
+                </>
+              )}
               formatter={(value, name) => (
                 <div className="flex w-full items-center justify-between gap-4">
                   <span className="text-muted-foreground">{config[String(name)]?.label}</span>
@@ -313,7 +329,7 @@ function TimeseriesPlot({ series, containerSize, plotHeight, threshold, dualAxis
             />
           }
         />
-        {!single && <ChartLegend content={<SeriesLegend series={series} isVisible={isVisible} onToggle={toggle} onRight={onRight} />} />}
+        {!single && <ChartLegend content={<SeriesLegend series={series} labels={labels} prefix={prefix} isVisible={isVisible} onToggle={toggle} onRight={onRight} />} />}
         {series.map((s, i) => asBars ? (
           <Bar
             key={keys[i]}
@@ -343,6 +359,7 @@ function TimeseriesPlot({ series, containerSize, plotHeight, threshold, dualAxis
             strokeWidth={2}
             strokeLinecap="round"
             strokeDasharray={s.dashed ? "6 4" : undefined}
+            strokeOpacity={s.dashed ? 0.6 : 1}
             fill={`url(#${gradientId}${keys[i]})`}
             connectNulls={!counts[i]}
             dot={false}
@@ -365,13 +382,13 @@ export function TimeseriesChart({ rows: raw, containerSize, threshold }: { rows:
   const hasFacet = "facet" in rows[0];
   const hasComparison = "comparison" in rows[0];
   const series = useMemo(
-    () => (hasFacet ? facetSeries(rows) : hasComparison ? compareSeries(rows) : simpleSeries(rows)),
+    () => (hasComparison ? compareSeries(rows) : hasFacet ? facetSeries(rows) : simpleSeries(rows)),
     [rows, hasFacet, hasComparison],
   );
   const dualAxis = !hasFacet && !hasComparison && !threshold;
   const plotHeight = hasFacet ? 300 : 280;
   const shared = { plotHeight, threshold: hasComparison ? undefined : threshold };
-  return <TimeseriesPlot series={series} containerSize={containerSize} dualAxis={dualAxis} {...shared} />;
+  return <TimeseriesPlot series={series} containerSize={containerSize} dualAxis={dualAxis} sharePrefix={!hasFacet} {...shared} />;
 }
 
 function simpleSeries(rows: Record<string, unknown>[]): Series[] {
@@ -381,16 +398,16 @@ function simpleSeries(rows: Record<string, unknown>[]): Series[] {
   }));
 }
 
+const facetName = (r: Record<string, unknown>) => (Array.isArray(r.facet) ? (r.facet as string[]).join(", ") : String(r.facet));
+
 function facetSeries(rows: Record<string, unknown>[]): Series[] {
   const metricKey = getMetricKeys(rows)[0];
   if (!metricKey) return [];
-  const facetLabel = (r: Record<string, unknown>) => (Array.isArray(r.facet) ? (r.facet as string[]).join(", ") : String(r.facet));
-
   const labels: string[] = [];
   const times = new Set<number>();
   const lookup = new Map<number, Map<string, number | null>>();
   for (const r of rows) {
-    const label = facetLabel(r);
+    const label = facetName(r);
     const t = r.beginTimeSeconds as number;
     if (!labels.includes(label)) labels.push(label);
     times.add(t);
@@ -404,32 +421,39 @@ function facetSeries(rows: Record<string, unknown>[]): Series[] {
   }));
 }
 
-function compareSeries(rows: Record<string, unknown>[]): Series[] {
-  const mKey = getMetricKeys(rows)[0];
-  if (!mKey) return [];
-
-  const periodRows = new Map<string, Record<string, unknown>[]>();
+// The earlier period carries its own timestamps, so each non-current period shifts by the gap between first buckets.
+export function compareSeries(rows: Record<string, unknown>[]): Series[] {
+  const keys = getMetricKeys(rows);
+  const earliest = new Map<string, number>();
   for (const r of rows) {
     const p = String(r.comparison);
-    if (!periodRows.has(p)) periodRows.set(p, []);
-    periodRows.get(p)!.push(r);
+    earliest.set(p, Math.min(earliest.get(p) ?? Infinity, r.beginTimeSeconds as number));
   }
-  const periods = [...periodRows.keys()];
-  const minTime = (rs: Record<string, unknown>[]) => Math.min(...rs.map((r) => r.beginTimeSeconds as number));
+  const periods = [...earliest.keys()].sort((a, b) => Number(b === "current") - Number(a === "current"));
+  const shift = (p: string) => (earliest.has("current") ? earliest.get("current")! - earliest.get(p)! : 0);
 
-  // Shift the earlier period onto the current x-axis.
-  let timeOffset = 0;
-  const currentRows = periodRows.get("current");
-  const otherPeriod = periods.find((p) => p !== "current");
-  if (currentRows && otherPeriod) timeOffset = minTime(currentRows) - minTime(periodRows.get(otherPeriod)!);
-
-  return periods.map((p) => ({
-    name: `${mKey} (${p})`,
-    dashed: p !== "current",
-    data: periodRows.get(p)!
-      .map((r) => ({ x: (r.beginTimeSeconds as number) + (p !== "current" ? timeOffset : 0), y: coerceNumeric(r[mKey]) }))
-      .sort((a, b) => a.x - b.x),
-  }));
+  const byFacet = new Map<string, Map<string, Record<string, unknown>[]>>();
+  for (const r of rows) {
+    const f = r.facet === undefined ? "" : facetName(r);
+    const byPeriod = byFacet.get(f) ?? byFacet.set(f, new Map()).get(f)!;
+    const p = String(r.comparison);
+    (byPeriod.get(p) ?? byPeriod.set(p, []).get(p)!).push(r);
+  }
+  return [...byFacet].flatMap(([f, byPeriod], fi) =>
+    keys.flatMap((k, ki) =>
+      periods.map((p) => {
+        const base = [f, keys.length > 1 || !f ? k : ""].filter(Boolean).join(" ");
+        return {
+          name: p === "current" ? base : `${base} (${p})`,
+          dashed: p !== "current",
+          group: fi * keys.length + ki,
+          data: (byPeriod.get(p) ?? [])
+            .map((r) => ({ x: (r.beginTimeSeconds as number) + shift(p), y: coerceNumeric(r[k]) }))
+            .sort((a, b) => a.x - b.x),
+        };
+      }),
+    ),
+  );
 }
 
 const histogramConfig = { value: { label: "Count", color: "var(--chart-1)" } } satisfies ChartConfig;

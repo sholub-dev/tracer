@@ -3,12 +3,31 @@ import { trpc } from "../../lib/trpc";
 import { providerLabel, sortProviders } from "../../lib/providers";
 import { ProviderDot } from "../common/ProviderDot";
 import { useConnectedProviders } from "../chat/SourcesToggle";
-import { openSettings } from "../../lib/hooks";
+import { openSettings, useProviderPings } from "../../lib/hooks";
+import { Loader2 } from "lucide-react";
 
 function SourcesLine() {
   const connected = useConnectedProviders();
   const { data: registered } = trpc.provider.getRegisteredTypes.useQuery();
-  if (!connected || !registered) return <div className="mt-3 h-[18px]" aria-hidden="true" />;
+  const pings = useProviderPings();
+  if (!connected || !registered) {
+    const failed = pings.isError;
+    return (
+      <p role="status" className="mt-3 flex min-h-[18px] items-center justify-center gap-1.5 text-[13px]/[18px] text-muted-foreground">
+        {failed ? (
+          <>
+            Could not check data sources.
+            <button type="button" onClick={() => pings.refetch()} className="text-primary underline-offset-4 hover:underline">Retry</button>
+          </>
+        ) : (
+          <>
+            <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+            Checking data sources…
+          </>
+        )}
+      </p>
+    );
+  }
   const on = new Set(connected.map((p) => p.type));
   return (
     <>

@@ -20,7 +20,7 @@ export type Ledger = z.infer<typeof ledgerSchema>;
 export type ConclusionReview = (ledger: Ledger, messages: ModelMessage[], abortSignal: AbortSignal | undefined) => Promise<string | null>;
 
 const STATUS = "Analysis mode active. Follow the analysis rules from your system prompt.";
-const NEXT = "Settle each challenge in the finding card: lower the confidence label or name it in toConfirm, and make a query that settles it your first visual. Do not call begin_analysis again.";
+const NEXT = "For each challenge, when a connected source holds the data, run the query that settles it now, before the finding card, and write the card from the result (raise or lower the confidence label to match). Only when no connected source holds the data, lower the confidence label and name the check in toConfirm. Do not call begin_analysis again.";
 
 // Models often write "None" or "N/A" where the schema asks for an empty string.
 const filled = (text: string) => !/^\W*(none|n\/?a|nothing|not checked|not ruled out|not eliminated)?\W*$/i.test(text);

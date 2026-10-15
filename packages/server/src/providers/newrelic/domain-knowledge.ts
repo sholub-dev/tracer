@@ -22,7 +22,7 @@ const NRQL_QUICK_REFERENCE = `## NRQL Reference
 - \`LIMIT n\` — max rows/facets. Default 10 for FACET, 100 for non-FACET. \`LIMIT MAX\` for maximum allowed.
 - \`SINCE time_expr\` — always include. NR default is 1 hour if omitted. Supports: \`N hours ago\`, \`today\`, \`yesterday\`, \`'2024-01-15T14:00'\`, epoch ms.
 - \`UNTIL time_expr\` — end time (default NOW).
-- \`COMPARE WITH N time_unit ago\` — overlay current vs prior period. Requires SINCE.
+- \`COMPARE WITH N time_unit ago\` — current vs prior period. Requires SINCE. Charts support it: with TIMESERIES the previous period draws dashed over the current one, so \`COMPARE WITH 1 week ago\` + TIMESERIES is the preferred way to show current against a baseline. Scalar and FACET results show current and previous side by side.
 - \`TIMESERIES N time_unit\` or \`TIMESERIES AUTO\` — time-bucketed series. Max 366 buckets. Be explicit with bucket size — AUTO can hide short spikes.
 - \`SLIDE BY N time_unit\` — sliding windows. Cannot use with TIMESERIES AUTO.
 - \`EXTRAPOLATE\` — compensate for APM event sampling. Only works with: count, average, sum, histogram, rate, percentage, apdex, stddev. Does NOT work with: uniqueCount, percentile, min, max, latest, earliest.
@@ -37,6 +37,7 @@ const NRQL_QUICK_REFERENCE = `## NRQL Reference
 **Conditional:** \`if(condition, true_val, false_val)\` — per-row conditional.
 **Time grouping:** \`hourOf(timestamp)\`, \`dateOf()\`, \`weekdayOf()\`, \`dayOfMonthOf()\`, \`monthOf()\` — in the user's timezone (added automatically).
 **Type conversion:** \`numeric(val)\`, \`string(val)\`, \`boolean(val)\`. JSON: \`jsonParse(str_attr)\`, \`mapKeys()\`, \`mapValues()\`.
+**Series labels:** Series and column names show to the user verbatim. Name them with \`AS\` (\`count(*) AS 'Requests'\`). Compound functions such as \`apdex()\` return several sub-fields (\`score\`, \`s\` satisfied, \`t\` tolerating, \`f\` frustrated, \`count\`) and each becomes its own series. Select the one you mean, for example \`apdex(...) AS 'Apdex'\` for the score, and say which sub-field the chart shows.
 **Discovery:** \`keyset() FROM EventType\` — list all attributes. \`SHOW EVENT TYPES\` — list all event types.
 
 ### Case Sensitivity

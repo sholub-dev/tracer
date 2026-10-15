@@ -112,30 +112,70 @@ export function stampedPngName(prefix: string) {
   return `${prefix}-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}-${pad(now.getMinutes())}.png`;
 }
 
-/** Saves a PNG: the iOS share sheet (WKWebView ignores `<a download>`) or a file download. Returns false when the user cancels. */
-async function saveFile(blob: Blob, name: string): Promise<boolean> {
-  if (IS_IOS) {
-    const file = new File([blob], name, { type: blob.type || "image/png" });
-    if (!navigator.canShare?.({ files: [file] })) throw new Error("Sharing files is not available");
-    try {
-      await navigator.share({ files: [file] });
-      return true;
-    } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return false;
-      throw err;
-    }
-  }
+/** Phone browser whose share sheet accepts image files; the iOS app has its own path. */
+const CAN_SHARE_IMAGE =
+  !IS_IOS &&
+  typeof window !== "undefined" &&
+  typeof navigator !== "undefined" &&
+  window.matchMedia?.("(pointer: coarse)").matches === true &&
+  navigator.canShare?.({ files: [new File([], "x.png", { type: "image/png" })] }) === true;
+
+const SHARES_IMAGE = IS_IOS || CAN_SHARE_IMAGE;
+
+function downloadFile(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+/** Saves a PNG: the native share sheet (iOS app, phone browsers) or a file download. Returns false when nothing was saved yet. */
+async function saveFile(blob: Blob, name: string): Promise<boolean> {
+  if (IS_IOS) {
+    // The share sheet needs a file path: navigator.share would run after the capture and lose its user activation.
+    const [{ Filesystem, Directory }, { Share }] = await Promise.all([import("@capacitor/filesystem"), import("@capacitor/share")]);
+    const data = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+    const { uri } = await Filesystem.writeFile({ path: name, data, directory: Directory.Cache });
+    try {
+      await Share.share({ files: [uri] });
+      return true;
+    } catch (err) {
+      if (err instanceof Error && /cancel/i.test(err.message)) return false;
+      throw err;
+    } finally {
+      void Filesystem.deleteFile({ path: name, directory: Directory.Cache }).catch(() => {});
+    }
+  }
+  if (CAN_SHARE_IMAGE) {
+    const file = new File([blob], name, { type: "image/png" });
+    try {
+      await navigator.share({ files: [file] });
+      return true;
+    } catch (err) {
+      const errName = err instanceof Error ? err.name : "";
+      if (errName === "AbortError") return false;
+      if (errName === "NotAllowedError") {
+        // The capture outlasted the tap's user activation; a fresh tap on the toast action restores it.
+        toast("Image ready", {
+          action: { label: "Share", onClick: () => void navigator.share({ files: [file] }).catch(() => {}) },
+        });
+        return false;
+      }
+    }
+  }
+  downloadFile(blob, name);
   return true;
 }
 
-/** Label of the save-image action; iOS shares instead of downloading. */
-export const SAVE_IMAGE_LABEL = IS_IOS ? "Share image" : "Download image";
+/** Label of the save-image action; iOS and phone browsers share instead of downloading. */
+export const SAVE_IMAGE_LABEL = SHARES_IMAGE ? "Share image" : "Download image";
 
 /** Action button under a message: icon only on phones, with the label kept for screen readers. */
 export function MessageActionButton({ icon, label, onClick }: { icon: ReactNode; label: string; onClick: () => void }) {
@@ -146,6 +186,9 @@ export function MessageActionButton({ icon, label, onClick }: { icon: ReactNode;
     </Button>
   );
 }
+
+/** The reply's Analysis section when it has one, so images skip the work steps. */
+const imageTarget = (el: HTMLElement) => el.querySelector<HTMLElement>('section[aria-label="Analysis"]') ?? el;
 
 /** PNG of an element, downloaded as a file. */
 export async function downloadImage(el: HTMLElement, name: string) {
@@ -166,7 +209,7 @@ export interface SourceMeta {
 /** PNG that carries the reply's analysis parts, so dropping it back into Tracer re-imports it. */
 async function downloadReplyImage(el: HTMLElement, analysis: UIMessage["parts"], meta: SourceMeta) {
   try {
-    const bytes = new Uint8Array(await (await capture(el)).arrayBuffer());
+    const bytes = new Uint8Array(await (await capture(imageTarget(el))).arrayBuffer());
     const payload = JSON.stringify({
       v: 1,
       kind: "analysis",
@@ -177,7 +220,7 @@ async function downloadReplyImage(el: HTMLElement, analysis: UIMessage["parts"],
     if (payload.length > 2 * 1024 * 1024) {
       toast.error("This reply is too large to embed in an image", {
         description: "Save a plain image instead.",
-        action: { label: "Save plain image", onClick: () => void downloadImage(el, stampedPngName("analysis")) },
+        action: { label: "Save plain image", onClick: () => void downloadImage(imageTarget(el), stampedPngName("analysis")) },
       });
       return;
     }
@@ -191,7 +234,7 @@ async function downloadReplyImage(el: HTMLElement, analysis: UIMessage["parts"],
 
 async function copyImage(el: HTMLElement) {
   try {
-    await navigator.clipboard.write([new ClipboardItem({ "image/png": capture(el) })]);
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": capture(imageTarget(el)) })]);
     toast.success("Image copied");
   } catch {
     toast.error("Couldn't copy the image");
@@ -237,7 +280,7 @@ export function MessageActions({
       <MessageActionButton icon={<ImageIcon />} label="Copy image" onClick={() => contentRef.current && copyImage(contentRef.current)} />
       {analysis && (
         <MessageActionButton
-          icon={IS_IOS ? <Share /> : <Download />}
+          icon={SHARES_IMAGE ? <Share /> : <Download />}
           label={SAVE_IMAGE_LABEL}
           onClick={() => contentRef.current && downloadReplyImage(contentRef.current, analysis, meta)}
         />

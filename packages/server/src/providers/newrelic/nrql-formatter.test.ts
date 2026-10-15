@@ -63,3 +63,11 @@ test("faceted timeseries keeps the facet column", () => {
 test("the word limit inside a string literal is not a LIMIT clause", () => {
   assert.ok(formatNrqlCsv(facets(10), "SELECT count(*) FROM Transaction WHERE request.uri LIKE '%rate-limit%' FACET name").includes("row limit of 10"));
 });
+
+test("a timeseries with COMPARE WITH labels each period", () => {
+  const rows = [0, 1].flatMap((i) => [
+    { beginTimeSeconds: i, endTimeSeconds: `t${i}`, count: 10 + i, comparison: "current" },
+    { beginTimeSeconds: i - 100, endTimeSeconds: `p${i}`, count: 5 + i, comparison: "previous" },
+  ]);
+  assert.equal(formatNrqlCsv(rows), "current:\nTime,count\nt0,10\nt1,11\n\nprevious:\nTime,count\np0,5\np1,6");
+});

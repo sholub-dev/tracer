@@ -2,6 +2,7 @@ import type { ReactNode, RefObject } from "react";
 import { cn } from "@/lib/utils";
 import { normalizeClipboard } from "../../lib/chat-utils";
 import { ScrollToBottomButton } from "./ChatIndicators";
+import { SummaryTabs } from "./SummaryTabs";
 
 /** Centered reading column shared by the transcript, the dock and the session header. */
 export const COLUMN = "mx-auto w-full max-w-[808px] px-4 sm:px-6";
@@ -31,6 +32,7 @@ export function Transcript({ scrollRef, contentRef, isAtBottom, scrollToBottom, 
             <div className={cn(column, "flex-1 space-y-8 pb-10", compact ? "pt-5" : "pt-6")}>{children}</div>
           </div>
         </div>
+        <SummaryTabs scrollRef={scrollRef} contentRef={contentRef} />
       </div>
       <div className="relative z-10 bg-background before:pointer-events-none before:absolute before:inset-x-0 before:bottom-full before:h-10 before:bg-linear-to-t before:from-background before:to-transparent">
         <ScrollToBottomButton isAtBottom={isAtBottom} scrollToBottom={scrollToBottom} />

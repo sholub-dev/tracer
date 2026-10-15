@@ -4,7 +4,7 @@ import { trpc } from "./trpc";
 import { AVAILABLE_MODELS } from "./models";
 import { WEB_CONFIG } from "./config";
 import { IS_IOS } from "./platform";
-import { RESUME_EVENT } from "./resume";
+import { RESUME_EVENT, useOnResume } from "./resume";
 import { takeFreshKeys } from "./answer-cards";
 
 /** Chat scroll that follows content growth; any upward scroll pauses it until the bottom is reached again. A new `mountKey` re-attaches to a swapped container. */
@@ -366,13 +366,19 @@ export function usePersistedState<T>(key: string, initial: T): [T, (value: T) =>
 
 /**
  * Data-source status for every screen, from one shared query, so two screens never disagree.
- * A failed check repeats until it passes; `fresh` checks again on each mount.
+ * A failed check repeats until it passes; a passing one repeats while the page is visible
+ * (react-query pauses the timer in hidden tabs and refetches on becoming visible or online).
+ * `fresh` checks again on each mount; an iOS app resume checks too.
  */
 export function useProviderPings({ fresh = false } = {}) {
   const failed = (data: { ok: boolean }[] | undefined) => !!data?.some((p) => !p.ok);
-  return trpc.provider.ping.useQuery(undefined, {
+  const query = trpc.provider.ping.useQuery(undefined, {
     refetchOnMount: (query) => (fresh || failed(query.state.data) ? "always" : true),
     refetchOnWindowFocus: true,
-    refetchInterval: (query) => (failed(query.state.data) ? WEB_CONFIG.providerRetryMs : false),
+    refetchOnReconnect: "always",
+    refetchInterval: (query) => (failed(query.state.data) ? WEB_CONFIG.providerRetryMs : WEB_CONFIG.providerRecheckMs),
+    refetchIntervalInBackground: false,
   });
+  useOnResume(() => void query.refetch({ cancelRefetch: false }));
+  return query;
 }

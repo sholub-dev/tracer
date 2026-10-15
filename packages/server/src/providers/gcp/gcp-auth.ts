@@ -6,7 +6,7 @@ export type GcpAuthResult =
   | { ok: true; token: string }
   | { ok: false; code: "no_credentials" | "reauth_required" | "auth_failed"; message: string };
 
-const REAUTH_CMD = "Run: gcloud auth application-default login";
+export const REAUTH_CMD = "Run: gcloud auth application-default login";
 
 // Google access tokens are valid for 3600s; cache for 55 min to stay safely under that.
 const TOKEN_TTL_MS = 55 * 60 * 1000;
@@ -115,4 +115,9 @@ async function refreshGcpAuth(): Promise<GcpAuthResult> {
 
   tokenCache = { token: token.access_token, expiresAt: Date.now() + TOKEN_TTL_MS };
   return { ok: true, token: token.access_token };
+}
+
+/** True when an API error body or tool error means the login is no longer accepted. */
+export function isReauthError(text: string): boolean {
+  return /reauth|invalid_rapt|invalid_grant/i.test(text) || text.includes("UNAUTHENTICATED");
 }

@@ -77,7 +77,7 @@ function ModelRow() {
             save.mutate({ provider: key.slice(0, i), modelId: key.slice(i + 1) });
           }}
         >
-          <SelectTrigger id="chat-model" className="w-64 bg-card">
+          <SelectTrigger id="chat-model" className="w-full bg-card sm:w-64">
             <SelectValue />
           </SelectTrigger>
           <SelectContent align="end" position="popper">

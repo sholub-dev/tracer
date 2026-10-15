@@ -14,10 +14,9 @@ const DETAIL: Record<string, (c: Record<string, string>) => string> = {
 
 export function DataSourcesSettings() {
   const invalidate = useInvalidateProviders();
-  const { data: statuses, isLoading: statusLoading } = trpc.provider.list.useQuery();
   const { data: configs, isLoading: configsLoading } = trpc.provider.getConfigs.useQuery();
   const { data: types, isLoading: typesLoading } = trpc.provider.getRegisteredTypes.useQuery();
-  const { data: pings } = useProviderPings({ fresh: true });
+  const { data: pings, isError: pingsFailed } = useProviderPings({ fresh: true });
   const auth = useGcpAuthStatus();
 
   const saveConfig = trpc.provider.saveConfig.useMutation({ onSuccess: invalidate });
@@ -27,7 +26,7 @@ export function DataSourcesSettings() {
   return (
     <Section title="Data sources" description="Where the agent runs its queries. One agent queries them all.">
       <Group>
-        {statusLoading || configsLoading || typesLoading
+        {configsLoading || typesLoading
           ? [0, 1, 2].map((i) => (
               <div key={i} className="flex min-h-14 items-center gap-4 px-4 py-3">
                 <Skeleton className="h-4 w-40" />
@@ -37,8 +36,10 @@ export function DataSourcesSettings() {
           : (types ?? []).map(({ type, label, configFields }) => {
               const config = configs?.find((c) => c.type === type)?.config;
               const ping = pings?.find((p) => p.type === type);
-              const connected = ping ? ping.ok : !!statuses?.find((s) => s.type === type)?.connected;
               const configured = !!config;
+              // The stored flag from the last server check goes stale; only a ping answer counts.
+              const checking = configured && !ping && !pingsFailed;
+              const connected = !!ping?.ok;
               const pingError = ping && !ping.ok ? ping.error : undefined;
               const isGcp = type === "gcp";
 
@@ -48,10 +49,10 @@ export function DataSourcesSettings() {
                   name={label}
                   provider={type}
                   detail={DETAIL[type]?.(config ?? {})}
-                  tone={connected ? "ok" : configured ? "warn" : "off"}
-                  status={connected ? "Connected" : configured ? "Connection failed" : "Not connected"}
-                  warning={configured && !connected ? pingError : undefined}
-                  connected={configured || connected}
+                  tone={connected ? "ok" : configured && !checking ? "warn" : "off"}
+                  status={connected ? "Connected" : checking ? "Checking…" : configured ? "Connection failed" : "Not connected"}
+                  warning={configured && !connected && !checking ? pingError : undefined}
+                  connected={configured}
                   fields={configFields}
                   existingConfig={config ?? null}
                   note={PROVIDER_NOTES[type]}

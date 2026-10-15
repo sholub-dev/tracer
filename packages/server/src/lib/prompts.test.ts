@@ -76,7 +76,7 @@ test("prompts tell the agent to report a finding in every turn that ran at least
   for (const [name, prompt] of allPrompts) {
     assert.ok(prompt.includes("call `report_finding` once, alone in its step, in every turn that ran at least one query"), `${name}: missing report_finding rule`);
     assert.ok(prompt.includes("`kind: \"root_cause\"`") && prompt.includes("`kind: \"summary\"`"), `${name}: missing finding kinds`);
-    assert.ok(prompt.includes("the one check that would confirm it") && !prompt.includes("only place you may name an action"), `${name}: finding card must not allow an action`);
+    assert.ok(prompt.includes("Never put a query you can run yourself in `toConfirm`") && !prompt.includes("only place you may name an action"), `${name}: finding card must not allow an action`);
     assert.ok(prompt.includes("Skip it only when no query ran"), `${name}: missing skip rule`);
     assert.ok(prompt.includes("`happened` (optional): one sentence") && prompt.includes("`cause`: 1 to 2 sentences") && prompt.includes("No ids (incident, issue, session, UUIDs)") && prompt.includes("The card is the whole written answer"), `${name}: missing details rule`);
     assert.ok(prompt.includes("one plain sentence of at most 25 words: the cause, with the key number"), `${name}: missing headline rule`);

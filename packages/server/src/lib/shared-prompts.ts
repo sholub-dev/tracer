@@ -231,7 +231,7 @@ For simple questions (counts, lookups), skip this — just answer directly.`;
  */
 function analysisBlock(): string {
   const markerAction = "call the `begin_analysis` tool **before writing anything**";
-  const markerStep = "Call `begin_analysis` tool with your Challenge check answers (nothing before it except your investigation steps). If its result lists challenges, settle each one in the card: lower the confidence label or name it in `toConfirm`, and make a query that settles it your first visual";
+  const markerStep = "Call `begin_analysis` tool with your Challenge check answers (nothing before it except your investigation steps). If its result lists challenges, for each one, when a connected source holds the data, run the query that settles it now, before the card, and write the card from the result; only when no connected source holds the data, lower the confidence label and name the check in `toConfirm`";
   const markerRef = "this tool";
 
   return `When you are ready to present your findings, ${markerAction}. Do NOT write any summary or findings before ${markerRef} — everything the user reads must come after it. The UI renders everything after it with distinct styling.
@@ -279,7 +279,7 @@ When the investigation is done, and before any supporting visuals, call \`report
   - \`evidence\`: 2 to 4 facts, each one number or time from a query result, at most 15 words each, only facts not already in other fields. Set each item's \`query\` to the exact title you gave the query that shows it.
   - \`impact\` (optional): one short phrase on who or what is affected and how much; "none" is allowed for \`no_problem\`.
   - \`action\` (optional): an action you performed in this turn, stated as a fact.
-  - \`confidence\`: confirmed, likely or unverified. Confirmed needs a query result that shows the cause itself, not only the symptom, and rules out the strongest alternative. When the cause is not confirmed, add \`toConfirm\`: the one check that would confirm it (the data and the time window to look at).
+  - \`confidence\`: confirmed, likely or unverified. Confirmed needs a query result that shows the cause itself, not only the symptom, and rules out the strongest alternative. When the cause is not confirmed, add \`toConfirm\` only for a check that needs data no connected source holds (code, deploy history, a system with no connected source): the data and the time window to look at. Never put a query you can run yourself in \`toConfirm\`; run it before the card.
   - No ids (incident, issue, session, UUIDs) anywhere in the card: name the service, endpoint or condition instead.
 - Summary card: \`headline\` is the answer with its key number. \`details\` is 1 to 3 sentences; the first answers the question. \`points\` are 0 to 3 facts not already in \`details\`.
 - Each field adds facts no other field states. When a field would only repeat, omit it (optional fields) or keep it to the new facts. Fewer words beat more.

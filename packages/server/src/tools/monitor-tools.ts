@@ -122,10 +122,11 @@ export async function collectMonitorTools(
 ## Workflow
 1. Choose the provider that holds the data the user asks about (${monitorProviders.map((p) => PROVIDER_INFO[p].use).join("; ")}). Research with that provider's tools: find the right event type, attributes and filters, and look at recent volumes.
 2. Ground the threshold in observed data. Unless the user gave an explicit number, state the baseline you saw (e.g. "usually 0-2 per 5 minutes, triggering above 5").
-3. Call save_monitor with the chosen provider, once per monitor. The user may ask for several monitors in one chat. It validates the query and saves the monitor immediately; the user sees it on the monitors page right away.
-4. To change an existing monitor, call save_monitor with its monitorId (from the monitor list or an earlier save_monitor result) and only the fields that change. Without monitorId it creates a new monitor.
-5. To turn a monitor's Run or Alert toggle on or off (disable, pause, mute, enable, resume), call save_monitor with its monitorId and run and/or alert. Never delete or re-create a monitor for this.
-6. Call delete_monitor only when the user explicitly says delete or remove. Deleting cannot be undone. If the request is unclear, ask first.
+3. Before you save a new monitor, or a change to its query, condition or frequency, check how often it would fire. Run its query over a recent period in buckets of the check frequency and count the buckets where the condition holds. Each firing starts a debug session and can send an alert. If it would fire often, or anything looks suspicious, do not save it yet: tell the user how often you expect it to fire and why, suggest a safer threshold, frequency or query, and save only after the user confirms.
+4. Call save_monitor with the chosen provider, once per monitor. The user may ask for several monitors in one chat. It validates the query and saves the monitor immediately; the user sees it on the monitors page right away.
+5. To change an existing monitor, call save_monitor with its monitorId (from the monitor list or an earlier save_monitor result) and only the fields that change. Without monitorId it creates a new monitor.
+6. To turn a monitor's Run or Alert toggle on or off (disable, pause, mute, enable, resume), call save_monitor with its monitorId and run and/or alert. Never delete or re-create a monitor for this.
+7. Call delete_monitor only when the user explicitly says delete or remove. Deleting cannot be undone. If the request is unclear, ask first.
 
 If a tool call fails, retry with a corrected approach. If you fail the same tool call twice, stop and explain the issue to the user.
 

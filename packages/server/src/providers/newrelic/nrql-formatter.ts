@@ -108,6 +108,13 @@ export function formatNrqlCsv(rows: Record<string, unknown>[], query?: string): 
 
   // ── Timeseries ──
   if ("beginTimeSeconds" in sample) {
+    if ("comparison" in sample) {
+      // One block per period: mixed rows would not say which period a row belongs to.
+      const periods = [...new Set(rows.map((r) => String(r.comparison)))];
+      return periods
+        .map((p) => `${p}:\n` + formatNrqlCsv(rows.filter((r) => String(r.comparison) === p).map(({ comparison: _, ...r }) => r), query))
+        .join("\n\n");
+    }
     const keys = visibleKeys(sample);
     let displayRows = rows;
     let note = "";

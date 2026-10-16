@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, type ReactNode } from "react";
+import { useState, useEffect, useRef, useMemo, type ReactNode } from "react";
 import { readUIMessageStream, type UIMessage, type UIMessageChunk } from "ai";
 import { ProgressStore } from "../../lib/progress-store";
 import { handleProgressData, stopChat, useCompactedMessages } from "../../lib/chat-utils";
@@ -6,6 +6,7 @@ import { useChatScroll } from "../../lib/hooks";
 import { WEB_CONFIG } from "../../lib/config";
 import { isSteered } from "@tracer-sh/shared";
 import { lastTurnMessage } from "../../lib/message-queue";
+import { placeSteered } from "../../lib/steer-thread";
 import { nextEndState, withLiveReply } from "../../lib/live-stream";
 import { readEventStream } from "../../lib/sse";
 import { serverFetch } from "../../lib/server-fetch";
@@ -159,6 +160,10 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
   const lastIdx = messages.findLastIndex((m) => !isSteered(m));
   const waiting = lastTurnMessage(messages)?.role === "user";
   const { collapse, analysisOnlyMsg } = useCompactedMessages(messages, collapseCount, analysisOnlyIndex);
+  const rows = useMemo(
+    () => placeSteered(messages.map((m, i) => (i === analysisOnlyIndex && analysisOnlyMsg ? analysisOnlyMsg : m)), []),
+    [messages, analysisOnlyIndex, analysisOnlyMsg],
+  );
 
   return (
     <div className="flex h-full flex-col">
@@ -188,11 +193,11 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
         }
       >
         {beforeMessages}
-        {messages.map((message, index) => index < collapse ? null : (
+        {rows.map(({ msg, index, key, last }) => index < collapse ? null : (
           <MessageView
-            key={message.id || `msg-${index}`}
-            msg={index === analysisOnlyIndex && analysisOnlyMsg ? analysisOnlyMsg : message}
-            isAnimating={message.role === "assistant" && index === lastIdx}
+            key={key}
+            msg={msg}
+            isAnimating={last && msg.role === "assistant" && index === lastIdx}
             progressStore={progressStore}
             showActions={false}
           />

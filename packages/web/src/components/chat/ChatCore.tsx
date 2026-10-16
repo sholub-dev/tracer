@@ -21,6 +21,7 @@ import { openSettings, useChatScroll, useEscapeToStop, useFileDrop } from "../..
 import { handleProgressData, parseMessages, steerChat, stopChat, useCompactedMessages } from "../../lib/chat-utils";
 import { isSteered } from "@tracer-sh/shared";
 import { appendKept, canSendQueued, lastTurnMessage, splitSteered } from "../../lib/message-queue";
+import { anchorOf, placeSteered, withAnchor } from "../../lib/steer-thread";
 import { trpc } from "../../lib/trpc";
 import { WEB_CONFIG } from "../../lib/config";
 import { serverFetch } from "../../lib/server-fetch";
@@ -111,6 +112,7 @@ const MessageRow = memo(function MessageRow({
   compact,
   meta,
   renderMessage,
+  piece,
 }: {
   msg: UIMessage;
   msgIndex: number;
@@ -119,9 +121,11 @@ const MessageRow = memo(function MessageRow({
   compact: boolean;
   meta: SourceMeta;
   renderMessage?: ChatCoreProps["renderMessage"];
+  /** A piece of a reply that a steered message cut apart, not its last one. */
+  piece?: boolean;
 }) {
   const view: RenderView = (options) => (
-    <MessageView msg={msg} isAnimating={isAnimating} progressStore={progressStore} compact={compact} meta={meta} {...options} />
+    <MessageView msg={msg} isAnimating={isAnimating} progressStore={progressStore} compact={compact} meta={meta} showActions={piece ? false : undefined} {...options} />
   );
   // No content-visibility here: a skipped reply takes its real height only as it scrolls into view, and that moves the view under the reader.
   return (
@@ -213,8 +217,8 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   const nextQueueId = useRef(0);
   const reconciling = useRef(false);
   const utils = trpc.useUtils();
-  // Ids of steered messages a step of the agent saw, reported by the server during the reply.
-  const seenSteerIds = useRef(new Set<string>());
+  // Steered messages a step of the agent saw, with the step they landed before, reported by the server during the reply.
+  const seenSteerIds = useRef(new Map<string, number>());
   // Set by a stop: the queue then waits for the user instead of sending on its own.
   const queueHeld = useRef(false);
   // Set while a queued message is on its way: the status stays "ready" while its files are read, and the next one must wait.
@@ -268,7 +272,11 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
           if (part.type === "data-provider-part") {
             handleProgressData(progressStore, part.data as { toolCallId: string; part: { type: string; [key: string]: unknown } });
           }
-          if (part.type === "data-steer-seen") (part.data as { ids: string[] }).ids.forEach((id) => seenSteerIds.current.add(id));
+          if (part.type === "data-steer-seen") {
+            const { ids, anchor } = part.data as { ids: string[]; anchor: number };
+            ids.forEach((id) => seenSteerIds.current.set(id, anchor));
+            setSteered((prev) => prev.map((m) => (ids.includes(m.id) ? withAnchor(m, anchor) : m)));
+          }
           onDataRef.current?.(part as { type: string; data: unknown });
         },
       }),
@@ -287,6 +295,10 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   const { scrollRef, contentRef, isAtBottom, scrollToBottom, scrollToTop } = useChatScroll(showEmptyState);
 
   const { collapse, analysisOnlyMsg } = useCompactedMessages(messages, collapseCount, analysisOnlyIndex);
+  const rows = useMemo(
+    () => placeSteered(messages.map((m, i) => (i === analysisOnlyIndex && analysisOnlyMsg ? analysisOnlyMsg : m)), steered),
+    [messages, steered, analysisOnlyIndex, analysisOnlyMsg],
+  );
   const firstRow = showAll ? collapse : Math.max(collapse, messages.length - INITIAL_ROWS);
 
   const meta = useMemo<SourceMeta>(() => ({ sourceTitle, sourceCreatedAt, resolveSourceTitle }), [sourceTitle, sourceCreatedAt, resolveSourceTitle]);
@@ -371,9 +383,13 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   };
 
   const steer = async (text: string) => {
-    const message: UIMessage = { id: crypto.randomUUID(), role: "user", metadata: { steered: true }, parts: [{ type: "text", text }] };
+    // The message stays where the reply ends now until the server reports the step that saw it.
+    const reply = lastTurnMessage(messagesRef.current);
+    const at = reply?.role === "assistant" ? reply.parts.length : undefined;
+    const message: UIMessage = { id: crypto.randomUUID(), role: "user", metadata: { steered: true, at }, parts: [{ type: "text", text }] };
     // The reply may have ended on the way; the message then waits like a queued one.
-    if (await steerChat(chatId, message)) setSteered((prev) => [...prev, message]);
+    // The report of the step can arrive before this answer.
+    if (await steerChat(chatId, message)) setSteered((prev) => [...prev, withAnchor(message, seenSteerIds.current.get(message.id))]);
     else enqueue(text, []);
   };
 
@@ -413,15 +429,15 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
 
   // The live event can be missed after a reattach, so the saved history decides which steered messages the server kept.
   const reconcileSteered = async (batch: UIMessage[]) => {
-    const known = new Set(seenSteerIds.current);
-    if (batch.some((m) => !known.has(m.id))) {
+    const anchors = new Map<string, number | undefined>(seenSteerIds.current);
+    if (batch.some((m) => !anchors.has(m.id))) {
       try {
         const saved = await utils.sessions.get.fetch({ id: chatId }, { staleTime: 0 });
-        if (saved) parseMessages(saved.messagesJson).forEach((m) => m.role === "user" && known.add(m.id));
+        if (saved) parseMessages(saved.messagesJson).forEach((m) => m.role === "user" && anchors.set(m.id, anchorOf(m)));
       } catch { /* the live record stays the only source */ }
     }
-    const { kept, late } = splitSteered(batch, known);
-    if (kept.length) setMessages(appendKept(messagesRef.current, kept));
+    const { kept, late } = splitSteered(batch, new Set(anchors.keys()));
+    if (kept.length) setMessages(appendKept(messagesRef.current, kept.map((m) => withAnchor(m, anchors.get(m.id)))));
     // A message the server dropped has no reply yet; it goes first in the queue, which a stop or error holds.
     if (late.length) setQueue((q) => [...late.map((m) => ({ id: nextQueueId.current++, text: textOf(m), attachments: [] })), ...q]);
     setSteered((prev) => prev.filter((m) => !batch.includes(m)));
@@ -563,20 +579,19 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
         {messages.length === 0 && status !== "submitted" && (
           emptyHint ?? <p className="py-16 text-center text-sm text-muted-foreground">{placeholder}</p>
         )}
-        {messages.map((msg, msgIndex) => msgIndex < firstRow ? null : (
+        {rows.map(({ msg, index, key, last }) => index < firstRow ? null : (
           <MessageRow
-            key={msg.id || `msg-${msgIndex}`}
-            msg={msgIndex === analysisOnlyIndex && analysisOnlyMsg ? analysisOnlyMsg : msg}
-            msgIndex={msgIndex}
-            isAnimating={msg.id === lastId}
+            key={key}
+            msg={msg}
+            msgIndex={index}
+            isAnimating={last && msg.id === lastId}
             progressStore={progressStore}
             compact={compact}
             meta={meta}
-            renderMessage={renderMessage}
+            // The pieces before a steered message have no actions of their own; a pending steered message has none yet.
+            renderMessage={last && index < messages.length ? renderMessage : undefined}
+            piece={!last}
           />
-        ))}
-        {steered.map((msg, i) => (
-          <MessageRow key={`steer-${i}`} msg={msg} msgIndex={messages.length + i} isAnimating={false} progressStore={progressStore} compact={compact} meta={meta} />
         ))}
         {showWorking && <WorkingIndicator label="Investigating" />}
         {!readOnly && !inputDisabled && needsContinue && (

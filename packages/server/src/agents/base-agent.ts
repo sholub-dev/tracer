@@ -350,6 +350,8 @@ async function processLLMStream(
   const onRunAbort = () => attemptAbort.abort(serverAbort.signal.reason);
   if (serverAbort.signal.aborted) onRunAbort();
   else serverAbort.signal.addEventListener("abort", onRunAbort, { once: true });
+  const lastMessage = messages.at(-1);
+  const replySteps = lastMessage?.role === "assistant" ? lastMessage.parts.filter((p) => p.type === "step-start").length : 0;
   const result = streamText({
     model,
     temperature: 0,
@@ -359,9 +361,11 @@ async function processLLMStream(
     stopWhen: tools ? isStepCount(stepLimit) : undefined,
     prepareStep: async ({ stepNumber, steps, messages: stepMessages }) => {
       // The returned messages carry forward to later steps.
-      const arrived = steer ? drainSteer(steer) : [];
+      // A step adds one step-start part to the reply, so the step number counts the boundaries; a continued reply already holds some.
+      const anchor = replySteps + stepNumber;
+      const arrived = steer ? drainSteer(steer, anchor) : [];
       // Lets the client tell a message a step saw from one that arrived too late.
-      if (arrived.length) broadcaster.emit({ type: "data-steer-seen", data: { ids: arrived.map((m) => m.id) }, transient: true });
+      if (arrived.length) broadcaster.emit({ type: "data-steer-seen", data: { ids: arrived.map((m) => m.id), anchor }, transient: true });
       const added = arrived.length
         ? { messages: [...stepMessages, ...await convertToModelMessages(withSentTimes(arrived), { convertDataPart: () => undefined })] }
         : undefined;

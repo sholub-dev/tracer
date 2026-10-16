@@ -439,6 +439,10 @@ test("a message sent mid-run reaches the model at the next step and is saved aft
   assert.equal((r.saved.at(-1)!.parts[0] as { text: string }).text, "focus on the database");
   assert.equal(r.status, "done");
   assert.ok(r.parts.some((p) => p.type === "data-steer-seen" && (p as { data: { ids: string[] } }).data.ids[0] === "m1"), "the client learns the step saw the message");
+  const seen = r.parts.find((p) => p.type === "data-steer-seen") as { data: { anchor: number } };
+  assert.equal(seen.data.anchor, 1, "the message landed before the second step");
+  assert.equal((r.saved.at(-1)!.metadata as { anchor?: number }).anchor, 1, "the saved message keeps the step it landed at");
+  assert.equal(r.saved[1].parts.filter((p) => p.type === "step-start").length, 2, "the anchor counts the step-start parts of the reply");
 });
 
 test("a message sent during the final step is not saved, and the run ends normally", async () => {

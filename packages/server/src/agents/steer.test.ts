@@ -10,10 +10,11 @@ const msg = (text: string): UIMessage => ({ id: "", role: "user", parts: [{ type
 test("draining moves waiting messages into the run, in order, once", () => {
   const state = newSteerState();
   state.pending.push(msg("a"), msg("b"));
-  assert.deepEqual(drainSteer(state).map((m) => m.parts[0]), [{ type: "text", text: "a" }, { type: "text", text: "b" }]);
+  assert.deepEqual(drainSteer(state, 2).map((m) => m.parts[0]), [{ type: "text", text: "a" }, { type: "text", text: "b" }]);
   assert.equal(state.pending.length, 0);
   assert.equal(state.steered.length, 2);
-  assert.deepEqual(drainSteer(state), []);
+  assert.deepEqual(state.steered.map((m) => (m.metadata as { anchor: number }).anchor), [2, 2], "each message records the step it landed before");
+  assert.deepEqual(drainSteer(state, 2), []);
   assert.equal(state.steered.length, 2);
 });
 

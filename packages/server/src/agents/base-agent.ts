@@ -1,6 +1,6 @@
 import { streamText, convertToModelMessages, isStepCount, createUIMessageStream, toUIMessageStream, type UIMessage, type ToolSet } from "ai";
 import { and, eq, sql } from "drizzle-orm";
-import { CLIENT_TOOL_NAMES, DEFAULT_SESSION_TITLE, unixNow, splitAtAnalysis, mergeProgressPart, findingFromMessages, findingMarkdown, type AfterCompleteParams, type ProgressPart, type TokenUsage } from "@tracer-sh/shared";
+import { CLIENT_TOOL_NAMES, DEFAULT_SESSION_TITLE, unixNow, splitAtAnalysis, mergeProgressPart, findingFromMessages, findingMarkdown, turnStart, type AfterCompleteParams, type ProgressPart, type TokenUsage } from "@tracer-sh/shared";
 import { chatSessions } from "../db/schema.js";
 import { sessionChanged } from "../lib/session-events.js";
 import { decodeMessages, encodeMessages } from "../lib/messages-codec.js";
@@ -16,7 +16,8 @@ import { CONFIG, DEFAULTS } from "../config.js";
 import { isTransientError } from "../lib/transient.js";
 import { createToolGate, WRITE_TOOLS } from "../tools/tool-gate.js";
 import { ANALYSIS_TOOL_NAME, createBeginAnalysisTool } from "../tools/analysis-tool.js";
-import { reviewConclusion } from "./utility/review.js";
+import { drainSteer, newSteerState } from "./steer.js";
+import { questionIndex, reviewConclusion } from "./utility/review.js";
 
 /** Appended to the system prompt only when an attachment is present. */
 const IMAGE_ANALYSIS_GUIDANCE = `## Working with attached images and files
@@ -178,8 +179,7 @@ const NON_QUERY_TOOLS: ReadonlySet<string> = new Set([...WRITE_TOOLS, "read_past
 
 /** Names of the tool calls in the reply to the newest user message; a failed finding call does not count. */
 function turnToolNames(messages: UIMessage[]): string[] {
-  const lastUser = messages.map((m) => m.role).lastIndexOf("user");
-  return messages.slice(lastUser + 1).flatMap((msg) => msg.parts.flatMap((part) => {
+  return messages.slice(turnStart(messages)).flatMap((msg) => msg.parts.flatMap((part) => {
     const p = part as { type: string; toolName?: string; state?: string };
     const name = p.type === "dynamic-tool" ? p.toolName : p.type.startsWith("tool-") ? p.type.slice(5) : undefined;
     return name && !(name === FINDING_TOOL && p.state === "output-error") ? [name] : [];
@@ -253,7 +253,7 @@ async function processLLMStream(
   // The run's own model reviews the conclusion; swap the tool before gating so it stays a gated write.
   const tools = collected.tools && createToolGate()(
     ANALYSIS_TOOL_NAME in collected.tools
-      ? { ...collected.tools, [ANALYSIS_TOOL_NAME]: createBeginAnalysisTool((ledger, msgs, signal) => reviewConclusion(context.db, sessionId, model, modelId, ledger, msgs, signal, utilityProviderOptions({ provider, modelId }))) }
+      ? { ...collected.tools, [ANALYSIS_TOOL_NAME]: createBeginAnalysisTool((ledger, msgs, signal) => reviewConclusion(context.db, sessionId, model, modelId, ledger, msgs, signal, utilityProviderOptions({ provider, modelId }), questionStart)) }
       : collected.tools,
   );
 
@@ -319,6 +319,12 @@ async function processLLMStream(
     systemPrompt += `\n\n## Earlier conversation summary\nThe earlier part of this conversation was compacted to save context. The summary below replaces those messages: the work it describes is already done — do NOT redo it. Reuse its identifiers and queries. Its numbers are second-hand: re-run the query before you quote a number in a finding card. Its conclusions are earlier claims: keep them while the data agrees, and test them again when a new result contradicts them.\n\n<conversation_summary>\n${summaryForPrompt}\n</conversation_summary>`;
   }
 
+  const questionStart = questionIndex(modelInput, modelMessages);
+
+  // A re-run or repair pass starts from the saved reply, which lacks the messages sent during the run.
+  const steer = context.activeStreams.get(sessionId)?.steer;
+  if (steer?.steered.length) modelMessages.push(...await convertToModelMessages(withSentTimes(steer.steered), { convertDataPart: () => undefined }));
+
   // The nudge is model input only, so the saved reply does not gain a user turn.
   if (repair) modelMessages.push({ role: "user", content: `Call ${FINDING_TOOL} now with the answer to the question.` });
 
@@ -329,6 +335,21 @@ async function processLLMStream(
   const canReport = tools !== undefined && FINDING_TOOL in tools;
   // Anthropic extended thinking rejects a forced tool choice; activeTools alone still works.
   const mayForceTool = provider !== "anthropic" || !providerOptions?.anthropic?.thinking;
+  const toolsForStep = (stepNumber: number, steps: { toolCalls: { toolName: string }[] }[]) => {
+    if (repair && stepNumber === 0) {
+      return { activeTools: [FINDING_TOOL], ...(mayForceTool ? { toolChoice: { type: "tool" as const, toolName: FINDING_TOOL } } : {}) };
+    }
+    // The last step must carry the card, or a turn that spent its budget on queries ends without an answer.
+    if (stepNumber !== maxSteps - 1) return undefined;
+    const names = [...turnToolNames(messages), ...steps.flatMap((s) => s.toolCalls.map((c) => c.toolName))];
+    return owesFinding(names) ? { activeTools: [FINDING_TOOL] } : undefined;
+  };
+  // Ends only this attempt (a silent stream), unlike serverAbort, which is a stop of the whole run.
+  // Not AbortSignal.any: it needs iOS 17.4, and the app supports iOS 15. A stop of the run also ends the attempt.
+  const attemptAbort = new AbortController();
+  const onRunAbort = () => attemptAbort.abort(serverAbort.signal.reason);
+  if (serverAbort.signal.aborted) onRunAbort();
+  else serverAbort.signal.addEventListener("abort", onRunAbort, { once: true });
   const result = streamText({
     model,
     temperature: 0,
@@ -336,17 +357,19 @@ async function processLLMStream(
     messages: modelMessages,
     tools: tools as Parameters<typeof streamText>[0]["tools"],
     stopWhen: tools ? isStepCount(stepLimit) : undefined,
-    prepareStep: canReport ? ({ stepNumber, steps }) => {
-      if (repair && stepNumber === 0) {
-        return { activeTools: [FINDING_TOOL], ...(mayForceTool ? { toolChoice: { type: "tool" as const, toolName: FINDING_TOOL } } : {}) };
-      }
-      // The last step must carry the card, or a turn that spent its budget on queries ends without an answer.
-      if (stepNumber !== maxSteps - 1) return undefined;
-      const names = [...turnToolNames(messages), ...steps.flatMap((s) => s.toolCalls.map((c) => c.toolName))];
-      return owesFinding(names) ? { activeTools: [FINDING_TOOL] } : undefined;
-    } : undefined,
+    prepareStep: async ({ stepNumber, steps, messages: stepMessages }) => {
+      // The returned messages carry forward to later steps.
+      const arrived = steer ? drainSteer(steer) : [];
+      // Lets the client tell a message a step saw from one that arrived too late.
+      if (arrived.length) broadcaster.emit({ type: "data-steer-seen", data: { ids: arrived.map((m) => m.id) }, transient: true });
+      const added = arrived.length
+        ? { messages: [...stepMessages, ...await convertToModelMessages(withSentTimes(arrived), { convertDataPart: () => undefined })] }
+        : undefined;
+      const forTools = canReport ? toolsForStep(stepNumber, steps) : undefined;
+      return added || forTools ? { ...added, ...forTools } : undefined;
+    },
     providerOptions: cached.providerOptions,
-    abortSignal: serverAbort.signal,
+    abortSignal: attemptAbort.signal,
     onLanguageModelCallEnd: recordEachCall(context.db, sessionId, "chat", modelId),
   });
 
@@ -357,6 +380,9 @@ async function processLLMStream(
   let failure: unknown;
   let streamError: unknown;
   let errorSent = false;
+  let runaway: Error | undefined;
+  let stall: Error | undefined;
+  let saveFailure: unknown;
   let checkpoint: UIMessage[] | undefined;
   let stepSaved = false;
   let owed: Owed | undefined;
@@ -377,11 +403,11 @@ async function processLLMStream(
     },
     onEnd: ({ messages: updatedMessages, outcome, finishReason }) => {
       // A mid-stream model error still ends with "finish", so only its finish reason shows the failure.
-      const failed = outcome.status === "failed" || finishReason === "error";
+      const failed = stall !== undefined || runaway !== undefined || outcome.status === "failed" || finishReason === "error";
       if (failed) {
-        failure = (outcome.status === "failed" ? outcome.error : undefined) ?? streamError ?? new Error("The model stream failed");
-        // A re-run continues from the last saved step, so an attempt that will be re-run saves no more.
-        if (!final && isTransientError(failure)) {
+        failure = stall ?? runaway ?? (outcome.status === "failed" ? outcome.error : undefined) ?? streamError ?? new Error("The model stream failed");
+        // A re-run continues from the last saved step, so an attempt that will be re-run saves no more. The reasoning cap is not re-run.
+        if (!final && runaway === undefined && isTransientError(failure)) {
           resolveFinish();
           return;
         }
@@ -404,9 +430,10 @@ async function processLLMStream(
             const last = updatedMessages.at(-1);
             const reply = last?.role === "assistant" ? last : undefined;
             if (!reply || reply.parts.length === 0) {
-              toSave = messages;
+              // A message a step already saw stays in the history.
+              toSave = steer?.steered.length ? [...messages] : messages;
             } else {
-              const metadata = { ...(reply.metadata as object | undefined), error: failureNote(failure) };
+              const metadata = { ...(reply.metadata as object | undefined), error: runaway ? runaway.message : failureNote(failure) };
               toSave = [...updatedMessages.slice(0, -1), { ...reply, metadata }];
             }
           }
@@ -445,7 +472,7 @@ async function processLLMStream(
           // A stopped or failed reply gets no repair pass. While one is owed the row stays "streaming"; finalizeSession writes "done".
           const owesCard = !settled && !failed && !serverAbort.signal.aborted && canReport && !repair && owesFinding(turnToolNames(enrichedMessages));
           const now = unixNow();
-          const packed = encodeMessages(enrichedMessages);
+          const packed = encodeMessages([...enrichedMessages, ...(steer?.steered ?? [])]);
 
           await context.db
             .insert(chatSessions)
@@ -485,7 +512,7 @@ async function processLLMStream(
               if (lastUserText && lastAssistantText) break;
             }
             // The card is the answer; the first text part is only a note before it.
-            const finding = findingFromMessages(enrichedMessages.slice(enrichedMessages.map((m) => m.role).lastIndexOf("user") + 1));
+            const finding = findingFromMessages(enrichedMessages.slice(turnStart(enrichedMessages)));
             if (finding) lastAssistantText = findingMarkdown(finding);
             afterComplete({ lastUserMessage: lastUserText, lastAssistantText, sessionId });
           };
@@ -504,6 +531,7 @@ async function processLLMStream(
           }
         } catch (err) {
           console.warn(`[chat] Failed to save session ${sessionId}:`, err);
+          saveFailure = err;
         } finally {
           resolveFinish();
         }
@@ -533,7 +561,7 @@ async function processLLMStream(
         try {
           await context.db
             .update(chatSessions)
-            .set({ messages: encodeMessages(sanitizeMessages(stepMessages)), updatedAt: unixNow() })
+            .set({ messages: encodeMessages([...sanitizeMessages(stepMessages), ...(steer?.steered ?? [])]), updatedAt: unixNow() })
             .where(eq(chatSessions.id, sessionId))
             .run();
         } catch (err) {
@@ -547,17 +575,38 @@ async function processLLMStream(
   // This loop runs independently of any HTTP connection.
   const reader = uiStream.getReader();
   let reasoningChars = 0; // per-step; code-level guard against runaway thinking loops
+  // A dead connection (e.g. after the app was suspended) never errors; without this the run would hold its session for ever.
+  // A running tool is silent by nature, so its time does not count.
+  const runningTools = new Set<string>();
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      let silence: ReturnType<typeof setTimeout> | undefined;
+      const next = await Promise.race([
+        reader.read(),
+        new Promise<"silent">((resolve) => {
+          if (runningTools.size === 0) silence = setTimeout(() => resolve("silent"), CONFIG.chatStreamStallMs);
+        }),
+      ]).finally(() => clearTimeout(silence));
+      if (next === "silent") {
+        stall = new Error(`The model stream was silent for ${CONFIG.chatStreamStallMs / 1000}s`);
+        failure = stall;
+        attemptAbort.abort(stall);
+        break;
+      }
+      const { done, value } = next;
       if (done) break;
       const v = value as Record<string, unknown>;
+      if (typeof v.toolCallId === "string") {
+        if (v.type === "tool-input-available") runningTools.add(v.toolCallId);
+        else if (typeof v.type === "string" && /^tool-(output|input-error)/.test(v.type)) runningTools.delete(v.toolCallId);
+      }
       if (v.type === "start-step") {
         reasoningChars = 0;
       } else if (v.type === "reasoning-delta" && typeof v.delta === "string") {
         reasoningChars += v.delta.length;
         if (reasoningChars > CONFIG.maxReasoningCharsPerStep) {
           console.warn(`[chat] reasoning exceeded ${CONFIG.maxReasoningCharsPerStep} chars in one step — aborting ${sessionId}`);
+          runaway = new Error(`The model reasoned past ${CONFIG.maxReasoningCharsPerStep} characters in one step`);
           serverAbort.abort();
           break;
         }
@@ -592,6 +641,16 @@ async function processLLMStream(
   await Promise.race([finishPromise, timeout]);
   settled = true;
   clearTimeout(timeoutId!);
+  // The reasoning cap is the server's own stop, so the run failed; a stop by the user is not a failure.
+  if (runaway) {
+    broadcaster.emit({ type: "error", errorText: "An error occurred." });
+    return { error: runaway.message, transient: false };
+  }
+  // A reply that could not be saved is lost, and the follow-up work never ran; a re-run would repeat the model work for the same save.
+  if (saveFailure !== undefined && failure === undefined && !serverAbort.signal.aborted) {
+    broadcaster.emit({ type: "error", errorText: "An error occurred." });
+    return { error: errorText(saveFailure), transient: false };
+  }
   if (serverAbort.signal.aborted || failure === undefined) return { owed };
   const transient = isTransientError(failure);
   // A dropped connection throws instead of sending an error part; clients need one to show Retry.
@@ -615,7 +674,7 @@ export async function runChatAgent({
   // Create server-owned abort controller + broadcaster
   const serverAbort = new AbortController();
   const broadcaster = new StreamBroadcaster();
-  context.activeStreams.set(sessionId, { broadcaster, controller: serverAbort });
+  context.activeStreams.set(sessionId, { broadcaster, controller: serverAbort, steer: newSteerState() });
 
   try {
     const now = unixNow();

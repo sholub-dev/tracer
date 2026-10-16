@@ -1,7 +1,7 @@
 import { and, countDistinct, eq, gte, inArray, isNotNull, isNull, lt, ne, or } from "drizzle-orm";
 import { z } from "zod";
 import { tool, type Tool, type UIMessage } from "ai";
-import { substituteWindow, unixNow } from "@tracer-sh/shared";
+import { substituteWindow, turnStart, unixNow } from "@tracer-sh/shared";
 import type { Context } from "../trpc/context.js";
 import type { Db } from "../db/driver.js";
 import { alertIssues, monitors, monitorTriggers, sessionTimers } from "../db/schema.js";
@@ -15,7 +15,7 @@ import { hasPendingTimer } from "../tools/timer-tool.js";
 import { MONITOR_ROLE, reportAlertSummaryTool, SEVERITIES, SLACK_RULE, summaryInstruction } from "./alert-summary.js";
 import { ensureFollowUp, postExpiry, postRecheck } from "./follow-up.js";
 import { outcomeSummary, readOutcome, saveOutcome } from "./repeats.js";
-import { withTimeout } from "./validate.js";
+import { withTimeout } from "../lib/with-timeout.js";
 
 const ISSUE_STATUSES = ["stopped", "ongoing", "recurring", "unknown"] as const;
 export type IssueStatus = (typeof ISSUE_STATUSES)[number];
@@ -417,7 +417,7 @@ const monitorName = async (db: Db, monitorId: string) =>
 export const WAKEUP_MARK = "Follow-up timer (";
 
 export function isWakeupTurn(messages: UIMessage[]): boolean {
-  const last = messages[messages.map((m) => m.role).lastIndexOf("user")];
+  const last = messages[turnStart(messages) - 1];
   return !!last?.parts.some((p) => p.type === "text" && p.text.startsWith(WAKEUP_MARK));
 }
 
@@ -502,8 +502,10 @@ export async function checkWatches(context: Context): Promise<void> {
   const { db } = context;
   const now = unixNow();
   await db.delete(alertIssues).where(and(inArray(alertIssues.state, TERMINAL_STATES), lt(alertIssues.updatedAt, now - CONFIG.triageRetentionSeconds))).run();
-  const stale = await db.select().from(alertIssues)
-    .where(and(eq(alertIssues.state, "pending"), lt(alertIssues.updatedAt, now - PENDING_STALE_SECONDS))).all();
+  // Synced rows of another device are not ours: that device settles its own runs.
+  const stale = (await db.select({ row: alertIssues }).from(alertIssues)
+    .innerJoin(monitorTriggers, eq(monitorTriggers.id, alertIssues.triggerId))
+    .where(and(eq(alertIssues.state, "pending"), lt(alertIssues.updatedAt, now - PENDING_STALE_SECONDS), eq(monitorTriggers.deviceId, await localDeviceId(db)))).all()).map((r) => r.row);
   for (const sessionId of new Set(stale.map((r) => r.sessionId))) {
     if (context.activeStreams.has(sessionId)) continue;
     try {

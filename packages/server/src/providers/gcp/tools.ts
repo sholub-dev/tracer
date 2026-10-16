@@ -16,6 +16,7 @@ import { beginAnalysisTool, ANALYSIS_TOOL_NAME } from "../../tools/analysis-tool
 import type { McpProvider } from "../../mcp/mcp-provider.js";
 import { formatGcpResult } from "./gcp-formatter.js";
 import { extractMcpContent, isTransportError, detectTruncation } from "../../mcp/mcp-tools.js";
+import { CONFIG } from "../../config.js";
 import { getGcpAuth, clearGcpAuthCache, isReauthError } from "./gcp-auth.js";
 import {
   gcpDirectModeSystemPrompt,
@@ -35,6 +36,34 @@ function withTitleField(schema: any) {
     ...base,
     properties: { ...base.properties, title: { type: "string", description: 'Short chart title in plain words, e.g. "Checkout p95 latency"' } },
   });
+}
+
+/** Runs the call with a limit and the caller's abort. The race also ends a call that ignores the signal. */
+async function withCallLimit<T>(call: (signal: AbortSignal) => Promise<T>, caller: AbortSignal | undefined, message: string, onLimit: () => void): Promise<T> {
+  const controller = new AbortController();
+  const onCallerAbort = () => controller.abort(caller!.reason);
+  if (caller?.aborted) onCallerAbort();
+  else caller?.addEventListener("abort", onCallerAbort, { once: true });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new DOMException(message, "TimeoutError");
+      onLimit();
+      controller.abort(err);
+      reject(err);
+    }, CONFIG.mcpToolCallTimeoutMs);
+  });
+  const stopped = new Promise<never>((_, reject) => {
+    controller.signal.addEventListener("abort", () => reject(controller.signal.reason), { once: true });
+  });
+  try {
+    return await Promise.race([call(controller.signal), limit, stopped]);
+  } finally {
+    clearTimeout(timer);
+    caller?.removeEventListener("abort", onCallerAbort);
+    stopped.catch(() => {});
+    limit.catch(() => {});
+  }
 }
 
 export function createGcpDirectTools(
@@ -69,7 +98,7 @@ export function createGcpDirectTools(
     directTools[name] = tool({
       description: (mcpTool as any).description ?? name,
       inputSchema: withTitleField((mcpTool as any).inputSchema),
-      execute: async (rawInput: any) => {
+      execute: async (rawInput: any, options?: { abortSignal?: AbortSignal }) => {
         const { title: _title, ...rest } = rawInput && typeof rawInput === "object" ? rawInput : ({} as Record<string, unknown>);
         const input = ownsTitle || !rawInput || typeof rawInput !== "object" ? rawInput : rest;
         const queryStr = typeof input === "string" ? input : JSON.stringify(input).slice(0, 500);
@@ -80,8 +109,11 @@ export function createGcpDirectTools(
           return { error: auth.message };
         }
 
+        // At the limit the stuck call still counts as running: it is not another call.
+        let otherCalls: number | undefined;
         try {
-          const result = await originalExecute(input);
+          const timeoutMessage = `${name} timed out after ${CONFIG.mcpToolCallTimeoutMs / 1000}s. Narrow the filter or the time range, or try again.`;
+          const result = await withCallLimit((signal) => originalExecute(input, { ...options, abortSignal: signal }), options?.abortSignal, timeoutMessage, () => { otherCalls = provider.callsRunning - 1; });
           const normalized = extractMcpContent(result);
           // MCP reports API failures as an isError result, not a thrown error.
           if ((result as { isError?: boolean } | null)?.isError) noteReauth(typeof normalized === "string" ? normalized : JSON.stringify(normalized));
@@ -101,7 +133,11 @@ export function createGcpDirectTools(
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           collectedQueries.push({ query: `${name}: ${queryStr}`, results: { error: message } });
-          if (isTransportError(err)) provider.invalidateTools();
+          // A call that hit the limit may be stuck in a hung subprocess. Closing the clients also kills the other running calls, so then only the next ping or run respawns them.
+          if (isTransportError(err) || (err instanceof Error && err.name === "TimeoutError")) {
+            if ((otherCalls ?? provider.callsRunning) <= 0) provider.invalidateTools();
+            else provider.connected = false;
+          }
           noteReauth(message);
           return { error: message };
         }

@@ -111,14 +111,14 @@ export const MessageParts = React.memo(
 
     const renderWork = ({ part, key, text }: (typeof work)[number]) => {
       if (part.type === "text") return <li key={key}><Narration content={text ?? part.text} isAnimating={isAnimating} /></li>;
-      if (part.type === "reasoning") return <li key={key}><ReasoningBlock content={part.text} isAnimating={isAnimating} /></li>;
+      if (part.type === "reasoning") return <li key={key}><ReasoningBlock content={part.text} isAnimating={isAnimating} streaming={isAnimating && part.state === "streaming"} /></li>;
       if (isProviderTool(part.type)) return <ProviderStep key={key} part={snapshot(part)} progressStore={progressStore} isAnimating={isAnimating} />;
       return <li key={key}><OtherToolPart part={snapshot(part)} isAnimating={isAnimating} /></li>;
     };
 
     const renderAnswer = ({ part, key, text }: (typeof answer)[number]) => {
       if (part.type === "text") return <AnswerText key={key} text={text ?? part.text} isAnimating={isAnimating} compact={compact} />;
-      if (part.type === "reasoning") return <ReasoningBlock key={key} content={part.text} isAnimating={isAnimating} />;
+      if (part.type === "reasoning") return <ReasoningBlock key={key} content={part.text} isAnimating={isAnimating} streaming={isAnimating && part.state === "streaming"} />;
       if (part.type === "file") return <FileAttachment key={key} part={part as FilePartLike} />;
       if (isProviderTool(part.type)) {
         return (

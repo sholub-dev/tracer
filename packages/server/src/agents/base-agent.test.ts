@@ -17,7 +17,11 @@ import { SETTINGS_KEYS } from "../config.js";
 import type { Context } from "../trpc/context.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 import { runChatAgent, sanitizeMessages } from "./base-agent.js";
+import { newSteerState, steerChat } from "./steer.js";
 import { resumeRuns, settleInterruptedRuns } from "./resume.js";
+import { startAgentSession } from "./start-session.js";
+import { pendingResume } from "../lib/pending-resume.js";
+import { latestSessionRunning } from "../monitors/scheduler.js";
 import { ProviderRegistry as Registry } from "../providers/registry.js";
 import { encodeMessages } from "../lib/messages-codec.js";
 import { UNIFIED_SCOPE } from "@tracer-sh/shared";
@@ -91,6 +95,13 @@ const UNKNOWN_ERROR_SSE = MID_STREAM_ERROR_SSE.replace("overloaded_error", "unex
 const DROPPED = "dropped";
 /** A script entry that sends part of an answer, then never finishes. */
 const STALLED = "stalled";
+/** A script entry that streams endless reasoning and never finishes. */
+const RUNAWAY = "runaway";
+const THINKING_SSE = sse([
+  MESSAGE_START,
+  ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } }],
+  ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "x".repeat(500) } }],
+]);
 
 /** `fail` first requests get a non-retryable API error; `hold` never answers; `script` sets each request's SSE body (null fails it). */
 function fakeAnthropic({ fail = 0, hold = false, script = [] as (string | null)[], onRequest }: { fail?: number; hold?: boolean; script?: (string | null)[]; onRequest?: () => Promise<void> } = {}): Promise<{ server: Server; url: string; bodies: Record<string, unknown>[] }> {
@@ -110,6 +121,10 @@ function fakeAnthropic({ fail = 0, hold = false, script = [] as (string | null)[
       res.writeHead(200, { "content-type": "text/event-stream" });
       if (script[bodies.length - 1] === STALLED) {
         res.write(MID_STREAM_ERROR_SSE.slice(0, MID_STREAM_ERROR_SSE.lastIndexOf("event: error")));
+        return;
+      }
+      if (script[bodies.length - 1] === RUNAWAY) {
+        res.write(THINKING_SSE);
         return;
       }
       if (script[bodies.length - 1] === DROPPED) {
@@ -214,13 +229,16 @@ test("Anthropic chat request: date-only system prompt with cache breakpoint, tim
   }
 });
 
-async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string | null)[] }, retryDelaysMs: number[], whileRunning?: (ctx: Context) => Promise<void>, tools?: ToolSet | ((writer: { write: (part: Record<string, unknown>) => void }) => ToolSet)) {
+async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string | null)[]; onRequest?: (n: number) => Promise<void> }, retryDelaysMs: number[], whileRunning?: (ctx: Context) => Promise<void>, tools?: ToolSet | ((writer: { write: (part: Record<string, unknown>) => void }) => ToolSet)) {
   const db = memoryDb();
   // The session status at each model request.
   const statusAtRequest: (string | undefined)[] = [];
   const { server, url, bodies } = await fakeAnthropic({
     ...fake,
-    onRequest: async () => { statusAtRequest.push((await db.select().from(schema.chatSessions).get())?.status); },
+    onRequest: async () => {
+      statusAtRequest.push((await db.select().from(schema.chatSessions).get())?.status);
+      await fake.onRequest?.(statusAtRequest.length);
+    },
   });
   process.env.ANTHROPIC_BASE_URL = url;
   try {
@@ -402,6 +420,45 @@ test("each tool step is saved while the run goes on, and a stop keeps it", async
   assert.ok(r.saved.at(-1)!.parts.some((p) => p.type === "tool-lookup"));
 });
 
+test("a message sent mid-run reaches the model at the next step and is saved after the reply", async () => {
+  const r = await retryRun(
+    { script: [TOOL_CALL_SSE, SSE] }, [],
+    async (ctx) => {
+      await new Promise((res) => setTimeout(res, 100));
+      assert.equal(await steerChat(ctx, "s1", { id: "m1", role: "user", parts: [{ type: "text", text: "focus on the database" }] }), true);
+    },
+    { lookup: tool({ inputSchema: z.object({}), execute: async () => { await new Promise((res) => setTimeout(res, 300)); return "ok"; } }) },
+  );
+  assert.equal(r.bodies.length, 2, "the run is not restarted");
+  const last = (r.bodies[1] as { messages: { role: string; content: { type: string; text?: string }[] }[] }).messages.at(-1)!;
+  assert.equal(last.role, "user");
+  assert.deepEqual(last.content.map((c) => c.type), ["tool_result", "text", "text"], "the tool result comes first, then the message and its send time");
+  assert.equal(last.content[1].text, "focus on the database");
+  assert.equal(JSON.stringify((r.bodies[0] as { messages: unknown }).messages).includes("focus on the database"), false);
+  assert.deepEqual(r.saved.map((m) => m.role), ["user", "assistant", "user"]);
+  assert.equal((r.saved.at(-1)!.parts[0] as { text: string }).text, "focus on the database");
+  assert.equal(r.status, "done");
+  assert.ok(r.parts.some((p) => p.type === "data-steer-seen" && (p as { data: { ids: string[] } }).data.ids[0] === "m1"), "the client learns the step saw the message");
+});
+
+test("a message sent during the final step is not saved, and the run ends normally", async () => {
+  let ctx: Context | undefined;
+  let accepted: boolean | undefined;
+  const r = await retryRun(
+    {
+      script: [TOOL_CALL_SSE, SSE],
+      onRequest: async (n) => { if (n === 2) accepted = await steerChat(ctx!, "s1", { id: "late", role: "user", parts: [{ type: "text", text: "too late" }] }); },
+    }, [],
+    async (c) => { ctx = c; },
+    { lookup: tool({ inputSchema: z.object({}), execute: async () => "ok" }) },
+  );
+  assert.equal(accepted, true, "the run is still active, so the server accepts it");
+  assert.deepEqual(r.saved.map((m) => m.role), ["user", "assistant"]);
+  assert.equal(JSON.stringify(r.saved).includes("too late"), false);
+  assert.equal(r.parts.some((p) => p.type === "data-steer-seen"), false);
+  assert.equal(r.status, "done");
+});
+
 test("token use is recorded for each finished model call, also in failed and retried attempts", async () => {
   const lookup = { lookup: tool({ inputSchema: z.object({}), execute: async () => "ok" }) };
   const retried = await retryRun({ script: [TOOL_CALL_SSE, DROPPED, SSE] }, [0], undefined, lookup);
@@ -451,6 +508,70 @@ test("a stopped run keeps its partial reply and is not a failure", async () => {
   assert.equal(reply.role, "assistant");
   assert.deepEqual(reply.parts.filter((p) => p.type === "text").map((p) => p.type === "text" && p.text), ["half an answer"]);
   assert.equal(reply.metadata, undefined);
+});
+
+test("a run stopped by the reasoning cap is a failure: the follow-up work hears of it", { timeout: 15_000 }, async () => {
+  const config = CONFIG as { maxReasoningCharsPerStep: number };
+  const cap = config.maxReasoningCharsPerStep;
+  config.maxReasoningCharsPerStep = 100;
+  try {
+    const r = await retryRun({ script: [RUNAWAY] }, [0]);
+    assert.equal(r.bodies.length, 1);
+    assert.equal(r.completed, 0);
+    assert.equal(r.failed.length, 1, "onFailed fires once");
+    assert.equal(r.status, "done");
+  } finally {
+    config.maxReasoningCharsPerStep = cap;
+  }
+});
+
+test("a reply cut off by the reasoning cap keeps the error so a returning viewer sees it", { timeout: 15_000 }, async () => {
+  const config = CONFIG as { maxReasoningCharsPerStep: number };
+  const cap = config.maxReasoningCharsPerStep;
+  config.maxReasoningCharsPerStep = 100;
+  try {
+    const r = await retryRun({ script: [TOOL_CALL_SSE, RUNAWAY] }, [0], undefined, { lookup: tool({ inputSchema: z.object({}), execute: async () => "ok" }) });
+    const reply = r.saved.at(-1)!;
+    assert.equal(reply.role, "assistant");
+    assert.equal((reply.metadata as { error?: string } | undefined)?.error, "The model reasoned past 100 characters in one step");
+  } finally {
+    config.maxReasoningCharsPerStep = cap;
+  }
+});
+
+test("a model stream that goes silent is a failed attempt: re-run, then reported", { timeout: 15_000 }, async () => {
+  const config = CONFIG as { chatStreamStallMs: number };
+  const stall = config.chatStreamStallMs;
+  config.chatStreamStallMs = 300;
+  try {
+    const r = await retryRun({ hold: true }, [0]);
+    assert.equal(r.bodies.length, 2, "the silent request is re-run once");
+    assert.equal(r.failed.length, 1);
+    assert.equal(r.status, "done");
+
+    const mid = await retryRun({ script: [STALLED, SSE] }, [0]);
+    assert.equal(mid.bodies.length, 2);
+    assert.equal(mid.completed, 1, "the re-run completes");
+    assert.deepEqual(mid.failed, []);
+  } finally {
+    config.chatStreamStallMs = stall;
+  }
+});
+
+test("a tool that runs longer than the stall limit is not cut off", { timeout: 15_000 }, async () => {
+  const config = CONFIG as { chatStreamStallMs: number };
+  const stall = config.chatStreamStallMs;
+  config.chatStreamStallMs = 2500;
+  try {
+    const r = await retryRun({ script: [TOOL_CALL_SSE, SSE] }, [0], undefined, {
+      lookup: tool({ inputSchema: z.object({}), execute: async () => { await new Promise((res) => setTimeout(res, 3000)); return "slow result"; } }),
+    });
+    assert.equal(r.bodies.length, 2);
+    assert.deepEqual(r.failed, []);
+    assert.equal(r.completed, 1);
+  } finally {
+    config.chatStreamStallMs = stall;
+  }
 });
 
 test("a stop keeps the progress a running tool streamed", async () => {
@@ -612,4 +733,116 @@ test("a restart does not resume a stopped run, an old run or a run without a sco
   assert.deepEqual(await settleInterruptedRuns(db), []);
   const rows = await db.select().from(schema.chatSessions).all();
   assert.deepEqual(rows.map((r) => r.status), ["done", "done"]);
+});
+
+test("a message seen by a step reaches the re-run once and is saved once", async () => {
+  const r = await retryRun(
+    { script: [TOOL_CALL_SSE, DROPPED, SSE] }, [0],
+    async (ctx) => {
+      await new Promise((res) => setTimeout(res, 100));
+      assert.equal(await steerChat(ctx, "s1", { id: "m1", role: "user", parts: [{ type: "text", text: "focus on the database" }] }), true);
+    },
+    { lookup: tool({ inputSchema: z.object({}), execute: async () => { await new Promise((res) => setTimeout(res, 300)); return "ok"; } }) },
+  );
+  assert.equal(r.bodies.length, 3);
+  const count = (b: unknown) => JSON.stringify(b).split("focus on the database").length - 1;
+  assert.equal(count(r.bodies[1]), 1);
+  assert.equal(count(r.bodies[2]), 1, "the re-run sees the message once");
+  assert.deepEqual(r.saved.map((m) => m.role), ["user", "assistant", "user"]);
+});
+
+test("a message seen before the repair pass reaches it once and is saved once", async () => {
+  const r = await retryRun(
+    { script: [TOOL_CALL_SSE, SSE, FINDING_CALL_SSE] }, [],
+    async (ctx) => {
+      await new Promise((res) => setTimeout(res, 100));
+      assert.equal(await steerChat(ctx, "s1", { id: "m1", role: "user", parts: [{ type: "text", text: "focus on the database" }] }), true);
+    },
+    { ...findingTools, lookup: tool({ inputSchema: z.object({}), execute: async () => { await new Promise((res) => setTimeout(res, 300)); return "ok"; } }) },
+  );
+  const count = (b: unknown) => JSON.stringify(b).split("focus on the database").length - 1;
+  assert.equal(r.bodies.length, 3);
+  assert.equal(count(r.bodies[2]), 1);
+  assert.deepEqual(r.saved.map((m) => m.role), ["user", "assistant", "user"]);
+});
+
+test("a session start that throws is reported as an error and leaves no run behind", async () => {
+  const db = memoryDb();
+  await db.insert(schema.providerConfigs).values({ type: "anthropic", config: JSON.stringify({ apiKey: "test" }) }).run();
+  await writeAppSetting(db, SETTINGS_KEYS.chatModel, { provider: "anthropic", modelId: "claude-test" });
+  // The row is created by the start; the write that begins the run then fails.
+  (db as unknown as { $client: Database.Database }).$client.exec("CREATE TRIGGER no_update BEFORE UPDATE ON chat_sessions BEGIN SELECT RAISE(ABORT, 'database is locked'); END");
+  const context: Context = { db, providers: new Registry(), activeStreams: new Map() };
+  const result = await startAgentSession(context, { sessionId: "m1", kind: "monitor", message: "check", title: "t" });
+  assert.deepEqual(result, { error: "database is locked" });
+  assert.equal(context.activeStreams.size, 0, "no stream is leaked");
+});
+
+test("a restart leaves a session alone when another run already owns it", async () => {
+  const { server, url, bodies } = await fakeAnthropic();
+  process.env.ANTHROPIC_BASE_URL = url;
+  try {
+    const db = memoryDb();
+    await db.insert(schema.providerConfigs).values({ type: "anthropic", config: JSON.stringify({ apiKey: "test" }) }).run();
+    await writeAppSetting(db, SETTINGS_KEYS.chatModel, { provider: "anthropic", modelId: "claude-test" });
+    const context: Context = { db, providers: new Registry(), activeStreams: new Map() };
+    await interruptedSession(db);
+    const runs = await settleInterruptedRuns(db);
+    // A timer or a new firing started the session before the resume reached it.
+    context.activeStreams.set("s1", { broadcaster: {} as StreamBroadcaster, controller: new AbortController(), steer: newSteerState() });
+    await resumeRuns(context, runs);
+    assert.equal(bodies.length, 0, "no second run starts");
+    assert.equal((await db.select().from(schema.chatSessions).get())?.status, "streaming", "the live run is not marked done");
+  } finally {
+    delete process.env.ANTHROPIC_BASE_URL;
+    server.close();
+  }
+});
+
+test("a monitor whose last session waits for its resume counts as running", async () => {
+  const db = memoryDb();
+  const context: Context = { db, providers: new Registry(), activeStreams: new Map() };
+  (db as unknown as { $client: Database.Database }).$client.exec("INSERT INTO monitor_triggers (id, monitor_id, triggered_at, window_start, session_id) VALUES ('t1', 'mon1', 100, 0, 's1')");
+  await interruptedSession(db);
+  assert.equal(await latestSessionRunning(context, "mon1"), false);
+  await settleInterruptedRuns(db);
+  assert.equal(await latestSessionRunning(context, "mon1"), true, "waiting for resume");
+  pendingResume.delete("s1");
+  assert.equal(await latestSessionRunning(context, "mon1"), false);
+});
+
+test("a run whose final save fails is reported as failed and its row is not left streaming", async () => {
+  let armed!: () => void;
+  const trigger = new Promise<void>((resolve) => { armed = resolve; });
+  // The trigger is in place before the model answers.
+  const r = await retryRun({ script: [SSE], onRequest: () => trigger }, [0], async (ctx) => {
+    (ctx.db as unknown as { $client: Database.Database }).$client.exec(
+      "CREATE TRIGGER no_final_save BEFORE UPDATE ON chat_sessions WHEN NEW.status = 'done' AND NEW.messages <> OLD.messages BEGIN SELECT RAISE(ABORT, 'disk full'); END",
+    );
+    armed();
+  });
+  assert.equal(r.bodies.length, 1, "a save failure is not re-run");
+  assert.equal(r.completed, 0);
+  assert.equal(r.failed.length, 1, "onFailed fires once");
+  assert.match(r.failed[0], /disk full/);
+  assert.equal(r.status, "done");
+});
+
+test("a run and a stop work without AbortSignal.any, which iOS before 17.4 lacks", async () => {
+  const any = AbortSignal.any;
+  // @ts-expect-error the older runtime has no such method
+  delete AbortSignal.any;
+  try {
+    const done = await retryRun({ script: [SSE] }, [0]);
+    assert.deepEqual(done.failed, []);
+    assert.equal(done.completed, 1);
+    const stopped = await retryRun({ script: [STALLED] }, [0], async (ctx) => {
+      await new Promise((res) => setTimeout(res, 300));
+      ctx.activeStreams.get("s1")!.controller.abort();
+    });
+    assert.deepEqual(stopped.failed, []);
+    assert.equal(stopped.saved.at(-1)?.role, "assistant", "the stop keeps the partial reply");
+  } finally {
+    AbortSignal.any = any;
+  }
 });

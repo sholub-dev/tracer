@@ -7,6 +7,7 @@ import { AppSidebar, type Page } from "./components/layout/Sidebar";
 import { AlertToaster } from "./components/layout/AlertBanner";
 import { Toaster } from "@/components/ui/sonner";
 import { CopyFromComputerDialog } from "@/components/settings/CopyFromComputerDialog";
+import { AppUpdateOffer } from "./components/layout/AppUpdateOffer";
 import { IS_IOS } from "./lib/platform";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -158,6 +159,7 @@ export function App() {
         </ErrorBoundary>
       </Shell>
       {IS_IOS && <CopyFromComputerDialog />}
+      {IS_IOS && <AppUpdateOffer />}
       <AlertToaster />
       <Toaster
         position="bottom-center"

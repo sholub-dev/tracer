@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compareSeries } from "../components/charts/ChartView";
+import { compareSeries, usesDualAxis } from "../components/charts/ChartView";
 
 const WEEK = 7 * 86_400;
 const T0 = 1_760_000_000;
@@ -36,4 +36,12 @@ test("builds a current and a previous series per facet value", () => {
   assert.deepEqual(series.map((s) => s.group), [0, 0, 1, 1]);
   assert.deepEqual(series[3].data.map((p) => p.y), [1090, 1091, 1092]);
   assert.deepEqual(series[3].data.map((p) => p.x), series[2].data.map((p) => p.x));
+});
+
+test("a threshold blocks the right axis only when the chart draws it", () => {
+  const threshold = { operator: ">", value: 5 };
+  assert.equal(usesDualAxis({ hasFacet: false, hasComparison: false, threshold }), false);
+  assert.equal(usesDualAxis({ hasFacet: false, hasComparison: false }), true);
+  assert.equal(usesDualAxis({ hasFacet: true, hasComparison: false }), false);
+  assert.equal(usesDualAxis({ hasFacet: false, hasComparison: true, threshold }), true, "a comparison chart drops the threshold");
 });

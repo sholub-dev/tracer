@@ -108,3 +108,15 @@ test("reconnectDisconnected stops waiting after the limit and the ping still upd
     (CONFIG as unknown as { providerReconnectWaitMs: number }).providerReconnectWaitMs = realWait;
   }
 });
+
+test("register disposes the provider it replaces", () => {
+  const registry = new ProviderRegistry();
+  let disposed = 0;
+  const make = () => ({ name: "gcp", type: "gcp", connected: true, lastChecked: null, dispose: async () => { disposed++; } }) as unknown as IProvider;
+  const first = make();
+  registry.register(first);
+  registry.register(make());
+  assert.equal(disposed, 1);
+  registry.register(registry.getProvider("gcp")!);
+  assert.equal(disposed, 1);
+});

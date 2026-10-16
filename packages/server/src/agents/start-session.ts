@@ -25,7 +25,20 @@ export interface StartSessionOptions {
   tools?: Record<string, unknown>;
 }
 
+/** Never throws: callers undo their own records on an error, and a throw would leave them behind. */
 export async function startAgentSession(
+  context: Context,
+  options: StartSessionOptions,
+): Promise<{ ok: true } | { error: string }> {
+  try {
+    return await start(context, options);
+  } catch (err) {
+    console.warn(`[chat] Could not start ${options.sessionId}:`, err);
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function start(
   context: Context,
   { sessionId, kind, message, title, provider, onComplete, tools }: StartSessionOptions,
 ): Promise<{ ok: true } | { error: string }> {

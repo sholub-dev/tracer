@@ -146,10 +146,19 @@ function isCountSeries(s: Series): boolean {
 }
 
 // Distinct metrics 10x smaller than the largest get a right axis, so a 0-1 rate isn't flat next to request counts.
+// A group (a metric and its comparison periods) shares one peak, so its lines stay on one axis.
 function rightAxisFlags(series: Series[]): boolean[] {
   const peaks = series.map((s) => Math.max(0, ...s.data.map((p) => Math.abs(p.y ?? 0))));
-  const top = Math.max(0, ...peaks);
-  return peaks.map((p) => p > 0 && p * 10 < top);
+  const groupPeak = new Map<number, number>();
+  series.forEach((s, i) => { if (s.group !== undefined) groupPeak.set(s.group, Math.max(groupPeak.get(s.group) ?? 0, peaks[i])); });
+  const shared = series.map((s, i) => (s.group === undefined ? peaks[i] : groupPeak.get(s.group)!));
+  const top = Math.max(0, ...shared);
+  return shared.map((p) => p > 0 && p * 10 < top);
+}
+
+// A comparison chart does not draw the threshold, so it does not block the right axis.
+export function usesDualAxis({ hasFacet, hasComparison, threshold }: { hasFacet: boolean; hasComparison: boolean; threshold?: unknown }): boolean {
+  return !hasFacet && (hasComparison || !threshold);
 }
 
 function SeriesLegend({ series, labels, prefix, isVisible, onToggle, onRight }: { series: Series[]; labels: string[]; prefix: string; isVisible: (name: string) => boolean; onToggle: (name: string) => void; onRight?: boolean[] }) {
@@ -385,7 +394,7 @@ export function TimeseriesChart({ rows: raw, containerSize, threshold }: { rows:
     () => (hasComparison ? compareSeries(rows) : hasFacet ? facetSeries(rows) : simpleSeries(rows)),
     [rows, hasFacet, hasComparison],
   );
-  const dualAxis = !hasFacet && !hasComparison && !threshold;
+  const dualAxis = usesDualAxis({ hasFacet, hasComparison, threshold });
   const plotHeight = hasFacet ? 300 : 280;
   const shared = { plotHeight, threshold: hasComparison ? undefined : threshold };
   return <TimeseriesPlot series={series} containerSize={containerSize} dualAxis={dualAxis} sharePrefix={!hasFacet} {...shared} />;

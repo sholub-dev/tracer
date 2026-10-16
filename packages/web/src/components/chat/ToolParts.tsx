@@ -16,6 +16,7 @@ import { copyText } from "./MessageActions";
 import { ReasoningBlock } from "./ReasoningBlock";
 import { ANSWER_PROSE_COMPACT } from "./prose";
 import { providerLabel } from "../../lib/providers";
+import { smallToolLabel } from "../../lib/tool-label";
 
 export interface ToolPart {
   type: string;
@@ -436,19 +437,6 @@ export const ProviderStep = memo(function ProviderStep({ part, progressStore, is
 
 function StoppedLine() {
   return <p className="text-[13px]/[18px] text-muted-foreground">Stopped</p>;
-}
-
-function smallToolLabel(part: ToolPart, spec: (typeof SMALL_TOOLS)[string]): string {
-  const output = (part.output ?? {}) as Record<string, unknown>;
-  if ("error" in output) return `${spec.errorLabel}: ${String(output.error)}`;
-  if ("cancelled" in output) return "Follow-up timer cancelled";
-  const note = typeof part.input?.note === "string" && part.input.note ? `: ${part.input.note}` : "";
-  if (typeof output.dueAt === "string") return `${spec.done} for ${output.dueAt}${note}`;
-  if (part.type === "tool-report_issue_status" && Array.isArray(part.input?.issues)) {
-    const statuses = [...new Set((part.input.issues as Array<{ status?: string }>).map((i) => i.status).filter(Boolean))];
-    if (statuses.length) return `${spec.done}: ${statuses.join(", ")}`;
-  }
-  return spec.done;
 }
 
 /** Monitor saves, small tool lines (timer, triage reports) and anything else that is not a provider query. */

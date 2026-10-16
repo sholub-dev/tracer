@@ -12,6 +12,7 @@ import type {
 import { BaseProvider } from "../providers/base.provider.js";
 import type { McpServerDefinition, McpServerEntry } from "./definitions.js";
 import { CONFIG } from "../config.js";
+import { withTimeout } from "../lib/with-timeout.js";
 
 type McpClient = Awaited<ReturnType<typeof createMCPClient>>;
 
@@ -87,20 +88,20 @@ export class McpProvider extends BaseProvider {
         return { ok: false, error: "No MCP clients connected" };
       }
       this.lastReconnectAttempt = now;
-      try { await this.createClients(); } catch { /* fall through */ }
+      try {
+        await this.createClients();
+      } catch (err) {
+        this.connected = false;
+        this.lastChecked = new Date().toISOString();
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
       if (this.clients.length === 0) {
         return { ok: false, error: "No MCP clients connected" };
       }
     }
-    let pingTimer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await Promise.race([
-        // Also refills the tool cache that invalidateTools() cleared.
-        this.discoverTools(),
-        new Promise<never>((_, reject) => {
-          pingTimer = setTimeout(() => reject(new Error("Ping timed out")), CONFIG.mcpPingTimeoutMs);
-        }),
-      ]);
+      // Also refills the tool cache that invalidateTools() cleared.
+      await withTimeout(this.discoverTools(), CONFIG.mcpPingTimeoutMs, "MCP ping");
       this.connected = true;
       this.armIdleClose();
       this.lastChecked = new Date().toISOString();
@@ -108,9 +109,9 @@ export class McpProvider extends BaseProvider {
     } catch (err) {
       this.connected = false;
       this.lastChecked = new Date().toISOString();
+      // A dead or hung subprocess stays in the list otherwise and every later ping fails on it. Not awaited: a hung close must not hang the ping.
+      if (this.inFlight === 0) void this.closeAllClients();
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
-    } finally {
-      clearTimeout(pingTimer);
     }
   }
 
@@ -126,9 +127,16 @@ export class McpProvider extends BaseProvider {
     return this.cachedTools;
   }
 
+  /** Tool calls running now, a call that is stuck included. */
+  get callsRunning(): number {
+    return this.inFlight;
+  }
+
   /** Invalidate cached tools and clients — forces reconnection on next getMcpTools() call. */
   invalidateTools(): void {
     this.cachedTools = null;
+    // Not connected, so the next run pings it and respawns the clients; a connected provider is skipped.
+    this.connected = false;
     // Reset state first: a concurrent init may create new clients while the old ones close.
     this.closeAllClients().catch(() => {});
   }
@@ -274,7 +282,13 @@ export class McpProvider extends BaseProvider {
   private async execute(name: string, args: unknown[]): Promise<unknown> {
     if (this.clients.length === 0) {
       await this.createClients();
-      await this.discoverTools();
+      try {
+        await withTimeout(this.discoverTools(), CONFIG.mcpInitTimeoutMs, "MCP tool discovery");
+      } catch (err) {
+        // A hung subprocess would block every later call the same way.
+        void this.closeAllClients();
+        throw err;
+      }
     }
     return this.liveTools[name].execute(...args);
   }

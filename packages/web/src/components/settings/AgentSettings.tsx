@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { syncEdits } from "../../lib/agent-config";
 import { trpc } from "../../lib/trpc";
 import { Group, Row, Section } from "./parts";
 
@@ -73,8 +74,14 @@ export function AgentSettings() {
   const [values, setValues] = useState<Values | null>(null);
   const [justSaved, setJustSaved] = useState(false);
 
+  const synced = useRef<Values | null>(null);
   useEffect(() => {
-    if (config) setValues({ ...config });
+    if (!config) return;
+    // A refetch after a save must not wipe what the user typed meanwhile.
+    // Read before the ref moves on: React may run the updater after the next line.
+    const lastSynced = synced.current;
+    setValues((v) => (v ? syncEdits(v, lastSynced, config) : { ...config }));
+    synced.current = { ...config };
   }, [config]);
 
   const dirty = !!config && !!values && (Object.keys(values) as (keyof Values)[]).some((k) => values[k] !== config[k]);

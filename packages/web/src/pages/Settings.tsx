@@ -34,8 +34,8 @@ export function Settings() {
         </div>
       </header>
       <div className="mx-auto flex max-w-[1000px] flex-col gap-6 px-4 py-6 sm:px-6 md:flex-row md:items-start md:gap-10 md:py-8">
-        <nav aria-label="Settings sections" className="-mx-4 shrink-0 overflow-x-auto px-4 sm:-mx-6 sm:px-6 md:sticky md:top-20 md:mx-0 md:w-48 md:px-0">
-          <ul className="flex gap-1 md:flex-col">
+        <nav aria-label="Settings sections" className="shrink-0 md:sticky md:top-20 md:w-48">
+          <ul className="grid grid-cols-3 gap-1 md:flex md:flex-col">
             {TABS.map(({ value, label, icon: Icon }) => (
               <li key={value}>
                 <button
@@ -43,7 +43,7 @@ export function Settings() {
                   aria-current={tab === value ? "page" : undefined}
                   onClick={() => setTab(value)}
                   className={cn(
-                    "flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-sm whitespace-nowrap text-ink-2 transition-colors duration-150 outline-none hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50",
+                    "flex w-full flex-col items-center gap-1 rounded-md px-1 py-2 text-xs whitespace-nowrap text-ink-2 md:h-8 md:flex-row md:gap-2 md:px-2.5 md:py-0 md:text-sm transition-colors duration-150 outline-none hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50",
                     tab === value && "bg-accent font-medium text-foreground hover:bg-accent",
                   )}
                 >

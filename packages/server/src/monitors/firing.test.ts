@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { after, before, mock, test } from "node:test";
 import assert from "node:assert/strict";
 import Database from "better-sqlite3-multiple-ciphers";
 import { eq } from "drizzle-orm";
@@ -14,11 +14,23 @@ import type { AiIssue } from "../providers/newrelic/nerdgraph.client.js";
 import { recordIssues, reportIssueStatusTool } from "./triage.js";
 import { runDueMonitors, runMonitorsNow } from "./scheduler.js";
 
+// The tests and the scheduler both read the clock; a 5-minute boundary between those reads would shift the window.
+before(() => {
+  const midWindow = (Math.floor(Date.now() / 300_000) * 300 + 60 + 150) * 1000;
+  mock.timers.enable({ apis: ["Date"], now: midWindow });
+});
+after(() => mock.timers.reset());
+
 const QUERY = "SELECT count(*) FROM NrAiIncident WHERE event = 'open' FACET conditionName SINCE {{SINCE}} UNTIL {{UNTIL}}";
 const now = () => Math.floor(Date.now() / 1000);
+// The window the scheduler evaluates right now: the latest 5-minute boundary at least one lag ago.
+const windowEndNow = () => Math.floor((now() - 60) / 300) * 300;
 
 const issue = (id: string, state = "ACTIVATED") =>
   ({ issueId: id, state, incidentIds: ["inc1"], title: [`Title ${id}`], conditionName: ["Errors"] }) as AiIssue;
+
+const deviceId = async (db: Awaited<ReturnType<typeof env>>["db"]) =>
+  (await db.query.appSettings.findFirst({ where: (t, { eq: is }) => is(t.key, "device_id") }))!.value;
 
 async function env(issues: AiIssue[], { triage = true, query = QUERY }: { triage?: boolean; query?: string } = {}) {
   const sqlite = new Database(":memory:");
@@ -39,7 +51,7 @@ async function env(issues: AiIssue[], { triage = true, query = QUERY }: { triage
   // The other device's earlier firing, as sync delivers it.
   const syncedFiring = async (fields: Partial<typeof monitorTriggers.$inferInsert> = {}) => {
     await db.insert(monitorTriggers).values({
-      id: "t0", monitorId: "m1", triggeredAt: now(), value: 2, windowStart: 0, windowEnd: 0, status: "investigating", groups: "[]",
+      id: "t0", monitorId: "m1", triggeredAt: now(), value: 2, windowStart: windowEndNow() - 300, windowEnd: windowEndNow(), status: "investigating", groups: "[]",
       sessionId: "s0", deviceId: "other-device", ...fields,
     }).run();
   };
@@ -77,21 +89,18 @@ test("a new issue starts a session that gets only that issue", async () => {
   assert.deepEqual(mine.map((r) => r.issueId), ["i2"]);
 });
 
-test("a firing without issue data is skipped when the other device fired it a moment ago, and runs otherwise", async () => {
-  const skipped = await env([], { triage: false });
-  await skipped.syncedFiring();
-  await skipped.run();
-  assert.equal(skipped.started.length, 0);
+test("a firing without issue data is muted when a device fired an overlapping window, and runs for the next window", async () => {
+  const same = await env([], { triage: false });
+  await same.syncedFiring();
+  await same.run();
+  assert.equal(same.started.length, 0);
+  const own = (await same.db.select().from(monitorTriggers).all()).find((t) => t.id !== "t0")!;
+  assert.equal(own.status, "muted");
 
-  const own = await env([], { triage: false });
-  await own.syncedFiring({ deviceId: (await own.db.query.appSettings.findFirst({ where: (t, { eq: is }) => is(t.key, "device_id") }))!.value });
-  await own.run();
-  assert.equal(own.started.length, 1, "a firing of this device does not suppress the next window");
-
-  const old = await env([], { triage: false });
-  await old.syncedFiring({ triggeredAt: now() - 3600 });
-  await old.run();
-  assert.equal(old.started.length, 1);
+  const next = await env([], { triage: false });
+  await next.syncedFiring({ windowStart: windowEndNow() - 600, windowEnd: windowEndNow() - 300, triggeredAt: now() - 240 });
+  await next.run();
+  assert.equal(next.started.length, 1, "the other device's previous window does not cover this one");
 });
 
 test("an issue recorded first by another session stays with it; its status and close updates ignore other sessions", async () => {
@@ -141,4 +150,54 @@ test("the check on open uses a full-period window ending at now minus the lag, s
   await db.update(monitors).set({ lastCheckedAt: t - 600, enabled: 0 }).run();
   await runMonitorsNow(context, nothing);
   assert.equal(queries.length, 2, "disabled");
+});
+
+test("a check on open that overlaps this device's investigated window is muted; the next aligned window starts a session", async () => {
+  const open = await env([], { triage: false });
+  await open.syncedFiring({ deviceId: await deviceId(open.db) });
+  const nothing = async (_c: Context, options: StartSessionOptions) => { open.started.push(options); return { ok: true as const }; };
+  await runMonitorsNow(open.context, nothing);
+  assert.equal(open.started.length, 0, "the crossing is already investigated");
+  const own = (await open.db.select().from(monitorTriggers).all()).find((t) => t.id !== "t0")!;
+  assert.equal(own.status, "muted");
+
+  const next = await env([], { triage: false });
+  await next.syncedFiring({ deviceId: await deviceId(next.db), windowStart: windowEndNow() - 600, windowEnd: windowEndNow() - 300, triggeredAt: now() - 240 });
+  await next.run();
+  assert.equal(next.started.length, 1, "the next aligned window only touches the boundary");
+});
+
+test("a crossing while the latest session still runs is recorded as muted and its window is consumed", async () => {
+  const { db, context, started, run, syncedFiring } = await env([], { triage: false });
+  await syncedFiring({ deviceId: await deviceId(db), triggeredAt: now() - 600, windowStart: windowEndNow() - 600, windowEnd: windowEndNow() - 300 });
+  (context.activeStreams as Map<string, unknown>).set("s0", {});
+  await run();
+  assert.equal(started.length, 0);
+  const muted = (await db.select().from(monitorTriggers).all()).find((t) => t.id !== "t0")!;
+  assert.equal(muted.status, "muted");
+  assert.equal(muted.sessionId, null);
+  const monitor = (await db.select().from(monitors).get())!;
+  assert.equal(monitor.lastStatus, "triggered");
+  assert.ok(monitor.lastCheckedAt);
+
+  (context.activeStreams as Map<string, unknown>).delete("s0");
+  await db.update(monitors).set({ lastCheckedAt: null }).run();
+  await run();
+  assert.equal(started.length, 1, "the next crossing starts a session once the run ended");
+});
+
+test("a session start that throws leaves no firing, issue or session row, and the window is retried", async () => {
+  const { db, context } = await env([issue("i1")]);
+  const quiet = console.error;
+  console.error = () => {};
+  try {
+    await runDueMonitors(context, async () => { throw new Error("db busy"); });
+  } finally {
+    console.error = quiet;
+  }
+  assert.deepEqual(await db.select().from(monitorTriggers).all(), []);
+  assert.deepEqual(await db.select().from(alertIssues).all(), []);
+  const monitor = (await db.select().from(monitors).get())!;
+  assert.equal(monitor.lastStatus, "error");
+  assert.equal(monitor.lastCheckedAt, null);
 });

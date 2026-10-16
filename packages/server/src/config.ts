@@ -51,6 +51,8 @@ export const CONFIG = {
   mcpInitTimeoutMs: 30_000,
   mcpReconnectCooldownMs: 60_000,
   mcpPingTimeoutMs: 5_000,
+  /** One MCP tool call; above the 35 s NerdGraph limit because Cloud Logging and Monitoring reads over wide ranges can run longer. */
+  mcpToolCallTimeoutMs: 90_000,
 
   /** Upper limit on one title or memory LLM call. */
   utilityCallTimeoutMs: 5 * 60_000,
@@ -72,6 +74,12 @@ export const CONFIG = {
    * step exceeds this, the stream is aborted programmatically. Reset each step.
    */
   maxReasoningCharsPerStep: 40_000,
+
+  /**
+   * Longest silence from the model stream, before its first output and between outputs. A dead connection
+   * (e.g. after the app was suspended) never errors, and the run would hold its session for ever.
+   */
+  chatStreamStallMs: 120_000,
 
   /** Waits before re-running a background agent run (monitor, timer, API) that failed with an LLM/API error. */
   agentRetryDelaysMs: [5_000, 15_000, 45_000],

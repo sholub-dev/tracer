@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { IS_IOS } from "../../lib/platform";
 import { encodePngWithPayload } from "../../lib/png-steg";
+import { serialQueue } from "../../lib/serial";
 
 /** Strip markdown syntax to produce clean plain text for pasting into Slack etc. */
 function stripMarkdown(text: string): string {
@@ -97,12 +98,62 @@ export async function copyText(text: string, message: string) {
 const MAX_CANVAS_SIDE = 16_000;
 const MAX_CANVAS_AREA = 16_000_000;
 
-async function capture(el: HTMLElement): Promise<Blob> {
-  const { domToBlob } = await import("modern-screenshot");
-  const w = Math.max(1, el.scrollWidth);
-  const h = Math.max(1, el.scrollHeight);
-  const scale = Math.min(2, MAX_CANVAS_SIDE / Math.max(w, h), Math.sqrt(MAX_CANVAS_AREA / (w * h)));
-  return domToBlob(el, { scale, type: "image/png", backgroundColor: getComputedStyle(document.body).backgroundColor });
+// Content width of the chat column (Transcript COLUMN: 808px minus 2 x 24px padding) on desktop, so images read the same on every device.
+const IMAGE_WIDTH = 760;
+const IMAGE_MARGIN = 24;
+
+const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+/**
+ * Lays the live element out at IMAGE_WIDTH, off screen, in the desktop box style, so charts re-measure to that width.
+ * A placeholder holds its place in the page; the returned function puts everything back.
+ */
+async function layoutAtImageWidth(el: HTMLElement): Promise<() => void> {
+  const placeholder = document.createElement("div");
+  placeholder.style.height = `${el.getBoundingClientRect().height}px`;
+  el.before(placeholder);
+  const saved = el.style.cssText;
+  el.style.cssText += `;position:fixed;left:-${IMAGE_WIDTH * 2}px;top:0;width:${IMAGE_WIDTH}px;margin:0;padding:16px 20px;border-width:1px;border-radius:var(--radius)`;
+  // Chart containers measure with a ResizeObserver and re-render in a later frame.
+  await nextFrame();
+  await nextFrame();
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  return () => {
+    el.style.cssText = saved;
+    placeholder.remove();
+  };
+}
+
+// A second capture would read the first one's off-screen style as the original and leave the element there.
+const oneCapture = serialQueue();
+
+/** PNG of an element. `boxed` renders it as a card at a fixed width on the page background; otherwise it keeps its on-screen size. */
+const capture = (el: HTMLElement, boxed = false): Promise<Blob> => oneCapture(() => captureNow(el, boxed));
+
+async function captureNow(el: HTMLElement, boxed: boolean): Promise<Blob> {
+  const { domToBlob, domToCanvas } = await import("modern-screenshot");
+  const restore = boxed ? await layoutAtImageWidth(el) : undefined;
+  try {
+    const margin = boxed ? IMAGE_MARGIN : 0;
+    const w = Math.max(1, el.scrollWidth) + 2 * margin;
+    const h = Math.max(1, el.scrollHeight) + 2 * margin;
+    const scale = Math.min(2, MAX_CANVAS_SIDE / Math.max(w, h), Math.sqrt(MAX_CANVAS_AREA / (w * h)));
+    const background = getComputedStyle(document.body).backgroundColor;
+    // A backgroundColor option would override the element's own background, so the box would lose its tint.
+    if (!boxed) return await domToBlob(el, { scale, type: "image/png", backgroundColor: background });
+    const inner = await domToCanvas(el, { scale });
+    const out = document.createElement("canvas");
+    out.width = inner.width + Math.round(2 * margin * scale);
+    out.height = inner.height + Math.round(2 * margin * scale);
+    const ctx = out.getContext("2d");
+    if (!ctx) throw new Error("No canvas context");
+    ctx.fillStyle = background;
+    ctx.fillRect(0, 0, out.width, out.height);
+    ctx.drawImage(inner, Math.round(margin * scale), Math.round(margin * scale));
+    return await new Promise<Blob>((resolve, reject) => out.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("toBlob failed"))), "image/png"));
+  } finally {
+    restore?.();
+  }
 }
 
 /** `<prefix>-YYYY-MM-DD-HH-MM.png` in local time. */
@@ -190,10 +241,16 @@ export function MessageActionButton({ icon, label, onClick }: { icon: ReactNode;
 /** The reply's Analysis section when it has one, so images skip the work steps. */
 const imageTarget = (el: HTMLElement) => el.querySelector<HTMLElement>('section[aria-label="Analysis"]') ?? el;
 
-/** PNG of an element, downloaded as a file. */
-export async function downloadImage(el: HTMLElement, name: string) {
+/** Captures the reply's Analysis box at the fixed image width; a reply without one keeps its on-screen size. */
+const captureReply = (el: HTMLElement) => {
+  const target = imageTarget(el);
+  return capture(target, target !== el);
+};
+
+/** PNG of an element, downloaded as a file; `reply` captures the reply's Analysis box instead. */
+export async function downloadImage(el: HTMLElement, name: string, reply = false) {
   try {
-    if (await saveFile(await capture(el), name)) toast.success("Image saved", { description: name });
+    if (await saveFile(await (reply ? captureReply(el) : capture(el)), name)) toast.success("Image saved", { description: name });
   } catch {
     toast.error("Couldn't create the image");
   }
@@ -209,7 +266,7 @@ export interface SourceMeta {
 /** PNG that carries the reply's analysis parts, so dropping it back into Tracer re-imports it. */
 async function downloadReplyImage(el: HTMLElement, analysis: UIMessage["parts"], meta: SourceMeta) {
   try {
-    const bytes = new Uint8Array(await (await capture(imageTarget(el))).arrayBuffer());
+    const bytes = new Uint8Array(await (await captureReply(el)).arrayBuffer());
     const payload = JSON.stringify({
       v: 1,
       kind: "analysis",
@@ -220,7 +277,7 @@ async function downloadReplyImage(el: HTMLElement, analysis: UIMessage["parts"],
     if (payload.length > 2 * 1024 * 1024) {
       toast.error("This reply is too large to embed in an image", {
         description: "Save a plain image instead.",
-        action: { label: "Save plain image", onClick: () => void downloadImage(imageTarget(el), stampedPngName("analysis")) },
+        action: { label: "Save plain image", onClick: () => void downloadImage(el, stampedPngName("analysis"), true) },
       });
       return;
     }
@@ -234,7 +291,7 @@ async function downloadReplyImage(el: HTMLElement, analysis: UIMessage["parts"],
 
 async function copyImage(el: HTMLElement) {
   try {
-    await navigator.clipboard.write([new ClipboardItem({ "image/png": capture(imageTarget(el)) })]);
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": captureReply(el) })]);
     toast.success("Image copied");
   } catch {
     toast.error("Couldn't copy the image");

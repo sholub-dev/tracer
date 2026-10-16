@@ -42,7 +42,9 @@ export const BASE_PROMPT = `You are Tracer — an AI debugging assistant for eng
 
 If a tool call fails, retry with a corrected approach. If you fail the same tool call twice, DO NOT retry again — stop and explain the issue to the user. Ask clarifying questions if needed. Never silently give up.
 
-When the user's question spans multiple providers, query each relevant provider and synthesize findings across the results.`;
+When the user's question spans multiple providers, query each relevant provider and synthesize findings across the results.
+
+The user can send a message while you work. It appears as a new user message between your steps. Read it, then adjust your plan to it: change course if it asks for that, answer it if it asks a question, and keep going if it only adds detail.`;
 
 /** Used when no provider tool exists: only the notice that providers connect in Settings, plus any integration fragments. */
 export function buildNoProviderPrompt(extraFragments: string[] = []): string {

@@ -89,7 +89,8 @@ async function getProviderOptions(db: Db, provider: string, modelId: string): Pr
   // Vertex serves the same Gemini models; it reads provider options under the `vertex`
   // namespace rather than `google`.
   if ((provider === "google" || provider === "google-vertex") && CONFIG.thinkingModels.has(modelId)) {
-    const budget = await readAppSetting<number>(db, SETTINGS_KEYS.thinkingBudgetGoogle) ?? DEFAULTS.thinkingBudgetGoogle;
+    const stored = await readAppSetting<number>(db, SETTINGS_KEYS.thinkingBudgetGoogle) ?? DEFAULTS.thinkingBudgetGoogle;
+    const budget = /-pro\b/.test(modelId) ? Math.max(UTILITY_GOOGLE_THINKING_BUDGET, stored) : stored;
     const thinkingConfig = { thinkingBudget: budget, includeThoughts: true };
     return provider === "google-vertex" ? { vertex: { thinkingConfig } } : { google: { thinkingConfig } };
   }

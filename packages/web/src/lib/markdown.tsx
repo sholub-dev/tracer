@@ -1,4 +1,5 @@
 import { Streamdown } from "streamdown";
+import { cn } from "@/lib/utils";
 
 // Module-level so Streamdown's memo sees stable props and skips re-rendering unchanged parts.
 const CONTROLS = { code: true } as const;
@@ -35,7 +36,8 @@ const COMPONENTS = {
 
 export function Markdown({ text, isAnimating = false, className }: { text: string; isAnimating?: boolean; className?: string }) {
   return (
-    <div className={className}>
+    // Long unbroken tokens (class names, ids, URLs) would otherwise run past the edge on a phone.
+    <div className={cn("[overflow-wrap:break-word]", className)}>
       <Streamdown isAnimating={isAnimating} controls={CONTROLS} linkSafety={LINK_SAFETY} components={COMPONENTS}>{text}</Streamdown>
     </div>
   );

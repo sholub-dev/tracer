@@ -3,8 +3,9 @@ import { SESSION_KIND, unixNow } from "@tracer-sh/shared";
 import type { Db } from "../db/driver.js";
 import { chatSessions } from "../db/schema.js";
 import { sessionChanged } from "../lib/session-events.js";
+import { pendingResume } from "../lib/pending-resume.js";
 import type { Context } from "../trpc/context.js";
-import { loadSessionMessages, runChatAgent } from "./base-agent.js";
+import { loadSessionMessages, runChatAgent, SESSION_BUSY } from "./base-agent.js";
 import { buildRunOptions } from "./chat-run.js";
 import { isWakeupTurn, wakeupExtras } from "../monitors/triage.js";
 import { settleMonitorRun } from "../monitors/scheduler.js";
@@ -35,7 +36,10 @@ export async function settleInterruptedRuns(db: Db, settled: string[] = []): Pro
   const runs: InterruptedRun[] = [];
   const cutoff = unixNow() - CONFIG.chatResumeMaxAgeSec;
   for (const { id, kind, scope, resumed, updatedAt } of rows) {
-    if (scope && !resumed && updatedAt >= cutoff) runs.push({ id, scope, kind });
+    if (scope && !resumed && updatedAt >= cutoff) {
+      runs.push({ id, scope, kind });
+      pendingResume.add(id);
+    }
     else {
       await markDone(db, id);
       if (kind === SESSION_KIND.MONITOR) settled.push(id);
@@ -61,10 +65,13 @@ export async function resumeRuns(context: Context, runs: InterruptedRun[], settl
         const result = messages.length === 0
           ? { error: "Nothing to resume" }
           : await runChatAgent({ sessionId: id, messages, summary, summaryUpTo, context, resumed: true, ...options });
-        if ("error" in result) await failed(id, result.error ?? "Could not resume");
+        // Another run already owns the session (a timer or a person started it first): it is not interrupted.
+        if ("error" in result && result.error !== SESSION_BUSY) await failed(id, result.error ?? "Could not resume");
       } catch (err) {
         console.warn(`[chat] Failed to resume ${id}:`, err);
         await failed(id, err instanceof Error ? err.message : String(err));
+      } finally {
+        pendingResume.delete(id);
       }
     }),
   ]);

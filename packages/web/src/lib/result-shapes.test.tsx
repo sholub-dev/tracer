@@ -135,3 +135,10 @@ test("a monitor chart draws only the main member of an object column", () => {
   assert.equal(mainMemberKey({ "50": 1, "99": 2 }), "99");
   assert.equal(mainMemberKey({ score: 1, count: 2 }), "score");
 });
+
+test("a small non-zero number does not read as zero", () => {
+  assert.equal(formatValue(0.0004), "0.0004");
+  assert.equal(formatValue(-0.004), "-0.004");
+  assert.equal(formatValue(0.5), "0.50");
+  assert.equal(formatValue(0), "0");
+});

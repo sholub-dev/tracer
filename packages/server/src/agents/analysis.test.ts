@@ -37,3 +37,10 @@ test("extractAnalysis ignores a begin_analysis marker from an earlier turn", () 
   ] as unknown as UIMessage[];
   assert.equal(extractAnalysis(messages).analysis, "new answer");
 });
+
+test("extractAnalysis reads the reply a steered message trails", () => {
+  const user = { id: "u", role: "user", parts: [{ type: "text", text: "why?" }] } as unknown as UIMessage;
+  const steered = { id: "s", role: "user", metadata: { steered: true }, parts: [{ type: "text", text: "check the db" }] } as unknown as UIMessage;
+  const reply = msg([marker, findingCall(finding), { type: "text", text: "Details" }]);
+  assert.equal(extractAnalysis([user, reply, steered]).analysis, extractAnalysis([user, reply]).analysis);
+});

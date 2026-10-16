@@ -13,6 +13,7 @@ import { SETTINGS_KEYS } from "../../config.js";
 import { ProviderRegistry } from "../../providers/registry.js";
 import { StreamBroadcaster } from "../../lib/stream-broadcaster.js";
 import type { Context } from "../../trpc/context.js";
+import { newSteerState } from "../../agents/steer.js";
 import { registerChatRoutes } from "./chat.js";
 
 async function setup() {
@@ -44,7 +45,7 @@ test("a busy session answers 409 and makes no model call, title included", async
   try {
     await db.insert(providerConfigs).values({ type: "anthropic", config: JSON.stringify({ apiKey: "test" }) }).run();
     await writeAppSetting(db, SETTINGS_KEYS.chatModel, { provider: "anthropic", modelId: "claude-test" });
-    context.activeStreams.set("s1", { broadcaster: new StreamBroadcaster(), controller: new AbortController() });
+    context.activeStreams.set("s1", { broadcaster: new StreamBroadcaster(), controller: new AbortController(), steer: newSteerState() });
     const res = await post(first);
     assert.equal(res.status, 409);
     assert.match(res.headers.get("content-type") ?? "", /^text\/plain/);
@@ -76,4 +77,21 @@ test("subscribing to a session that is streaming with no run marks it done", asy
   const status = async (id: string) => (await db.select().from(chatSessions).where(eq(chatSessions.id, id)).get())?.status;
   assert.equal(await status("stuck"), "done");
   assert.equal(await status("restarted"), "streaming", "a run from before the start is left to the restart resume");
+});
+
+test("a steer message is checked, and its role is always user", async () => {
+  const { app, context } = await setup();
+  const steer = newSteerState();
+  context.activeStreams.set("s1", { broadcaster: new StreamBroadcaster(), controller: new AbortController(), steer });
+  const post = (body: unknown) => app.request("/api/chat/steer", { method: "POST", headers: { "content-type": "application/json" }, body: typeof body === "string" ? body : JSON.stringify(body) });
+  assert.equal((await post({ sessionId: "s1" })).status, 400);
+  assert.equal((await post("not json")).status, 400);
+  assert.equal((await post({ sessionId: "s1", message: { parts: [{ type: "file", url: "x" }] } })).status, 400);
+  assert.equal(steer.pending.length, 0);
+  const ok = await post({ sessionId: "s1", message: { id: "m1", role: "system", parts: [{ type: "text", text: "hi" }] } });
+  assert.deepEqual(await ok.json(), { steered: true });
+  assert.equal(steer.pending[0].role, "user");
+  const noId = await post({ sessionId: "s1", message: { parts: [{ type: "text", text: "again" }] } });
+  assert.equal(noId.status, 200);
+  assert.ok(steer.pending[1].id);
 });

@@ -1,6 +1,7 @@
 import { substituteWindow, unixNow } from "@tracer-sh/shared";
 import type { ProviderRegistry } from "../providers/registry.js";
 import { CONFIG } from "../config.js";
+import { withTimeout } from "../lib/with-timeout.js";
 import { requireTimeRangePlaceholders } from "../tools/query-validation.js";
 import { toChartRows } from "../providers/posthog/posthog-formatter.js";
 import { evaluateGroups, extractGroups, isNoData, parseCondition, type Condition, type Group } from "./condition.js";
@@ -38,16 +39,6 @@ const BANNED_CLAUSES: Array<[RegExp, string]> = [
   [/\bTIMESERIES\b/i, "TIMESERIES"],
   [/\bCOMPARE\s+WITH\b/i, "COMPARE WITH"],
 ];
-
-export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Timeout after ${ms}ms: ${label}`)), ms);
-    promise.then(
-      (val) => { clearTimeout(timer); resolve(val); },
-      (err) => { clearTimeout(timer); reject(err); },
-    );
-  });
-}
 
 async function validateChartQuery(
   provider: { executeRawQuery(query: string): Promise<unknown> },

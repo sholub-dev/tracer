@@ -18,14 +18,18 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ProgressStore } from "../../lib/progress-store";
 import { openSettings, useChatScroll, useEscapeToStop, useFileDrop } from "../../lib/hooks";
-import { handleProgressData, stopChat, useCompactedMessages } from "../../lib/chat-utils";
+import { handleProgressData, parseMessages, steerChat, stopChat, useCompactedMessages } from "../../lib/chat-utils";
+import { isSteered } from "@tracer-sh/shared";
+import { appendKept, canSendQueued, lastTurnMessage, splitSteered } from "../../lib/message-queue";
+import { trpc } from "../../lib/trpc";
 import { WEB_CONFIG } from "../../lib/config";
 import { serverFetch } from "../../lib/server-fetch";
 import { IS_IOS } from "../../lib/platform";
 import { preloadResultChunks } from "../charts/ResultView";
 import { WorkingIndicator } from "./ChatIndicators";
 import { ErrorBoundary } from "../ErrorBoundary";
-import { Composer, RUN_PLACEHOLDER, type Attachment } from "./Composer";
+import { Composer, STEER_PLACEHOLDER, type Attachment } from "./Composer";
+import { QueuedMessages, type QueuedMessage } from "./QueuedMessages";
 import { FollowUpTimerBar } from "./FollowUpTimerBar";
 import { MessageView, textOf, type MessageViewOptions } from "./MessageView";
 import { Transcript } from "./Transcript";
@@ -203,10 +207,27 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
     });
   }, []);
 
+  // Messages typed during a reply: queued ones go out after it, steered ones are already with the agent.
+  const [queue, setQueue] = useState<QueuedMessage[]>([]);
+  const [steered, setSteered] = useState<UIMessage[]>([]);
+  const nextQueueId = useRef(0);
+  const reconciling = useRef(false);
+  const utils = trpc.useUtils();
+  // Ids of steered messages a step of the agent saw, reported by the server during the reply.
+  const seenSteerIds = useRef(new Set<string>());
+  // Set by a stop: the queue then waits for the user instead of sending on its own.
+  const queueHeld = useRef(false);
+  // Set while a queued message is on its way: the status stays "ready" while its files are read, and the next one must wait.
+  const queueSending = useRef(false);
+
   // Revoke any still-pending thumbnail URLs on unmount.
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
-  useEffect(() => () => { attachmentsRef.current.forEach((a) => a.url && URL.revokeObjectURL(a.url)); }, []);
+  const queueRef = useRef(queue);
+  queueRef.current = queue;
+  useEffect(() => () => {
+    [...attachmentsRef.current, ...queueRef.current.flatMap((q) => q.attachments)].forEach((a) => a.url && URL.revokeObjectURL(a.url));
+  }, []);
 
   const { dragActive, dropProps } = useFileDrop(addFiles, !readOnly && !inputDisabled);
 
@@ -247,6 +268,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
           if (part.type === "data-provider-part") {
             handleProgressData(progressStore, part.data as { toolCallId: string; part: { type: string; [key: string]: unknown } });
           }
+          if (part.type === "data-steer-seen") (part.data as { ids: string[] }).ids.forEach((id) => seenSteerIds.current.add(id));
           onDataRef.current?.(part as { type: string; data: unknown });
         },
       }),
@@ -269,6 +291,8 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
 
   const meta = useMemo<SourceMeta>(() => ({ sourceTitle, sourceCreatedAt, resolveSourceTitle }), [sourceTitle, sourceCreatedAt, resolveSourceTitle]);
 
+  const steeredRef = useRef(steered);
+  steeredRef.current = steered;
   const prevStatus = useRef(status);
   const onStatusChangeRef = useRef(onStatusChange);
   onStatusChangeRef.current = onStatusChange;
@@ -280,13 +304,15 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
         const active = document.activeElement;
         if (!IS_IOS && (!active || active === document.body || rootRef.current?.contains(active))) textareaRef.current?.focus();
       }
-      onStatusChangeRef.current?.(status, messagesRef.current);
+      if (status === "submitted") queueHeld.current = false;
+      queueSending.current = false;
+      onStatusChangeRef.current?.(status, isLoading ? messagesRef.current : [...messagesRef.current, ...steeredRef.current]);
     }
     prevStatus.current = status;
   }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // `messages.length > collapse` keeps the notice off an interrupted message that is collapsed out of view.
-  const lastMessage = messages[messages.length - 1];
+  const lastMessage = lastTurnMessage(messages);
   const lastPart = lastMessage?.parts[lastMessage.parts.length - 1];
   // The server saves the reason a run ended on its last reply; a returning viewer sees it here.
   const savedError = !isLoading && lastMessage?.role === "assistant" ? (lastMessage.metadata as { error?: unknown } | undefined)?.error : undefined;
@@ -309,6 +335,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   const canRetry = !readOnly && !inputDisabled && !isLoading;
 
   const handleStop = () => {
+    queueHeld.current = true;
     void stopChat(chatId);
     stop();
   };
@@ -324,25 +351,98 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   }, [inputDisabled]);
 
   const canSend = !!input.trim() || attachments.length > 0;
-  const handleSubmit = () => {
-    const text = input.trim();
-    if (!canSend || isLoading || inputDisabled) return;
-    setInput("");
+  const canSteer = !!input.trim() && attachments.length === 0;
+
+  const dispatch = (text: string, files: Attachment[]) => {
     scrollToBottom({ animation: "instant" });
-    if (attachments.length > 0) {
+    if (files.length > 0) {
       // A file-only turn keeps a default instruction so title generation, which keys on a text part, still fires.
       const dt = new DataTransfer();
-      attachments.forEach((a) => dt.items.add(a.file));
+      files.forEach((a) => dt.items.add(a.file));
       sendMessage({ text: text || "Please analyze the attached file(s).", files: dt.files });
-      attachments.forEach((a) => a.url && URL.revokeObjectURL(a.url));
-      setAttachments([]);
+      files.forEach((a) => a.url && URL.revokeObjectURL(a.url));
     } else {
       sendMessage({ text });
     }
+  };
+
+  const enqueue = (text: string, files: Attachment[]) => {
+    setQueue((q) => [...q, { id: nextQueueId.current++, text, attachments: files }]);
+  };
+
+  const steer = async (text: string) => {
+    const message: UIMessage = { id: crypto.randomUUID(), role: "user", metadata: { steered: true }, parts: [{ type: "text", text }] };
+    // The reply may have ended on the way; the message then waits like a queued one.
+    if (await steerChat(chatId, message)) setSteered((prev) => [...prev, message]);
+    else enqueue(text, []);
+  };
+
+  // While a reply runs, Send queues the message and Steer hands it to the agent.
+  const handleSubmit = () => {
+    const text = input.trim();
+    if (!canSend || inputDisabled) return;
+    setInput("");
+    setAttachments([]);
+    if (isLoading) {
+      enqueue(text, attachments);
+      return;
+    }
+    dispatch(text, attachments);
     // On iOS the keyboard would cover the reply as it streams.
     if (IS_IOS) textareaRef.current?.blur();
     else textareaRef.current?.focus();
   };
+
+  const handleSteer = () => {
+    const text = input.trim();
+    if (!canSteer || inputDisabled || !isLoading) return;
+    setInput("");
+    void steer(text);
+  };
+
+  const removeQueued = (item: QueuedMessage) => {
+    setQueue((q) => q.filter((x) => x.id !== item.id));
+    item.attachments.forEach((a) => a.url && URL.revokeObjectURL(a.url));
+  };
+
+  const actOnQueued = (item: QueuedMessage) => {
+    setQueue((q) => q.filter((x) => x.id !== item.id));
+    if (isLoading) void steer(item.text);
+    else dispatch(item.text, item.attachments);
+  };
+
+  // The live event can be missed after a reattach, so the saved history decides which steered messages the server kept.
+  const reconcileSteered = async (batch: UIMessage[]) => {
+    const known = new Set(seenSteerIds.current);
+    if (batch.some((m) => !known.has(m.id))) {
+      try {
+        const saved = await utils.sessions.get.fetch({ id: chatId }, { staleTime: 0 });
+        if (saved) parseMessages(saved.messagesJson).forEach((m) => m.role === "user" && known.add(m.id));
+      } catch { /* the live record stays the only source */ }
+    }
+    const { kept, late } = splitSteered(batch, known);
+    if (kept.length) setMessages(appendKept(messagesRef.current, kept));
+    // A message the server dropped has no reply yet; it goes first in the queue, which a stop or error holds.
+    if (late.length) setQueue((q) => [...late.map((m) => ({ id: nextQueueId.current++, text: textOf(m), attachments: [] })), ...q]);
+    setSteered((prev) => prev.filter((m) => !batch.includes(m)));
+  };
+
+  // A reply that ended: the steered messages join the thread (the server saved them after the reply), then the next queued message goes out.
+  useEffect(() => {
+    if (isLoading) return;
+    if (steered.length) {
+      if (!reconciling.current) {
+        reconciling.current = true;
+        void reconcileSteered(steered).finally(() => { reconciling.current = false; });
+      }
+      return;
+    }
+    if (queueSending.current || !canSendQueued({ status, held: queueHeld.current, queued: queue.length, locked: inputDisabled })) return;
+    queueSending.current = true;
+    const [next, ...rest] = queue;
+    setQueue(rest);
+    dispatch(next.text, next.attachments);
+  }); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleContinue = useCallback(() => {
     scrollToBottom({ animation: "instant" });
@@ -354,7 +454,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   onRetryTruncateRef.current = onRetryTruncate;
   const handleRetry = useCallback(async () => {
     const msgs = messagesRef.current;
-    const userIdx = msgs.findLastIndex((m) => m.role === "user");
+    const userIdx = msgs.findLastIndex((m) => m.role === "user" && !isSteered(m));
     const msg = msgs[userIdx];
     const text = msg ? textOf(msg) : "";
     if (!text) return;
@@ -400,14 +500,18 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   );
 
   const composer = !readOnly ? (
+    <>
+    <QueuedMessages items={queue} running={isLoading} onAct={actOnQueued} onRemove={removeQueued} />
     <Composer
       value={input}
       onChange={setInput}
       onSubmit={handleSubmit}
-      placeholder={isLoading ? RUN_PLACEHOLDER : placeholder}
+      placeholder={isLoading ? STEER_PLACEHOLDER : placeholder}
       canSend={canSend}
       streaming={isLoading}
       onStop={handleStop}
+      onSteer={handleSteer}
+      canSteer={canSteer}
       disabled={inputDisabled}
       attachments={attachments}
       onAttach={addFiles}
@@ -418,6 +522,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
       autoFocus={!IS_IOS}
       compact={compact}
     />
+    </>
   ) : null;
 
   const dropOverlay = dragActive && (
@@ -469,6 +574,9 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
             meta={meta}
             renderMessage={renderMessage}
           />
+        ))}
+        {steered.map((msg, i) => (
+          <MessageRow key={`steer-${i}`} msg={msg} msgIndex={messages.length + i} isAnimating={false} progressStore={progressStore} compact={compact} meta={meta} />
         ))}
         {showWorking && <WorkingIndicator label="Investigating" />}
         {!readOnly && !inputDisabled && needsContinue && (

@@ -2,6 +2,7 @@ import { exec, execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isNewerVersion } from "@tracer-sh/shared";
 import { CONFIG } from "./config.js";
 
 /** Exit code that signals the launcher to restart the server after an update. */
@@ -91,16 +92,6 @@ export function detectInstallMethod(root: string | null): InstallMethod {
 
 export function getInstallMethod(): InstallMethod {
   return detectInstallMethod(resolvePackage().root);
-}
-
-export function isNewerVersion(latest: string, current: string): boolean {
-  // parseInt tolerates prerelease suffixes ("4-rc.1" → 4); NaN would compare false forever.
-  const parse = (v: string) => v.replace(/^v/, "").split(".").map((n) => Number.parseInt(n, 10) || 0);
-  const [la, lb, lc] = parse(latest);
-  const [ca, cb, cc] = parse(current);
-  if (la !== ca) return la > ca;
-  if (lb !== cb) return lb > cb;
-  return lc > cc;
 }
 
 function fetchLatestNpmVersion(): Promise<string | null> {

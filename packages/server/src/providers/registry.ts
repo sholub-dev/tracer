@@ -44,8 +44,11 @@ export class ProviderRegistry {
     return entry.factory(config);
   }
 
+  /** A provider already registered under the name is disposed, so its subprocess or timers do not leak. */
   register(provider: IProvider): void {
+    const previous = this.providers.get(provider.name);
     this.providers.set(provider.name, provider);
+    if (previous && previous !== provider) void previous.dispose().catch(() => {});
   }
 
   async unregister(name: string): Promise<void> {

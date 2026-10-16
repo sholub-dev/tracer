@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
-import { ArrowUp, FileText, Paperclip, Square, X } from "lucide-react";
+import { ArrowUp, CornerDownRight, FileText, Paperclip, Square, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { IconButton } from "../common/IconButton";
@@ -7,6 +8,7 @@ import { IconButton } from "../common/IconButton";
 export type Attachment = { file: File; url: string | null };
 
 export const RUN_PLACEHOLDER = "Wait for the run to finish, or press Stop";
+export const STEER_PLACEHOLDER = "Queue a message for after the reply, or steer it now";
 
 /** On a touch screen Enter is a newline key; the send button sends. */
 export function enterSends(e: { key: string; shiftKey: boolean; nativeEvent: { isComposing: boolean } }): boolean {
@@ -23,6 +25,9 @@ interface ComposerProps {
   canSend: boolean;
   streaming?: boolean;
   onStop?: () => void;
+  /** Sends the text to the running reply; shown while streaming. Send then queues. */
+  onSteer?: () => void;
+  canSteer?: boolean;
   /** False where Esc does not stop the run, so the button label does not promise it. */
   escStops?: boolean;
   disabled?: boolean;
@@ -45,6 +50,8 @@ export function Composer({
   canSend,
   streaming = false,
   onStop,
+  onSteer,
+  canSteer = false,
   escStops = true,
   disabled = false,
   attachments = [],
@@ -120,7 +127,11 @@ export function Composer({
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
-          if (enterSends(e)) {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            if (streaming && onSteer) onSteer();
+            else onSubmit();
+          } else if (enterSends(e)) {
             e.preventDefault();
             onSubmit();
           }
@@ -158,6 +169,17 @@ export function Composer({
         <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto no-scrollbar">{sources}</div>
         <span className="flex-1" />
         {cost}
+        {streaming && onSteer && (
+          <>
+            <Button type="button" variant="outline" size="sm" disabled={!canSteer || disabled} onClick={onSteer} title="Steer (Ctrl/Cmd+Enter)" aria-label="Steer the reply now">
+              <CornerDownRight />
+              Steer
+            </Button>
+            <IconButton label="Queue (Enter)" variant="secondary" type="submit" className="rounded-full" disabled={!canSend || disabled}>
+              <ArrowUp />
+            </IconButton>
+          </>
+        )}
         {streaming ? (
           <IconButton
             label={escStops ? "Stop (Esc)" : "Stop"}

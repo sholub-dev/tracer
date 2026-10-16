@@ -5,7 +5,7 @@ import Database from "better-sqlite3-multiple-ciphers";
 import { createNodeDb } from "../db/node-db.js";
 import { runSetup } from "../db/setup.js";
 import { toolMemories } from "../db/schema.js";
-import { enforceNoteLength, makeMemoryExecute, sanitizeNote } from "./memory-executor.js";
+import { createMemory, enforceNoteLength, makeMemoryExecute, sanitizeNote } from "./memory-executor.js";
 
 async function freshDb() {
   const { db, setupDriver } = createNodeDb(new Database(":memory:"));
@@ -61,4 +61,12 @@ test("create skips a note equal to an existing one and returns its id", async ()
   assert.equal(rows.length, 2);
   assert.equal(rows[0].source, "agent");
   assert.equal(rows[0].sourceSessionId, "s1");
+});
+
+test("two concurrent identical creates store one note", async () => {
+  const db = await freshDb();
+  const args = { toolName: "newrelic", note: "Use FACET sparingly", source: "agent" as const };
+  const [a, b] = await Promise.all([createMemory(db, args), createMemory(db, args)]);
+  assert.equal((await db.select().from(toolMemories).all()).length, 1);
+  assert.deepEqual([a, b].map((r) => "created" in r && r.created).sort(), [false, true]);
 });

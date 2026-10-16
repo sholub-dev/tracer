@@ -341,7 +341,7 @@ export const sessionsRouter = router({
     }),
 
   updateSummary: publicProcedure
-    .input(z.object({ id: z.string(), summary: z.string().min(1) }))
+    .input(z.object({ id: z.string(), summary: z.string().trim().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const row = await ctx.db
         .select({ summaryUpTo: chatSessions.summaryUpTo })

@@ -10,6 +10,8 @@ export const WEB_CONFIG = {
   providerRetryMs: 15_000,
   /** How often a passing data-source check repeats while the page is visible; credentials can lapse at any time. */
   providerRecheckMs: 3 * 60 * 1000,
+  /** Fewest ms between iOS checks for a newer TestFlight build; releases are rare, so returns within the hour skip the request. */
+  appUpdateCheckMinIntervalMs: 60 * 60 * 1000,
   updateCheckStaleTimeMs: 5 * 60 * 1000,
   updateCheckIntervalMs: 15 * 60 * 1000,
   gcpProjectsStaleTimeMs: 5 * 60 * 1000,

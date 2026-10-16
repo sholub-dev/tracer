@@ -1,4 +1,5 @@
-import { generateText, type ModelMessage } from "ai";
+import { generateText, type ModelMessage, type UIMessage } from "ai";
+import { turnStart } from "@tracer-sh/shared";
 import { CONFIG } from "../../config.js";
 import type { ProviderOptions } from "../../llm/resolve.js";
 import { recordEachCall } from "../../llm/usage.js";
@@ -31,9 +32,15 @@ function userText(message: ModelMessage): string {
   return message.content.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n");
 }
 
-/** Compact transcript of the current run: the last user message and everything after it. */
-export function buildTranscript(messages: ModelMessage[]): string {
-  const start = messages.map((m) => m.role).lastIndexOf("user");
+/** Index in `model` of the user message that began the turn. `model` is the history as converted, before any message is appended. */
+export function questionIndex(history: UIMessage[], model: ModelMessage[]): number {
+  const users = model.flatMap((m, i) => (m.role === "user" ? [i] : []));
+  const later = history.slice(turnStart(history)).filter((m) => m.role === "user").length;
+  return users[users.length - 1 - later] ?? -1;
+}
+
+/** Compact transcript of the current run: the question at `start` and everything after it, later user messages in order. */
+export function buildTranscript(messages: ModelMessage[], start: number): string {
   const question = start >= 0 ? `Question: ${truncate(userText(messages[start]), QUESTION_MAX_CHARS)}\n` : "";
   const lines: string[] = [];
   for (const m of messages.slice(start + 1)) {
@@ -46,6 +53,8 @@ export function buildTranscript(messages: ModelMessage[]): string {
         if (p.type === "text") lines.push(`Agent: ${p.text}`);
         else if (p.type === "tool-call") lines.push(`Tool call ${p.toolName}: ${truncate(p.input, TOOL_IO_MAX_CHARS)}`);
       }
+    } else if (m.role === "user") {
+      lines.push(`User: ${truncate(userText(m), QUESTION_MAX_CHARS)}`);
     } else if (m.role === "tool") {
       for (const p of m.content) {
         if (p.type === "tool-result") lines.push(`Result ${p.toolName}: ${truncate(p.output, TOOL_IO_MAX_CHARS)}`);
@@ -67,7 +76,8 @@ export async function reviewConclusion(
   ledger: Ledger,
   messages: ModelMessage[],
   abortSignal: AbortSignal | undefined,
-  providerOptions?: ProviderOptions,
+  providerOptions: ProviderOptions | undefined,
+  questionStart: number,
 ): Promise<string | null> {
   if (abortSignal?.aborted) return null;
   // Not AbortSignal.any or AbortSignal.timeout: they need iOS 17.4 and 16, and the app supports iOS 15.
@@ -81,7 +91,7 @@ export async function reviewConclusion(
       temperature: 0,
       providerOptions,
       instructions: INSTRUCTIONS,
-      messages: [{ role: "user", content: `<run>\n${buildTranscript(messages)}\n</run>\n\n<ledger>\n${JSON.stringify(ledger, null, 2)}\n</ledger>` }],
+      messages: [{ role: "user", content: `<run>\n${buildTranscript(messages, questionStart)}\n</run>\n\n<ledger>\n${JSON.stringify(ledger, null, 2)}\n</ledger>` }],
       abortSignal: controller.signal,
       onLanguageModelCallEnd: recordEachCall(db, sessionId, "review", modelId),
     });

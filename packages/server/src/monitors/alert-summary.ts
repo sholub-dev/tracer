@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { tool, type Tool, type UIMessage } from "ai";
-import { findingFromMessages, type Finding } from "@tracer-sh/shared";
+import { findingFromMessages, turnStart, type Finding } from "@tracer-sh/shared";
 
 /** Slack posts are stateless: the text may carry no id, link or reference to anything else. */
 export const SLACK_RULE = "This text is posted to Slack as written: state facts about this alert only. No ids, no links, no references to other alerts, earlier posts, sessions, investigation steps, past occurrences or tickets.";
@@ -107,8 +107,7 @@ export function summaryFromMessages(messages: UIMessage[]): AlertSummary | null 
 
 /** Like summaryFromMessages, but only for the latest run: the parts after the last user message. */
 export function latestRunSummary(messages: UIMessage[]): AlertSummary | null {
-  const lastUser = messages.map((m) => m.role).lastIndexOf("user");
-  return summaryFromMessages(messages.slice(lastUser + 1));
+  return summaryFromMessages(messages.slice(turnStart(messages)));
 }
 
 const isReport = (p: UIMessage["parts"][number]) => p.type === "tool-report_alert_summary" && "state" in p && p.state === "output-available";

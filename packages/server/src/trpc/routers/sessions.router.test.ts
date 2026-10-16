@@ -61,3 +61,10 @@ test("the session list returns the newest sessions up to the limit", async () =>
   assert.equal(list.length, CONFIG.sessionListLimit);
   assert.equal(list[0].id, `s${total - 1}`);
 });
+
+test("a blank summary edit is rejected and the stored summary stays", async () => {
+  const { db, api } = await caller();
+  await db.insert(chatSessions).values({ id: "s", title: "t", messages: encodeMessages([msg("a", "user"), msg("b", "assistant")]), status: "done", summary: "kept", summaryUpTo: 2 }).run();
+  await assert.rejects(api.updateSummary({ id: "s", summary: "  \n " }));
+  assert.equal((await db.select().from(chatSessions).get())!.summary, "kept");
+});

@@ -573,6 +573,18 @@ test("the watch sweep leaves only the rows of firings that ran on this device", 
   assert.deepEqual(states, { mine: "left_open", theirs: "watching" });
 });
 
+test("the stale sweep leaves pending issues of firings that ran on another device", async () => {
+  const { context } = fakeNewRelic({});
+  const { db } = context;
+  const stale = nowSeconds() - 7200;
+  await db.run(sql`INSERT INTO monitor_triggers (id, monitor_id, triggered_at, window_start, session_id, device_id) VALUES ('t2', 'm1', 0, 0, 's2', 'other')`);
+  await addIssue(db, "mine", { state: "pending", updatedAt: stale });
+  await addIssue(db, "theirs", { state: "pending", sessionId: "s2", triggerId: "t2", updatedAt: stale });
+  await checkWatches(context);
+  const states = Object.fromEntries((await db.select().from(schema.alertIssues).all()).map((r) => [r.issueId, r.state]));
+  assert.deepEqual(states, { mine: "left_open", theirs: "pending" });
+});
+
 test("a paused monitor or one with alerts off keeps no follow-up timer", async () => {
   for (const off of [{ enabled: 0 }, { alertEnabled: 0 }]) {
     const { context } = fakeNewRelic({});
@@ -723,4 +735,11 @@ test("a failed run acks nothing", async () => {
     await settle(() => posts.length > 0);
     assert.deepEqual(acked, []);
   });
+});
+
+test("a wake-up turn is still one when a steered message trails it", async () => {
+  const { isWakeupTurn, WAKEUP_MARK } = await import("./triage.js");
+  const text = (t: string, extra: object = {}) => ({ id: "", role: "user", parts: [{ type: "text", text: t }], ...extra }) as never;
+  const messages = [text(`${WAKEUP_MARK}1 of 3)`), { id: "", role: "assistant", parts: [] } as never, text("look at x", { metadata: { steered: true } })];
+  assert.equal(isWakeupTurn(messages), true);
 });

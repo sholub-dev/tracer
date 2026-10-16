@@ -4,6 +4,9 @@ import { ProgressStore } from "../../lib/progress-store";
 import { handleProgressData, stopChat, useCompactedMessages } from "../../lib/chat-utils";
 import { useChatScroll } from "../../lib/hooks";
 import { WEB_CONFIG } from "../../lib/config";
+import { isSteered } from "@tracer-sh/shared";
+import { lastTurnMessage } from "../../lib/message-queue";
+import { nextEndState, withLiveReply } from "../../lib/live-stream";
 import { readEventStream } from "../../lib/sse";
 import { serverFetch } from "../../lib/server-fetch";
 import { useOnResume } from "../../lib/resume";
@@ -29,7 +32,6 @@ interface LiveStreamViewProps {
   cost?: ReactNode;
 }
 
-const toolCallIdOf = (part: UIMessage["parts"][number]) => (part as { toolCallId?: string }).toolCallId;
 
 /** Reconnects to an in-progress server stream over SSE and rebuilds the growing reply from replayed and live chunks. */
 export function LiveStreamView({ sessionId, initialMessages, onComplete, header, beforeMessages, collapseCount = 0, analysisOnlyIndex, sources, cost }: LiveStreamViewProps) {
@@ -62,16 +64,7 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
         const msg = latest;
         latest = null;
         if (!cancelled && isCurrent() && msg) {
-          // The server saves each tool step, so the loaded messages can end with the reply this stream rebuilds.
-          const loaded = initialMessagesRef.current;
-          const prior = loaded.at(-1)?.role === "assistant" ? loaded.at(-1) : undefined;
-          // After a restart the replay holds only the steps the resumed run adds, so the saved steps stay in front of them.
-          const rebuilt = new Set(msg.parts.map(toolCallIdOf));
-          const continues = prior?.parts.some((p) => {
-            const id = toolCallIdOf(p);
-            return id !== undefined && !rebuilt.has(id);
-          });
-          setMessages([...(prior ? loaded.slice(0, -1) : loaded), continues && prior ? { ...msg, parts: [...prior.parts, ...msg.parts] } : msg]);
+          setMessages(withLiveReply(initialMessagesRef.current, msg));
         }
       };
       try {
@@ -87,6 +80,7 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
 
     (async () => {
       let current = 0;
+      let notified = false;
       while (!cancelled) {
         const id = ++current;
         const controller = new AbortController();
@@ -97,6 +91,7 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
         progressStore.clear();
         let finished = false;
         let ended = false;
+        let opened = false;
         // A half-open connection never errors, so silence aborts it and the loop reconnects.
         let idleTimer: ReturnType<typeof setTimeout> | undefined;
         const resetIdle = () => {
@@ -110,6 +105,7 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
           if (res.status === 404) {
             ended = true;
           } else if (res.ok && res.body && res.headers.get("content-type")?.startsWith("text/event-stream")) {
+            opened = true;
             await readEventStream(res.body, (event, data) => {
               resetIdle();
               if (event === "part") {
@@ -133,11 +129,14 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
         if (finished || ended) {
           // onComplete fires after the last flush so the final content renders first.
           await reading;
-          if (!cancelled) onCompleteRef.current();
+          const end = nextEndState(notified, finished ? "finished" : "ended");
+          notified = end.notified;
+          if (!cancelled && end.notify) onCompleteRef.current();
           // With no run the session is not streaming and the parent unmounts this view; if it still reads streaming,
           // a restart is about to resume the run, so subscribe again.
           if (finished) return;
         }
+        if (opened) notified = nextEndState(notified, "open").notified;
         if (!woken) {
           await new Promise<void>((resolve) => {
             const t = setTimeout(resolve, WEB_CONFIG.sseReconnectMs);
@@ -157,8 +156,8 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
     };
   }, [sessionId, progressStore]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const lastIdx = messages.length - 1;
-  const waiting = messages[lastIdx]?.role === "user";
+  const lastIdx = messages.findLastIndex((m) => !isSteered(m));
+  const waiting = lastTurnMessage(messages)?.role === "user";
   const { collapse, analysisOnlyMsg } = useCompactedMessages(messages, collapseCount, analysisOnlyIndex);
 
   return (

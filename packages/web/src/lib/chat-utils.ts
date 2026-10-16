@@ -26,6 +26,15 @@ export function stopChat(sessionId: string): Promise<void> {
   }).then(() => {}, () => {});
 }
 
+/** Hand a message to the running reply; false when no reply is running or the server cannot be reached. */
+export function steerChat(sessionId: string, message: UIMessage): Promise<boolean> {
+  return serverFetch("/api/chat/steer", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, message }),
+  }).then(async (res) => res.ok && ((await res.json()) as { steered: boolean }).steered, () => false);
+}
+
 /** Copies plain text only: Streamdown's nested blocks and link buttons otherwise paste as stray line breaks. */
 export function normalizeClipboard(e: React.ClipboardEvent) {
   const selection = window.getSelection();

@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { detectInstallMethod, isNewerVersion, withRetries, PERMANENT_NPM_ERROR, checkForUpdate, getUpdateStatus } from "./updater.js";
+import { isNewerVersion } from "@tracer-sh/shared";
+import { detectInstallMethod, withRetries, PERMANENT_NPM_ERROR, checkForUpdate, getUpdateStatus } from "./updater.js";
 
 test("detectInstallMethod classifies npx cache, global install, and source checkout", () => {
   assert.equal(detectInstallMethod(join("/home/u/.npm/_npx/d56038afd552885c", "node_modules", "tracer-sh")), "npx");

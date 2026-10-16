@@ -1,5 +1,6 @@
 import type { Context as HonoContext, Hono } from "hono";
 import { eq } from "drizzle-orm";
+import { z } from "zod";
 import { streamSSE } from "hono/streaming";
 import { createUIMessageStreamResponse, type UIMessage } from "ai";
 import { SESSION_PREFIX, unixNow } from "@tracer-sh/shared";
@@ -7,6 +8,7 @@ import { chatSessions } from "../../db/schema.js";
 import { sessionChanged } from "../../lib/session-events.js";
 import type { Context } from "../../trpc/context.js";
 import { loadSessionMessages, runChatAgent, SESSION_BUSY } from "../../agents/base-agent.js";
+import { steerChat } from "../../agents/steer.js";
 import { chatRunOptions, monitorChatRunOptions } from "../../agents/chat-run.js";
 import { generateSessionTitle } from "../../agents/utility/title.js";
 import { CONFIG } from "../../config.js";
@@ -28,6 +30,15 @@ async function replyWithRun(c: HonoContext, start: () => Promise<RunResult | Res
     return c.text(err instanceof Error && err.message ? err.message : "The request failed", 500);
   }
 }
+
+const steerBody = z.object({
+  sessionId: z.string().min(1),
+  message: z.object({
+    id: z.string().min(1).optional(),
+    metadata: z.object({ steered: z.boolean().optional() }).optional(),
+    parts: z.array(z.object({ type: z.literal("text"), text: z.string() })).min(1),
+  }),
+});
 
 export function registerChatRoutes(app: Hono, context: Context): void {
   app.post("/api/chat", async (c) => {
@@ -80,6 +91,16 @@ export function registerChatRoutes(app: Hono, context: Context): void {
     if (!active) return c.json({ stopped: false });
     active.controller.abort();
     return c.json({ stopped: true });
+  });
+
+  // Hand a user message to the active run; the agent reads it at its next step.
+  app.post("/api/chat/steer", async (c) => {
+    const body = steerBody.safeParse(await c.req.json().catch(() => undefined));
+    if (!body.success) return c.text("Invalid steer message", 400);
+    const { sessionId, message } = body.data;
+    // Whatever role and metadata the client sends, the model gets a steered user message: one without the mark would start a new turn once saved.
+    const steered: UIMessage = { id: message.id ?? crypto.randomUUID(), role: "user", metadata: { ...message.metadata, steered: true }, parts: message.parts };
+    return c.json({ steered: await steerChat(context, sessionId, steered) });
   });
 
   // Subscribe to an active stream via SSE (for reconnection after navigate-away)

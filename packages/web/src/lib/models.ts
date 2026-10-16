@@ -89,7 +89,8 @@ export function computeCost(
   const m = pricingLookup[model];
   if (!m) return 0;
   const { inputPrice, outputPrice } = effectivePrices(m, atMs);
-  const nonCachedInput = inputTokens - cachedInputTokens;
+  // The input total already includes cache reads and writes, which are billed at their own rates.
+  const nonCachedInput = inputTokens - cachedInputTokens - cacheWriteTokens;
   return (
     nonCachedInput * inputPrice +
     cachedInputTokens * inputPrice * m.cacheReadMultiplier +

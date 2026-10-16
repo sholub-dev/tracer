@@ -1,5 +1,5 @@
 import type { UIMessage } from "ai";
-import { CLIENT_TOOL_NAMES, findingFromMessages, findingMarkdown } from "@tracer-sh/shared";
+import { CLIENT_TOOL_NAMES, findingFromMessages, findingMarkdown, turnStart } from "@tracer-sh/shared";
 
 interface MessagePart {
   type: string;
@@ -86,8 +86,7 @@ export function renderToolPart(p: MessagePart, queries: QueryRecord[]): string {
  */
 export function extractAnalysis(messages: UIMessage[]): { analysis: string; queries: QueryRecord[] } {
   // Only the latest turn: an earlier question's marker and finding do not belong to this answer.
-  const lastUser = messages.map((m) => m.role).lastIndexOf("user");
-  const turn = messages.slice(lastUser + 1);
+  const turn = messages.slice(turnStart(messages));
   const assistantParts: MessagePart[] = [];
   for (const m of turn) {
     if (m.role !== "assistant") continue;

@@ -34,33 +34,26 @@ function csvBlock(headers: string[], tableRows: string[][]): string {
   return `${hdr}\n${body}`;
 }
 
-/** Find keys that duplicate facet values (same dedup logic as ResultView.buildColumns) */
-function facetDupeKeys(sample: Record<string, unknown>): Set<string> {
+/** Find keys that duplicate facet values (same dedup logic as ResultView.buildColumns). A key counts only when it matches in every row, so a metric equal to the facet in one row stays. */
+function facetDupeKeys(rows: Record<string, unknown>[]): Set<string> {
+  const sample = rows[0];
   const dupes = new Set<string>();
-  const facet = sample.facet;
-  if (facet === undefined) return dupes;
-  if (Array.isArray(facet)) {
-    for (const val of facet) {
-      for (const k of Object.keys(sample)) {
-        if (k !== "facet" && !HIDDEN_KEYS.has(k) && sample[k] === val) dupes.add(k);
-      }
-    }
-  } else {
-    for (const k of Object.keys(sample)) {
-      if (k !== "facet" && !HIDDEN_KEYS.has(k) && sample[k] === facet) dupes.add(k);
-    }
+  if (sample.facet === undefined) return dupes;
+  for (const k of Object.keys(sample)) {
+    if (k === "facet" || HIDDEN_KEYS.has(k)) continue;
+    const matches = rows.every((r) => (Array.isArray(r.facet) ? r.facet.includes(r[k]) : r[k] === r.facet));
+    if (matches) dupes.add(k);
   }
   return dupes;
 }
 
-function visibleKeys(sample: Record<string, unknown>): string[] {
-  const dupes = facetDupeKeys(sample);
-  return Object.keys(sample).filter((k) => k !== "facet" && k !== "comparison" && !HIDDEN_KEYS.has(k) && !dupes.has(k));
+function visibleKeys(rows: Record<string, unknown>[]): string[] {
+  const dupes = facetDupeKeys(rows);
+  return Object.keys(rows[0]).filter((k) => k !== "facet" && k !== "comparison" && !HIDDEN_KEYS.has(k) && !dupes.has(k));
 }
 
-function facetLabel(sample: Record<string, unknown>): string {
-  const dupes = facetDupeKeys(sample);
-  return [...dupes][0] ?? "Name";
+function facetLabel(rows: Record<string, unknown>[]): string {
+  return [...facetDupeKeys(rows)][0] ?? "Name";
 }
 
 function facetValue(row: Record<string, unknown>): string {
@@ -115,7 +108,7 @@ export function formatNrqlCsv(rows: Record<string, unknown>[], query?: string): 
         .map((p) => `${p}:\n` + formatNrqlCsv(rows.filter((r) => String(r.comparison) === p).map(({ comparison: _, ...r }) => r), query))
         .join("\n\n");
     }
-    const keys = visibleKeys(sample);
+    const keys = visibleKeys(rows);
     let displayRows = rows;
     let note = "";
     if (rows.length > 10) {
@@ -124,7 +117,7 @@ export function formatNrqlCsv(rows: Record<string, unknown>[], query?: string): 
       note = `\n(Showing every ${sampled.step}th of ${rows.length} points, plus the peak and low points)`;
     }
     const faceted = "facet" in sample;
-    const headers = ["Time", ...(faceted ? [facetLabel(sample)] : []), ...keys];
+    const headers = ["Time", ...(faceted ? [facetLabel(rows)] : []), ...keys];
     const body = displayRows.map((r) => {
       // formatTimestamps already converts these to human-readable strings
       const time = r.endTimeSeconds != null ? String(r.endTimeSeconds)
@@ -148,7 +141,7 @@ export function formatNrqlCsv(rows: Record<string, unknown>[], query?: string): 
 
   // ── Compare-with ──
   if ("comparison" in sample) {
-    const keys = visibleKeys(sample);
+    const keys = visibleKeys(rows);
     const periods: string[] = [];
     for (const r of rows) {
       const p = String(r.comparison);
@@ -163,7 +156,7 @@ export function formatNrqlCsv(rows: Record<string, unknown>[], query?: string): 
         if (!grouped.has(fk)) grouped.set(fk, new Map());
         grouped.get(fk)!.set(String(r.comparison), r);
       }
-      const fLabel = facetLabel(sample);
+      const fLabel = facetLabel(rows);
       const headers = [fLabel, ...keys.flatMap((k) => periods.map((p) => keys.length > 1 ? `${k} (${p})` : p))];
       const body = [...grouped.entries()].map(([fk, byPeriod]) => [
         fk,
@@ -185,7 +178,7 @@ export function formatNrqlCsv(rows: Record<string, unknown>[], query?: string): 
 
   // ── Uniques (single row, single key, array value) ──
   if (rows.length === 1) {
-    const vKeys = visibleKeys(sample);
+    const vKeys = visibleKeys(rows);
     if (vKeys.length === 1) {
       const val = sample[vKeys[0]];
       if (Array.isArray(val) && val.every((v) => typeof v !== "object" || v === null)) {
@@ -196,7 +189,7 @@ export function formatNrqlCsv(rows: Record<string, unknown>[], query?: string): 
 
   // ── Scalar (single row, all numeric, no facet) ──
   if (rows.length === 1 && !("facet" in sample)) {
-    const keys = visibleKeys(sample);
+    const keys = visibleKeys(rows);
     if (keys.length > 0 && keys.every((k) => typeof sample[k] === "number")) {
       return keys.map((k) => `${k}: ${fmtVal(sample[k])}`).join(", ");
     }
@@ -204,8 +197,8 @@ export function formatNrqlCsv(rows: Record<string, unknown>[], query?: string): 
 
   // ── Faceted table ──
   if ("facet" in sample) {
-    const keys = visibleKeys(sample);
-    const fLabel = facetLabel(sample);
+    const keys = visibleKeys(rows);
+    const fLabel = facetLabel(rows);
     let displayRows = rows;
     let note = "";
     if (rows.length > MAX_DISPLAY_ROWS) {
@@ -219,7 +212,7 @@ export function formatNrqlCsv(rows: Record<string, unknown>[], query?: string): 
   }
 
   // ── Raw events (fallback) ──
-  const keys = visibleKeys(sample);
+  const keys = visibleKeys(rows);
   let displayRows = rows;
   let note = "";
   if (rows.length > MAX_DISPLAY_ROWS) {

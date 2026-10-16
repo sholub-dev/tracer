@@ -71,3 +71,11 @@ test("a timeseries with COMPARE WITH labels each period", () => {
   ]);
   assert.equal(formatNrqlCsv(rows), "current:\nTime,count\nt0,10\nt1,11\n\nprevious:\nTime,count\np0,5\np1,6");
 });
+
+test("a metric that equals the facet value in the first row only stays visible", () => {
+  const rows = [
+    { facet: 200, httpResponseCode: 200, count: 200 },
+    { facet: 500, httpResponseCode: 500, count: 7 },
+  ];
+  assert.equal(formatNrqlCsv(rows), "httpResponseCode,count\n200,200\n500,7");
+});

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
+import { cn, selectedLabel } from "@/lib/utils";
 import { usePersistedState } from "../../lib/hooks";
 
 interface Option {
@@ -130,8 +130,6 @@ export function SearchableOptions({ options, value, onSelect, storageKey, loadin
 
 export function SearchableSelect({ options, value, onChange, placeholder = "Select", storageKey, fitContent, disabled, id, className }: SearchableSelectProps) {
   const [open, setOpen] = useState(false);
-  const selected = options.find((o) => o.value === value);
-
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -142,8 +140,8 @@ export function SearchableSelect({ options, value, onChange, placeholder = "Sele
           disabled={disabled}
           className={cn("w-full justify-between bg-card px-2.5 font-normal", className)}
         >
-          <span className={cn("truncate", !selected && "text-muted-foreground")}>
-            {selected ? (selected.displayLabel ?? selected.label) : placeholder}
+          <span className={cn("truncate", !value && "text-muted-foreground")}>
+            {selectedLabel(options, value, placeholder)}
           </span>
           <ChevronDown className="text-muted-foreground" aria-hidden="true" />
         </Button>

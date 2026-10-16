@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { UIMessage } from "ai";
-import { alertFindingFromMessages, dismissalFromMessages, summaryFromMessages } from "./alert-summary.js";
+import { alertFindingFromMessages, latestRunSummary, dismissalFromMessages, summaryFromMessages } from "./alert-summary.js";
 
 const valid = {
   severity: "low", policy: "p", started: "s", status: "stopped",
@@ -36,4 +36,12 @@ test("alertFindingFromMessages keeps the finding of the alert run, not of a late
   const followUp = [...run, { id: "", role: "user", parts: [] }, msg(finding("Errors stopped."))] as unknown as UIMessage[];
   assert.equal(alertFindingFromMessages(followUp)?.headline, "Pool exhausted.");
   assert.equal(alertFindingFromMessages([msg(finding("Only card."))] as unknown as UIMessage[])?.headline, "Only card.");
+});
+
+test("latestRunSummary reads the run a steered message trails", () => {
+  const user = { id: "u", role: "user", parts: [{ type: "text", text: "alert" }] } as unknown as UIMessage;
+  const steered = { id: "s", role: "user", metadata: { steered: true }, parts: [{ type: "text", text: "also check x" }] } as unknown as UIMessage;
+  const reply = { id: "", role: "assistant", parts: [call(valid)] } as unknown as UIMessage;
+  assert.deepEqual(latestRunSummary([user, reply, steered]), latestRunSummary([user, reply]));
+  assert.ok(latestRunSummary([user, reply, steered]));
 });

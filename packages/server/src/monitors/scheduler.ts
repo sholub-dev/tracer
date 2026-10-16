@@ -1,17 +1,18 @@
-import { and, desc, eq, gte, isNotNull, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import { SESSION_KIND, substituteWindow, unixNow } from "@tracer-sh/shared";
 import type { Context } from "../trpc/context.js";
 import { alertIssues, chatSessions, monitors, monitorTriggers, syncRows } from "../db/schema.js";
 import type { Db } from "../db/driver.js";
 import { startAgentSession } from "../agents/start-session.js";
 import { sessionChanged } from "../lib/session-events.js";
+import { pendingResume } from "../lib/pending-resume.js";
 import { CONFIG } from "../config.js";
 import { localDeviceId } from "../db/config-reader.js";
 import { decodeMessages } from "../lib/messages-codec.js";
 import { failedWindowEnds } from "./store.js";
 import { evaluateGroups, extractGroups, isNoData, parseCondition, type Group } from "./condition.js";
 import { classifyGroups, pastSessions, pastSummary, readOutcome, readPastSessionTool, saveOutcome, type Outcome, type PastSession, type TriggerGroup } from "./repeats.js";
-import { withTimeout } from "./validate.js";
+import { withTimeout } from "../lib/with-timeout.js";
 import { getTimezone } from "../lib/current-context.js";
 import { monitorAlert, postSlack, readSlackConfig } from "../integrations/slack.js";
 import { dismissAlertTool, MONITOR_ROLE, reportAlertSummaryTool, summaryInstruction } from "./alert-summary.js";
@@ -49,6 +50,7 @@ export function openWindow(
 ): { start: number; end: number } | null {
   const end = now - lagSeconds;
   if (lastCheckedAt !== null && lastCheckedAt >= end - CONFIG.monitorOpenSkipSeconds) return null;
+  // A shorter window would change what a count condition sees; a crossing already investigated is muted when it fires.
   return { start: end - frequencySeconds, end };
 }
 
@@ -234,7 +236,7 @@ async function succeed(context: Context, monitorId: string, lastStatus: "ok" | "
   await setStatus(context, monitorId, { lastStatus, lastError: null, lastCheckedAt: windowEnd });
 }
 
-async function latestSessionRunning(context: Context, monitorId: string): Promise<boolean> {
+export async function latestSessionRunning(context: Context, monitorId: string): Promise<boolean> {
   const latest = await context.db
     .select({ sessionId: monitorTriggers.sessionId })
     .from(monitorTriggers)
@@ -242,21 +244,31 @@ async function latestSessionRunning(context: Context, monitorId: string): Promis
     .orderBy(desc(monitorTriggers.triggeredAt))
     .limit(1)
     .get();
-  return !!latest?.sessionId && context.activeStreams.has(latest.sessionId);
+  // A session a restart interrupted counts as running until its run starts again.
+  return !!latest?.sessionId && (context.activeStreams.has(latest.sessionId) || pendingResume.has(latest.sessionId));
 }
 
 /**
  * True when an earlier firing already covers this one. With issue data: every open issue is tracked (on either device)
- * or acked, and none is new. Without it: the other device fired this monitor within the last period and started a session.
+ * or acked, and none is new. Without it: a trigger of this monitor on any device started a session for an overlapping window.
+ * Aligned consecutive windows only touch, so the next one still starts a session.
  */
-async function handledElsewhere(db: Db, monitor: Monitor, window: { end: number }, found: FoundIssues | null): Promise<boolean> {
+async function handledElsewhere(db: Db, monitor: Monitor, window: { start: number; end: number }, found: FoundIssues | null): Promise<boolean> {
   if (found) return !("error" in found) && found.tracked > 0 && found.open.length === 0 && found.closed.length === 0;
   return !!await db.select({ id: monitorTriggers.id }).from(monitorTriggers).where(and(
     eq(monitorTriggers.monitorId, monitor.id),
     isNotNull(monitorTriggers.sessionId),
-    ne(monitorTriggers.deviceId, await localDeviceId(db)),
-    gte(monitorTriggers.triggeredAt, window.end - monitor.frequencySeconds),
+    lt(monitorTriggers.windowStart, window.end),
+    gt(monitorTriggers.windowEnd, window.start),
   )).get();
+}
+
+/** Removes a firing whose session did not start, so the chart shows no trigger without a debug and the window retries. */
+async function discardFiring(context: Context, triggerId: string, sessionId: string): Promise<void> {
+  await context.db.delete(alertIssues).where(eq(alertIssues.sessionId, sessionId)).run();
+  await context.db.delete(monitorTriggers).where(eq(monitorTriggers.id, triggerId)).run();
+  await context.db.delete(chatSessions).where(eq(chatSessions.id, sessionId)).run();
+  sessionChanged(sessionId);
 }
 
 async function checkMonitor(context: Context, monitor: Monitor, window: { start: number; end: number }, start: typeof startAgentSession): Promise<void> {
@@ -268,7 +280,6 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
     await setStatus(context, monitor.id, { lastStatus: "error", lastError: `Provider ${monitor.provider} is not connected` });
     return;
   }
-  if (await latestSessionRunning(context, monitor.id)) return;
 
   const condition = parseCondition(monitor.condition);
   if (!condition) {
@@ -314,7 +325,9 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
   const found: FoundIssues | null = alerting && await triageEnabled(context.db) && onIncidents ? await findIssues(context, monitor, window) : null;
   // An earlier firing (this device, the other device or a person) already handled it: it is recorded, but no session starts.
   const handled = alerting && await handledElsewhere(context.db, monitor, window, found);
-  const sessionId = alerting && !handled ? crypto.randomUUID() : null;
+  // The latest session still runs: it covers this crossing. The firing is recorded as muted, not dropped with its window.
+  const busy = alerting && !handled && await latestSessionRunning(context, monitor.id);
+  const sessionId = alerting && !handled && !busy ? crypto.randomUUID() : null;
   const triggerId = crypto.randomUUID();
   const past = sessionId ? await pastSessions(context.db, monitor.id, classified.map((g) => g.key)) : [];
   try {
@@ -337,37 +350,39 @@ async function checkMonitor(context: Context, monitor: Monitor, window: { start:
   }
 
   if (sessionId) {
-    // A concurrent firing of another monitor may have recorded an issue first; this session gets only its own.
-    const owned = found && !("error" in found) ? await recordIssues(context.db, { monitorId: monitor.id, triggerId, sessionId }, found) : new Set<string>();
-    const openIssues = found && !("error" in found) ? found.open.filter((i) => owned.has(i.issueId)) : [];
-    const issueIds = openIssues.map((i) => i.issueId);
-    const checkClosed = onIncidents && openIssues.length === 0;
-    const slack = await readSlackConfig(context.db) !== null;
-    const message = buildMessage(monitor, value, window, classified, past, checkClosed ? closedCheckPrompt(found, slack) : issuesPrompt(openIssues, await closeCounts(context.db, monitor.id, sessionId, openIssues.map((i) => ({ issueId: i.issueId, conditionName: conditionOf(i) })))), checkClosed, slack);
-    const started = await start(context, {
-      sessionId,
-      kind: SESSION_KIND.MONITOR,
-      title: sessionTitle(monitor.name, classified),
-      message,
-      tools: {
-        read_past_session: readPastSessionTool(() => past),
-        report_alert_summary: reportAlertSummaryTool({ slack }),
-        ...(openIssues.length > 0 ? { report_issue_status: reportIssueStatusTool(context.db, issueIds, sessionId), ...monitorIssueTools(context, issueIds, sessionId) } : {}),
-        ...(checkClosed ? { dismiss_alert: dismissAlertTool() } : {}),
-      },
-      onComplete: (outcome) => void completeFiring(context, monitor, now, sessionId, found, outcome),
-    });
-    if ("error" in started) {
-      await context.db.delete(alertIssues).where(eq(alertIssues.sessionId, sessionId)).run();
-      await context.db.delete(monitorTriggers).where(eq(monitorTriggers.id, triggerId)).run();
-      await context.db.delete(chatSessions).where(eq(chatSessions.id, sessionId)).run();
-      sessionChanged(sessionId);
-      await fail(context, monitor.id, window.end, `Could not start session: ${started.error}`);
-      return;
+    try {
+      // A concurrent firing of another monitor may have recorded an issue first; this session gets only its own.
+      const owned = found && !("error" in found) ? await recordIssues(context.db, { monitorId: monitor.id, triggerId, sessionId }, found) : new Set<string>();
+      const openIssues = found && !("error" in found) ? found.open.filter((i) => owned.has(i.issueId)) : [];
+      const issueIds = openIssues.map((i) => i.issueId);
+      const checkClosed = onIncidents && openIssues.length === 0;
+      const slack = await readSlackConfig(context.db) !== null;
+      const message = buildMessage(monitor, value, window, classified, past, checkClosed ? closedCheckPrompt(found, slack) : issuesPrompt(openIssues, await closeCounts(context.db, monitor.id, sessionId, openIssues.map((i) => ({ issueId: i.issueId, conditionName: conditionOf(i) })))), checkClosed, slack);
+      const started = await start(context, {
+        sessionId,
+        kind: SESSION_KIND.MONITOR,
+        title: sessionTitle(monitor.name, classified),
+        message,
+        tools: {
+          read_past_session: readPastSessionTool(() => past),
+          report_alert_summary: reportAlertSummaryTool({ slack }),
+          ...(openIssues.length > 0 ? { report_issue_status: reportIssueStatusTool(context.db, issueIds, sessionId), ...monitorIssueTools(context, issueIds, sessionId) } : {}),
+          ...(checkClosed ? { dismiss_alert: dismissAlertTool() } : {}),
+        },
+        onComplete: (outcome) => void completeFiring(context, monitor, now, sessionId, found, outcome),
+      });
+      if ("error" in started) {
+        await discardFiring(context, triggerId, sessionId);
+        await fail(context, monitor.id, window.end, `Could not start session: ${started.error}`);
+        return;
+      }
+    } catch (err) {
+      await discardFiring(context, triggerId, sessionId);
+      throw err;
     }
   }
 
-  console.log(`[monitor] "${monitor.name}" triggered (value ${value}${sessionId ? `, session ${sessionId}` : handled ? ", already handled" : ", alerts off"})`);
+  console.log(`[monitor] "${monitor.name}" triggered (value ${value}${sessionId ? `, session ${sessionId}` : handled ? ", already handled" : busy ? ", earlier session still running" : ", alerts off"})`);
   await succeed(context, monitor.id, "triggered", window.end);
 }
 

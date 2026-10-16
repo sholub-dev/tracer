@@ -202,14 +202,14 @@ function VertexRow() {
             <GcpProjectField
               value={existing?.projectId ?? ""}
               disabled={busy}
-              onChange={(projectId) => saveConfig.mutate({ projectId })}
+              onChange={(projectId) => saveConfig.mutate({ projectId }, { onError: (e) => toast.error(e.message) })}
             />
             <LocationField
               value={existing?.location ?? "global"}
               disabled={busy}
               onCommit={(location) => {
                 const loc = location.trim() || "global";
-                if (loc !== existing?.location) saveConfig.mutate({ location: loc });
+                if (loc !== existing?.location) saveConfig.mutate({ location: loc }, { onError: (e) => toast.error(e.message) });
               }}
             />
           </div>

@@ -4,7 +4,7 @@ import { Loader2, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { DEFAULT_SESSION_TITLE, SESSION_KIND, UNIFIED_SCOPE, compactionUpTo, isAnalysisMessage } from "@tracer-sh/shared";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { cn, singleFlight } from "@/lib/utils";
 import { trpc } from "../lib/trpc";
 import { parseMessages, useParsedMessages } from "../lib/chat-utils";
 import { useDeleteSession, usePersistedState } from "../lib/hooks";
@@ -71,13 +71,13 @@ export function Debug({ sessionId, isNew, onDeleted }: { sessionId: string; isNe
   // One failed refetch at run end must not leave "Running": retry with a growing wait until the session leaves "streaming".
   const unmounted = useRef(false);
   useEffect(() => () => { unmounted.current = true; }, []);
-  const refetchUntilSettled = useCallback(async () => {
+  const refetchUntilSettled = useMemo(() => singleFlight(async () => {
     for (let attempt = 0; attempt < SETTLE_ATTEMPTS && !unmounted.current; attempt++) {
       const { data } = await sessionQuery.refetch();
       if (data && data.status !== "streaming") return;
       await new Promise((resolve) => setTimeout(resolve, Math.min(500 * 2 ** attempt, 8000)));
     }
-  }, [sessionQuery.refetch]); // eslint-disable-line react-hooks/exhaustive-deps
+  }), [sessionQuery.refetch]); // eslint-disable-line react-hooks/exhaustive-deps
   useOnResume(() => { if (sessionQuery.data?.status === "streaming") void refetchUntilSettled(); });
 
   // Separate from sessions.get so refreshing cost after a stream never unmounts the chat.

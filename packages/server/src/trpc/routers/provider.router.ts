@@ -81,7 +81,8 @@ export const providerRouter = router({
         });
       }
 
-      const configJson = JSON.stringify(input.config);
+      const config = Object.fromEntries(Object.entries(input.config).map(([key, value]) => [key, value.trim()]));
+      const configJson = JSON.stringify(config);
 
       await ctx.db
         .insert(providerConfigs)
@@ -92,10 +93,8 @@ export const providerRouter = router({
         })
         .run();
 
-      // Unregister existing provider if any, then create fresh
-      await ctx.providers.unregister(input.type);
-
-      const provider = ctx.providers.createFromFactory(input.type, input.config);
+      // The swap has no await in it: register disposes the provider it replaces, so concurrent saves leak none.
+      const provider = ctx.providers.createFromFactory(input.type, config);
       ctx.providers.register(provider);
 
       let initError: string | undefined;

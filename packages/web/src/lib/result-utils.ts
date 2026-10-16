@@ -74,7 +74,9 @@ export function formatValue(value: unknown, key?: string): string {
     if (key && isUnixMs(key, value)) return formatTimestamp(value);
     if (key && isUnixSec(key, value)) return formatTimestamp(value * 1000);
     if (Number.isInteger(value) || Math.abs(value) > 1000) return value.toLocaleString();
-    return value.toFixed(2);
+    const fixed = value.toFixed(2);
+    // Two decimals would turn a small non-zero value into 0.00.
+    return Number(fixed) === 0 && value !== 0 ? value.toLocaleString(undefined, { maximumSignificantDigits: 2 }) : fixed;
   }
   if (Array.isArray(value)) {
     if (value.length <= 5) return value.map((v) => (v != null && typeof v === "object" ? JSON.stringify(v) : v)).join(", ");

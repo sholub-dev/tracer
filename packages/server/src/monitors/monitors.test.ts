@@ -240,6 +240,7 @@ test("openWindow spans a full period ending at now minus the lag and skips a mon
   const now = 100_000;
   assert.deepEqual(openWindow(null, 300, now, 60), { start: now - 360, end: now - 60 });
   assert.deepEqual(openWindow(now - 200, 300, now, 60), { start: now - 360, end: now - 60 });
+  assert.deepEqual(openWindow(now - 1000, 300, now, 60), { start: now - 360, end: now - 60 });
   assert.equal(openWindow(now - 100, 300, now, 60), null);
   assert.equal(openWindow(now - 60, 300, now, 60), null);
 });

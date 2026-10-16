@@ -1,5 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import type { Db } from "../db/driver.js";
+import { runInTransaction } from "../db/driver.js";
 import { toolMemories, memoryOperations } from "../db/schema.js";
 
 export const MAX_NOTE_WORDS = 40;
@@ -39,13 +40,16 @@ export async function createMemory(
   const clean = source === "agent" ? enforceNoteLength(cleaned) : cleaned;
   if (!clean) return { error: "note is empty after cleanup" };
   const key = normalizeNote(clean);
-  const same = (await db.select({ id: toolMemories.id, note: toolMemories.note }).from(toolMemories)
-    .where(eq(toolMemories.toolName, toolName)).all()).find((m) => normalizeNote(sanitizeNote(m.note)) === key);
-  if (same) return { id: same.id, note: clean, created: false };
-  const row = await db.insert(toolMemories)
-    .values({ toolName, note: clean, source, sourceSessionId: sessionId ?? null })
-    .returning({ id: toolMemories.id }).get();
-  return { id: row.id, note: clean, created: true };
+  // Check and insert in one turn, so two identical calls cannot both pass the check.
+  return runInTransaction(db, async (tx) => {
+    const same = (await tx.select({ id: toolMemories.id, note: toolMemories.note }).from(toolMemories)
+      .where(eq(toolMemories.toolName, toolName)).all()).find((m) => normalizeNote(sanitizeNote(m.note)) === key);
+    if (same) return { id: same.id, note: clean, created: false };
+    const row = await tx.insert(toolMemories)
+      .values({ toolName, note: clean, source, sourceSessionId: sessionId ?? null })
+      .returning({ id: toolMemories.id }).get();
+    return { id: row.id, note: clean, created: true };
+  });
 }
 
 export function makeMemoryExecute(db: Db, toolName: string, sessionId?: string) {

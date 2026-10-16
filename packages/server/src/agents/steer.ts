@@ -11,9 +11,11 @@ export interface SteerState {
 
 export const newSteerState = (): SteerState => ({ pending: [], steered: [] });
 
-/** Moves the waiting messages into the run and returns them. */
-export function drainSteer(state: SteerState): UIMessage[] {
+/** Moves the waiting messages into the run and returns them. `anchor` is the step they land before; it is saved with them so every view puts them at the same place in the reply. */
+export function drainSteer(state: SteerState, anchor: number): UIMessage[] {
   const drained = state.pending.splice(0);
+  // In place: `steerChat` finds out by identity whether a step took its message.
+  for (const m of drained) m.metadata = { ...(m.metadata as object | undefined), anchor };
   state.steered.push(...drained);
   return drained;
 }

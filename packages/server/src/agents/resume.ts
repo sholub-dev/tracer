@@ -10,6 +10,7 @@ import { buildRunOptions } from "./chat-run.js";
 import { isWakeupTurn, wakeupExtras } from "../monitors/triage.js";
 import { settleMonitorRun } from "../monitors/scheduler.js";
 import { CONFIG } from "../config.js";
+import { endsWithAsk } from "../tools/ask-tool.js";
 
 export interface InterruptedRun {
   id: string;
@@ -59,6 +60,13 @@ export async function resumeRuns(context: Context, runs: InterruptedRun[], settl
     ...runs.map(async ({ id, scope, kind }) => {
       try {
         const { messages, summary, summaryUpTo } = await loadSessionMessages(context.db, id);
+        // The question ended the reply; the person's answer starts the next turn.
+        if (endsWithAsk(messages)) {
+          await markDone(context.db, id);
+          // The restart cut off the run's completion hook, so a monitor run still owes its report.
+          if (kind === SESSION_KIND.MONITOR) await settleMonitorRun(context, id, "Interrupted by a restart");
+          return;
+        }
         // A resumed wake-up gets the same tools and hooks as the timer gave it.
         const wake = kind === SESSION_KIND.MONITOR && isWakeupTurn(messages) ? await wakeupExtras(context, id) : null;
         const options = await buildRunOptions(context, { sessionId: id, kind, scope, extras: wake?.tools, onComplete: wake?.onComplete });

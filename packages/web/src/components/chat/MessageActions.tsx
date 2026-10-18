@@ -2,7 +2,7 @@ import type { ReactNode, RefObject } from "react";
 import type { UIMessage } from "ai";
 import { Copy, Download, ImageIcon, Share } from "lucide-react";
 import { toast } from "sonner";
-import { ANALYSIS_MARKER, findAnalysisMarker, findingFromMessages, findingMarkdown } from "@tracer-sh/shared";
+import { ANALYSIS_MARKER, askUserText, CLIENT_TOOL_NAMES, findAnalysisMarker, findingFromMessages, findingMarkdown } from "@tracer-sh/shared";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { IS_IOS } from "../../lib/platform";
@@ -32,7 +32,7 @@ function stripMarkdown(text: string): string {
     .replace(/\u0000(\d+)\u0000/g, (_, i: string) => code[Number(i)]);
 }
 
-/** Plain text of a message: text and tool inputs; reasoning and tool results are skipped. */
+/** Plain text of a message: text, the question to the person and tool inputs; reasoning and tool results are skipped. */
 export function extractMessageText(parts: UIMessage["parts"]): string {
   const chunks: string[] = [];
   const finding = findingFromMessages([{ parts }]);
@@ -40,6 +40,9 @@ export function extractMessageText(parts: UIMessage["parts"]): string {
   for (const part of parts) {
     if (part.type === "text") {
       chunks.push(stripMarkdown(part.text.replace(ANALYSIS_MARKER, "")));
+    } else if (part.type === CLIENT_TOOL_NAMES.ASK_USER) {
+      const ask = askUserText((part as { input?: unknown }).input);
+      if (ask) chunks.push(ask);
     } else if (part.type !== "reasoning") {
       const tp = part as unknown as { input?: { task?: string; query?: string } };
       if (tp.input?.task) chunks.push(`Task: ${tp.input.task}`);

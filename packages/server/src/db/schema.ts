@@ -94,7 +94,7 @@ export const monitorTriggers = sqliteTable("monitor_triggers", {
   value: real("value").notNull(),
   windowStart: integer("window_start").notNull(),
   windowEnd: integer("window_end").notNull(),
-  status: text("status").notNull(), // "investigating" | "repeat" | "muted"
+  status: text("status").notNull(), // "pending" (waits for a Yes or No) | "investigating" | "repeat" | "muted" | "skipped" | "closed"
   groups: text("groups").notNull(),
   sessionId: text("session_id"),
   /** Null until the session's run is reported to Slack; "failed" when every attempt failed, "done" after a finished run. */

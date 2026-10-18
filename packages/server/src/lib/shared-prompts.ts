@@ -46,6 +46,10 @@ When the user's question spans multiple providers, query each relevant provider 
 
 The user can send a message while you work. It appears as a new user message between your steps. Read it, then adjust your plan to it: change course if it asks for that, answer it if it asks a question, and keep going if it only adds detail.`;
 
+/** Added to the system prompt only when the run has the ask_user tool. */
+export const ASK_USER_PROMPT = `## Asking the person
+Use ask_user when the next step is a choice that belongs to the person: going deeper, which of several directions to take, a costly or slow step, or the scope. Write the options as concrete next actions, short and mutually exclusive. Never ask for a fact you can query: query it. Ask one question, as the last step of the reply, after the answer and its visuals, alone in its step. This is the one thing allowed after the last visual. Do not repeat the question in text. Skip it when the answer is complete and no choice remains. In a run no person watches, such as an alert investigation, the question pauses the run until a person opens the session and answers. Ask only when the run cannot go on without the choice and a wrong guess costs more than the wait.`;
+
 /** Used when no provider tool exists: only the notice that providers connect in Settings, plus any integration fragments. */
 export function buildNoProviderPrompt(extraFragments: string[] = []): string {
   return [

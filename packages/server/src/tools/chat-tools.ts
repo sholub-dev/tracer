@@ -1,9 +1,10 @@
 import type { Db } from "../db/driver.js";
 import type { ProviderRegistry } from "../providers/registry.js";
-import type { ChatToolWriter as StreamWriter, ChatMode, SessionKind } from "@tracer-sh/shared";
-import { DEFAULT_CHAT_MODE, SESSION_KIND } from "@tracer-sh/shared";
+import type { ChatToolWriter as StreamWriter, ChatMode } from "@tracer-sh/shared";
+import { DEFAULT_CHAT_MODE } from "@tracer-sh/shared";
 import { setTimerTool } from "./timer-tool.js";
 import { reportFindingTool } from "./finding-tool.js";
+import { askUserTool } from "./ask-tool.js";
 import { collectBaseTools, type BaseToolSetup } from "./shared-tool-setup.js";
 
 type ChatToolsResult = Omit<BaseToolSetup, "connectedProviders" | "tools"> & {
@@ -30,13 +31,7 @@ export async function collectChatTools(
   return { tools, promptFragments, systemPrompt, maxSteps, afterComplete, providerTypes };
 }
 
-// Triage acts on New Relic issues in monitor runs, so the triage setting decides what gets closed.
-// A run with no person present gets no other write tool that reaches outside its own scoped extras.
-const UNATTENDED_DROPPED = new Set(["ack_nr_issue", "close_nr_issue", "add_jira_comment"]);
-
-/** The provider tools plus the tools every chat session gets. `unattended` marks a run no person watches: monitor, API, wake-up or resumed run. */
-export function withSessionTools(tools: Record<string, unknown>, db: Db, sessionId: string, kind?: SessionKind, extras: Record<string, unknown> = {}, unattended = false): Record<string, unknown> {
-  const noHuman = unattended || kind === SESSION_KIND.MONITOR || kind === SESSION_KIND.API;
-  const own = noHuman ? Object.fromEntries(Object.entries(tools).filter(([name]) => !UNATTENDED_DROPPED.has(name))) : tools;
-  return { ...own, set_timer: setTimerTool(db, sessionId), report_finding: reportFindingTool(), ...extras };
+/** The provider tools plus the tools every chat session gets. Run extras override tools of the same name. */
+export function withSessionTools(tools: Record<string, unknown>, db: Db, sessionId: string, extras: Record<string, unknown> = {}): Record<string, unknown> {
+  return { ...tools, set_timer: setTimerTool(db, sessionId), report_finding: reportFindingTool(), ask_user: askUserTool(), ...extras };
 }

@@ -245,6 +245,14 @@ test("openWindow spans a full period ending at now minus the lag and skips a mon
   assert.equal(openWindow(now - 60, 300, now, 60), null);
 });
 
+test("a catch-up window of a monitor slower than the catch-up limit still spans its full period", () => {
+  const period = 6 * 3600;
+  const end = 100 * period;
+  assert.deepEqual(nextWindow(end - period, period, end + 60, 60, true), { start: end - period, end });
+  const now = end + 3600;
+  assert.deepEqual(openWindow(now - 60 - 2 * period, period, now, 60, true), { start: now - 60 - period, end: now - 60 });
+});
+
 test("isFailedWindow skips only the window end that failed", () => {
   const failed = new Map([["m1", 1000]]);
   assert.equal(isFailedWindow(failed, "m1", 1000), true);

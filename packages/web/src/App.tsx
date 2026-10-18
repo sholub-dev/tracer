@@ -5,6 +5,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Shell } from "./components/layout/Shell";
 import { AppSidebar, type Page } from "./components/layout/Sidebar";
 import { AlertToaster } from "./components/layout/AlertBanner";
+import { FiringConfirms } from "./components/layout/FiringConfirm";
 import { Toaster } from "@/components/ui/sonner";
 import { CopyFromComputerDialog } from "@/components/settings/CopyFromComputerDialog";
 import { AppUpdateOffer } from "./components/layout/AppUpdateOffer";
@@ -161,6 +162,7 @@ export function App() {
       {IS_IOS && <CopyFromComputerDialog />}
       {IS_IOS && <AppUpdateOffer />}
       <AlertToaster />
+      {FEATURES.monitors && <FiringConfirms />}
       <Toaster
         position="bottom-center"
         theme="dark"

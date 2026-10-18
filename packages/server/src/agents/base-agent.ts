@@ -1,6 +1,6 @@
-import { streamText, convertToModelMessages, isStepCount, createUIMessageStream, toUIMessageStream, type UIMessage, type ToolSet } from "ai";
+import { streamText, convertToModelMessages, hasToolCall, isStepCount, createUIMessageStream, toUIMessageStream, type UIMessage, type ToolSet } from "ai";
 import { and, eq, sql } from "drizzle-orm";
-import { CLIENT_TOOL_NAMES, DEFAULT_SESSION_TITLE, unixNow, splitAtAnalysis, mergeProgressPart, findingFromMessages, findingMarkdown, turnStart, type AfterCompleteParams, type ProgressPart, type TokenUsage } from "@tracer-sh/shared";
+import { CLIENT_TOOL_NAMES, DEFAULT_SESSION_TITLE, TOOL_NAMES, unixNow, splitAtAnalysis, mergeProgressPart, findingFromMessages, findingMarkdown, turnStart, type AfterCompleteParams, type ProgressPart, type TokenUsage } from "@tracer-sh/shared";
 import { chatSessions } from "../db/schema.js";
 import { sessionChanged } from "../lib/session-events.js";
 import { decodeMessages, encodeMessages } from "../lib/messages-codec.js";
@@ -11,7 +11,7 @@ import type { Context } from "../trpc/context.js";
 import type { ChatToolWriter as StreamWriter } from "@tracer-sh/shared";
 import { getCurrentDateBlock, getCurrentTimeText } from "../lib/current-context.js";
 import { stampSentTime, withPromptCaching, withSentTimes } from "../llm/prompt-cache.js";
-import { BASE_PROMPT, buildNoProviderPrompt, EVIDENCE_GROUNDING, PLAIN_LANGUAGE } from "../lib/shared-prompts.js";
+import { ASK_USER_PROMPT, BASE_PROMPT, buildNoProviderPrompt, EVIDENCE_GROUNDING, PLAIN_LANGUAGE } from "../lib/shared-prompts.js";
 import { CONFIG, DEFAULTS } from "../config.js";
 import { isTransientError } from "../lib/transient.js";
 import { createToolGate, WRITE_TOOLS } from "../tools/tool-gate.js";
@@ -188,6 +188,8 @@ function turnToolNames(messages: UIMessage[]): string[] {
 
 /** True when a query ran and no finding card followed. */
 function owesFinding(toolNames: string[]): boolean {
+  // A question to the person ends the reply on purpose, so it is a valid end without a card.
+  if (toolNames.includes(TOOL_NAMES.ASK_USER)) return false;
   return toolNames.some((name) => !NON_QUERY_TOOLS.has(name)) && !toolNames.includes(FINDING_TOOL);
 }
 
@@ -311,6 +313,8 @@ async function processLLMStream(
 
   systemPrompt += "\n\n" + await getCurrentDateBlock(context.db, collected.providerTypes);
 
+  if (tools && TOOL_NAMES.ASK_USER in tools) systemPrompt += "\n\n" + ASK_USER_PROMPT;
+
   if (modelInput.some((m) => m.parts.some((p) => p.type === "file"))) {
     systemPrompt += "\n\n" + IMAGE_ANALYSIS_GUIDANCE;
   }
@@ -358,7 +362,8 @@ async function processLLMStream(
     instructions: cached.instructions,
     messages: modelMessages,
     tools: tools as Parameters<typeof streamText>[0]["tools"],
-    stopWhen: tools ? isStepCount(stepLimit) : undefined,
+    // A question to the person ends the reply; their answer starts the next turn.
+    stopWhen: tools ? [isStepCount(stepLimit), hasToolCall(TOOL_NAMES.ASK_USER)] : undefined,
     prepareStep: async ({ stepNumber, steps, messages: stepMessages }) => {
       // The returned messages carry forward to later steps.
       // A step adds one step-start part to the reply, so the step number counts the boundaries; a continued reply already holds some.

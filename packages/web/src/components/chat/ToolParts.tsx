@@ -1,5 +1,5 @@
 import { memo, useRef, useState } from "react";
-import { AlertCircle, ClipboardCheck, Copy, History, Loader2, Timer, type LucideIcon } from "lucide-react";
+import { AlertCircle, ClipboardCheck, Copy, History, Loader2, Send, Timer, type LucideIcon } from "lucide-react";
 import { CLIENT_TOOL_NAMES, isPlainObject, type ProgressPart } from "@tracer-sh/shared";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
@@ -40,6 +40,7 @@ const SMALL_TOOLS: Record<string, { done: string; loading: string; errorLabel: s
   "tool-report_issue_status": { done: "Reported alert status", loading: "Reporting alert status", errorLabel: "Alert status not recorded", icon: ClipboardCheck },
   "tool-report_alert_summary": { done: "Reported alert summary", loading: "Reporting alert summary", errorLabel: "Alert summary not recorded", icon: ClipboardCheck },
   "tool-dismiss_alert": { done: "Alert already closed, not posted", loading: "Dismissing alert", errorLabel: "Alert not dismissed", icon: ClipboardCheck },
+  "tool-post_slack_message": { done: "Posted to Slack", loading: "Posting to Slack", errorLabel: "Slack post failed", icon: Send },
   "tool-set_timer": { done: "Follow-up timer set", loading: "Setting follow-up timer", errorLabel: "Follow-up timer not set", icon: Timer },
 };
 
@@ -74,8 +75,10 @@ export function isHiddenPart(part: { type: string; state?: string }) {
   );
 }
 
+export const isAskPart = (type: string) => type === CLIENT_TOOL_NAMES.ASK_USER;
+
 export function isProviderTool(type: string) {
-  return type.startsWith("tool-") && !(type in SMALL_TOOLS) && !MONITOR_TOOLS.has(type) && !isHiddenPart({ type });
+  return type.startsWith("tool-") && !(type in SMALL_TOOLS) && !MONITOR_TOOLS.has(type) && !isHiddenPart({ type }) && !isAskPart(type);
 }
 
 function isSubAgentOutput(output: unknown): output is SubAgentOutput {

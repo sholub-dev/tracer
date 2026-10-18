@@ -7,9 +7,11 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Markdown } from "../../lib/markdown";
 import type { ProgressStore } from "../../lib/progress-store";
+import type { AskState } from "../../lib/ask-card";
+import { AskCard } from "./AskCard";
 import { FindingCard } from "./FindingCard";
 import { ReasoningBlock } from "./ReasoningBlock";
-import { Narration, OtherToolPart, ProviderStep, isHiddenPart, isMonitorTool, isProviderTool, providerOf, stepQueryCount, type ToolPart } from "./ToolParts";
+import { Narration, OtherToolPart, ProviderStep, isAskPart, isHiddenPart, isMonitorTool, isProviderTool, providerOf, stepQueryCount, type ToolPart } from "./ToolParts";
 import { providerLabel } from "../../lib/providers";
 import { ANSWER_PROSE, ANSWER_PROSE_COMPACT } from "./prose";
 
@@ -62,6 +64,8 @@ function AnswerText({ text, isAnimating, compact }: { text: string; isAnimating:
   return <Markdown text={text} isAnimating={isAnimating} className={compact ? ANSWER_PROSE_COMPACT : ANSWER_PROSE} />;
 }
 
+const CLOSED: AskState = { status: "closed" };
+
 // The AI SDK hands the first render of a reply its live message and later mutates its tool parts in place. A copy keeps
 // the state this render saw, so a memoized tool view does not mistake the mutated part for an unchanged one.
 const snapshot = (part: Part) => ({ ...part }) as ToolPart;
@@ -71,11 +75,16 @@ interface Props {
   isAnimating: boolean;
   progressStore: ProgressStore;
   compact?: boolean;
+  /** State of the reply's question card; it depends on the messages after the reply, so the thread passes it in. */
+  ask?: AskState;
+  onAsk?: (label: string) => void;
 }
+
+const sameAsk = (a?: AskState, b?: AskState) => a?.status === b?.status && (a as { chosen?: number | null } | undefined)?.chosen === (b as { chosen?: number | null } | undefined)?.chosen;
 
 /** One reply: the provider work folds into an "Investigated" section, the answer reads as prose below it. */
 export const MessageParts = React.memo(
-  function MessageParts({ parts, isAnimating, progressStore, compact = false }: Props) {
+  function MessageParts({ parts, isAnimating, progressStore, compact = false, ask = CLOSED, onAsk }: Props) {
     if (parts.length === 0 && !isAnimating) {
       return <p className="text-sm text-muted-foreground">Interrupted before a reply.</p>;
     }
@@ -90,7 +99,7 @@ export const MessageParts = React.memo(
     const answer: Array<{ part: Part; key: string; text?: string }> = [];
     const aside: Array<{ part: Part; key: string }> = [];
     parts.forEach((part, i) => {
-      if (isHiddenPart(part as ToolPart)) return;
+      if (isHiddenPart(part as ToolPart) || isAskPart(part.type)) return;
       if (marker && i === marker.partIdx) {
         if (marker.kind === "text" && part.type === "text") {
           work.push({ part, key: `${i}`, text: part.text.slice(0, marker.charIdx) });
@@ -130,6 +139,7 @@ export const MessageParts = React.memo(
       return <OtherToolPart key={key} part={snapshot(part)} isAnimating={isAnimating} />;
     };
 
+    const asked = parts.findLast((p) => isAskPart(p.type)) as ToolPart | undefined;
     const finding = findingFromMessages([{ parts }]);
     // Settling queries run after the analysis marker, so evidence can cite them too.
     const queries = parts.filter((p) => isProviderTool(p.type)).flatMap((part) => {
@@ -181,12 +191,14 @@ export const MessageParts = React.memo(
             {answer.map(renderAnswer)}
           </>
         )}
+        {asked && <AskCard input={asked.input} state={isAnimating ? CLOSED : ask} onPick={onAsk} compact={compact} />}
       </div>
     );
   },
   (prev, next) => {
     if (prev.isAnimating || next.isAnimating) return false;
     if (prev.compact !== next.compact || prev.progressStore !== next.progressStore) return false;
+    if (!sameAsk(prev.ask, next.ask) || prev.onAsk !== next.onAsk) return false;
     if (prev.parts === next.parts) return true;
     // A tool part changing state keeps the array length but swaps the part object.
     if (prev.parts.length !== next.parts.length) return false;

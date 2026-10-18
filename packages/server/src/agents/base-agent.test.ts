@@ -26,6 +26,7 @@ import { ProviderRegistry as Registry } from "../providers/registry.js";
 import { encodeMessages } from "../lib/messages-codec.js";
 import { UNIFIED_SCOPE } from "@tracer-sh/shared";
 import { reportFindingTool } from "../tools/finding-tool.js";
+import { askUserTool } from "../tools/ask-tool.js";
 import { CONFIG } from "../config.js";
 import { getCurrentDateBlock, getCurrentTimeText } from "../lib/current-context.js";
 import { stampSentTime, withPromptCaching, withSentTimes } from "../llm/prompt-cache.js";
@@ -381,6 +382,31 @@ test("a turn that ran a query and stopped without a finding card gets one extra 
   assert.ok(types.includes("tool-report_finding"));
   assert.equal(r.completed, 1, "follow-up work runs once, after the repair pass");
   assert.equal(r.statusAtRequest[2], "streaming", "the row is not done while the repair pass runs");
+  assert.equal(r.status, "done");
+});
+
+const ASK_CALL_SSE = sse([
+  MESSAGE_START,
+  ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_a", name: "ask_user", input: {} } }],
+  ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ question: "Go deeper?", options: [{ label: "Yes, trace the deploy" }, { label: "No, this is enough", detail: "Stop here" }] }) } }],
+  ...end("tool_use"),
+]);
+
+test("a reply that calls ask_user ends after that step: no further step, no repair pass, no error", async () => {
+  const tools = { ...findingTools, ask_user: askUserTool() };
+  // The script goes on after the ask, so a run that did not stop would send a third request.
+  const r = await retryRun({ script: [TOOL_CALL_SSE, ASK_CALL_SSE, SSE, SSE] }, [0], undefined, tools);
+  assert.equal(r.bodies.length, 2, "nothing follows the ask, not even the finding repair");
+  assert.match(JSON.stringify(r.bodies[0].system), /Asking the person/, "the prompt explains the tool when it is offered");
+  assert.deepEqual(r.failed, []);
+  assert.equal(r.parts.filter((p) => p.type === "error").length, 0);
+  const reply = r.saved.at(-1)!;
+  assert.deepEqual(reply.metadata ?? {}, {}, "the reply holds no error note");
+  const ask = reply.parts.find((p) => p.type === "tool-ask_user") as { state: string; input: { question: string }; output: string };
+  assert.equal(ask.state, "output-available");
+  assert.equal(ask.input.question, "Go deeper?");
+  assert.equal(ask.output, "asked");
+  assert.equal(r.completed, 1);
   assert.equal(r.status, "done");
 });
 
@@ -780,6 +806,25 @@ test("a session start that throws is reported as an error and leaves no run behi
   const result = await startAgentSession(context, { sessionId: "m1", kind: "monitor", message: "check", title: "t" });
   assert.deepEqual(result, { error: "database is locked" });
   assert.equal(context.activeStreams.size, 0, "no stream is leaked");
+});
+
+test("a restart does not resume a reply that already ends with a question to the person", async () => {
+  const { server, url, bodies } = await fakeAnthropic();
+  process.env.ANTHROPIC_BASE_URL = url;
+  try {
+    const db = memoryDb();
+    await db.insert(schema.providerConfigs).values({ type: "anthropic", config: JSON.stringify({ apiKey: "test" }) }).run();
+    await writeAppSetting(db, SETTINGS_KEYS.chatModel, { provider: "anthropic", modelId: "claude-test" });
+    const context: Context = { db, providers: new Registry(), activeStreams: new Map() };
+    const asked: UIMessage[] = [...INTERRUPTED.slice(0, 1), { id: "", role: "assistant", parts: [{ type: "step-start" }, { type: "tool-ask_user", toolCallId: "toolu_a", state: "output-available", input: { question: "Go deeper?", options: [{ label: "Yes" }, { label: "No" }] }, output: "asked" }] }];
+    await interruptedSession(db, { messages: encodeMessages(asked) });
+    const { row } = await resumeAfterRestart(db, context);
+    assert.equal(bodies.length, 0, "the model is not called");
+    assert.equal(row?.status, "done");
+  } finally {
+    delete process.env.ANTHROPIC_BASE_URL;
+    server.close();
+  }
 });
 
 test("a restart leaves a session alone when another run already owns it", async () => {

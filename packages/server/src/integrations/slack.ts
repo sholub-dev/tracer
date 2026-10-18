@@ -216,6 +216,12 @@ export function triageUpdate(u: { name: string; action: string; ping: boolean; m
   return { text, blocks: [{ type: "section", text: { type: "mrkdwn", text } }] };
 }
 
+/** Post for free text from the agent: redacted and escaped, so it carries no link, id or mention. */
+export function messagePost(text: string): SlackPayload | null {
+  const body = clip(escape(redact(text)), SECTION_MAX_CHARS);
+  return body ? { text: body, blocks: [{ type: "section", text: { type: "mrkdwn", text: body } }] } : null;
+}
+
 /** Post for a re-check of an alert; the text names no earlier post. */
 export function recheckUpdate(u: { name: string; headline: string; state?: string; action?: string; ping: boolean; mentions?: string }): SlackPayload {
   const head = `${mentionsFor(u.mentions, u.ping)}*${escape(redact(u.name))}*`;

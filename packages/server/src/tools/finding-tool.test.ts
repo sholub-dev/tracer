@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { SESSION_KIND, findingFromMessages, findingMarkdown } from "@tracer-sh/shared";
+import { findingFromMessages, findingMarkdown } from "@tracer-sh/shared";
 import { WRITE_TOOLS } from "./tool-gate.js";
 import { withSessionTools } from "./chat-tools.js";
 import type { Db } from "../db/driver.js";
@@ -35,19 +35,17 @@ test("findingFromMessages skips invalid input and unfinished calls", () => {
   assert.equal(findingFromMessages([]), null);
 });
 
-test("every session kind gets report_finding", () => {
-  const db = {} as Db;
-  for (const kind of [undefined, SESSION_KIND.API, SESSION_KIND.MONITOR]) assert.ok("report_finding" in withSessionTools({}, db, "s", kind), String(kind));
+test("every session gets report_finding", () => {
+  assert.ok("report_finding" in withSessionTools({}, {} as Db, "s"));
   assert.ok(WRITE_TOOLS.has("report_finding"));
 });
 
-test("monitor runs leave the New Relic issue actions to triage", () => {
-  const provider = { execute_nrql: {}, list_nr_issues: {}, ack_nr_issue: {}, close_nr_issue: {} };
-  const db = {} as Db;
-  const chat = withSessionTools(provider, db, "s");
-  for (const name of ["execute_nrql", "list_nr_issues", "ack_nr_issue", "close_nr_issue", "set_timer", "report_finding"]) assert.ok(name in chat, name);
-  const monitor = withSessionTools(provider, db, "s", SESSION_KIND.MONITOR, { report_alert_summary: {} });
-  assert.deepEqual(Object.keys(monitor).sort(), ["execute_nrql", "list_nr_issues", "report_alert_summary", "report_finding", "set_timer"]);
+test("scoped extras override the general tool of the same name", () => {
+  const provider = { execute_nrql: {}, ack_nr_issue: { id: "general" }, close_nr_issue: { id: "general" } };
+  const tools = withSessionTools(provider, {} as Db, "s", { close_nr_issue: { id: "scoped" }, report_alert_summary: {} });
+  assert.deepEqual(tools.close_nr_issue, { id: "scoped" });
+  assert.deepEqual(tools.ack_nr_issue, { id: "general" });
+  assert.deepEqual(Object.keys(tools).sort(), ["ack_nr_issue", "ask_user", "close_nr_issue", "execute_nrql", "report_alert_summary", "report_finding", "set_timer"]);
 });
 
 test("findingMarkdown renders the new sections and skips empty ones", () => {
@@ -90,18 +88,3 @@ test("findingMarkdown appends the query title to an evidence line", () => {
   assert.match(md, /- a 1 \(query: Pool usage\)/);
 });
 
-test("runs with no person present lack add_jira_comment and the unscoped issue actions", () => {
-  const provider = { execute_nrql: {}, ack_nr_issue: {}, close_nr_issue: {}, add_jira_comment: {} };
-  const db = {} as Db;
-  const chat = withSessionTools(provider, db, "s", undefined, {}, false);
-  for (const name of ["ack_nr_issue", "close_nr_issue", "add_jira_comment"]) assert.ok(name in chat, name);
-  const runs = [
-    withSessionTools(provider, db, "s", SESSION_KIND.MONITOR),
-    withSessionTools(provider, db, "s", SESSION_KIND.API),
-    withSessionTools(provider, db, "s", undefined, {}, true),
-  ];
-  for (const tools of runs) {
-    assert.deepEqual(Object.keys(tools).sort(), ["execute_nrql", "report_finding", "set_timer"]);
-  }
-  assert.ok("close_nr_issue" in withSessionTools(provider, db, "s", SESSION_KIND.MONITOR, { close_nr_issue: {} }, true));
-});

@@ -10,7 +10,7 @@ import type { ProviderRegistry } from "../providers/registry.js";
 import { CONFIG } from "../config.js";
 import { NewRelicProvider } from "../providers/newrelic/newrelic.provider.js";
 import type { AiIssue } from "../providers/newrelic/nerdgraph.client.js";
-import { applyTriage, checkWatches, closedCheckPrompt, decide, issuesPrompt, monitorIssueTools, incidentQuery, incidentRefs, reportIssueStatusTool, wakeupExtras, type DecideInput } from "./triage.js";
+import { applyTriage, checkWatches, TRIAGE_EFFECT, closedCheckPrompt, decide, issuesPrompt, monitorIssueTools, incidentQuery, incidentRefs, reportIssueStatusTool, wakeupExtras, type DecideInput } from "./triage.js";
 import { buildMessage, firingRerun } from "./scheduler.js";
 import { writeSlackConfig } from "../integrations/slack.js";
 import { MONITOR_ROLE } from "./alert-summary.js";
@@ -401,10 +401,14 @@ test("a firing whose every attempt failed posts once and keeps its issues for a 
   });
 });
 
-test("a failed follow-up run keeps its issues watched and, when the alert was ongoing, sets another check", async () => {
+test("a failed follow-up run drops its unsaved verdicts, re-arms nothing and hands its issues to a person", async () => {
   const { context, resolved } = fakeNewRelic({ a: "ACTIVATED" });
   await context.db.update(schema.monitorTriggers).set({ triggeredAt: nowSeconds() }).run();
-  await report(context.db, { severity: "low", state: "ongoing" });
+  await setMessages(context.db, [
+    text("user", "Monitor triggered"),
+    { id: "", role: "assistant", parts: [call({ severity: "low", state: "ongoing" })] },
+    text("user", "Follow-up timer (set 10:00, due 10:05, now 10:06): check."),
+  ]);
   await addIssue(context.db, "a", { state: "watching", verdict: "ongoing", severity: "low", watchUntil: nowSeconds() + 3600 });
   const extras = await wakeupExtras(context, "s1");
   const t = extras.tools!.report_issue_status as ReturnType<typeof reportIssueStatusTool>;
@@ -412,11 +416,13 @@ test("a failed follow-up run keeps its issues watched and, when the alert was on
   await withSlack(context.db, async (posts) => {
     await writeSlackConfig(context.db, { webhookUrl: "https://hooks.slack.com/services/T/B/x", mentions: "@here" });
     extras.onComplete!({ error: "Overloaded" });
-    await settle(async () => !!await timerOf(context.db));
-    assert.equal(posts.length, 0);
+    await settle(() => false);
+    assert.equal(posts.length, 1);
+    assert.match(posts[0], HANDOVER);
+    assert.equal(await timerOf(context.db), undefined);
   });
   const row = (await context.db.select().from(schema.alertIssues).get())!;
-  assert.equal(row.state, "watching");
+  assert.equal(row.state, "left_open");
   assert.equal(row.verdict, null);
   assert.deepEqual(resolved, []);
 });
@@ -478,6 +484,7 @@ for (const notify of [true, false]) {
     const { context } = fakeNewRelic({});
     await context.db.update(schema.monitorTriggers).set({ triggeredAt: nowSeconds() }).run();
     await report(context.db, { ...SLACK_REPORT, notify });
+    await addTimer(context.db);
     await withSlack(context.db, async (posts) => {
       await writeSlackConfig(context.db, { webhookUrl: "https://hooks.slack.com/services/T/B/x", mentions: "@here" });
       (await wakeupExtras(context, "s1")).onComplete!({});
@@ -507,16 +514,15 @@ test("a completed wake-up posts nothing without Slack, and a failed one posts no
   assert.equal(posted, 0);
 });
 
-test("an ongoing report without a timer gets one at the follow-up interval; a set timer stays", async () => {
+test("an ongoing report sets no timer; the timer of the agent stays and a resolved report adds none", async () => {
   const { context } = fakeNewRelic({});
   await context.db.update(schema.monitorTriggers).set({ triggeredAt: nowSeconds() }).run();
   await report(context.db, { severity: "low", state: "ongoing" });
   (await wakeupExtras(context, "s1")).onComplete!({});
-  await settle(async () => !!await timerOf(context.db));
-  const due = (await timerOf(context.db))!.fireAt!;
-  assert.ok(Math.abs(due - nowSeconds() - CONFIG.timerFollowUpMinutes * 60) < 5);
+  await settle(() => false);
+  assert.equal(await timerOf(context.db), undefined);
 
-  await context.db.update(schema.sessionTimers).set({ fireAt: nowSeconds() + 3000 }).run();
+  await context.db.insert(schema.sessionTimers).values({ sessionId: "s1", fireAt: nowSeconds() + 3000, note: "n", setAt: 0 }).run();
   (await wakeupExtras(context, "s1")).onComplete!({});
   await settle(() => false);
   assert.ok(Math.abs((await timerOf(context.db))!.fireAt! - nowSeconds() - 3000) < 5);
@@ -590,7 +596,7 @@ test("a paused monitor or one with alerts off keeps no follow-up timer", async (
     const { context } = fakeNewRelic({});
     await context.db.update(schema.monitors).set(off).run();
     await addTimer(context.db);
-    assert.equal(await ensureFollowUp(context, "s1", { severity: "low", state: "ongoing" }), false);
+    assert.equal(await ensureFollowUp(context, "s1", { severity: "low", state: "ongoing" }), null);
     assert.equal(await timerOf(context.db), undefined);
 
     await addTimer(context.db);
@@ -692,18 +698,6 @@ test("an interrupted firing that never reported posts one Investigation failed l
   });
 });
 
-test("an interrupted wake-up keeps the re-check chain", async () => {
-  const { context } = fakeNewRelic({});
-  await context.db.update(schema.monitorTriggers).set({ triggeredAt: nowSeconds(), reported: "done" }).run();
-  await setMessages(context.db, [
-    text("user", "Monitor triggered"),
-    { id: "", role: "assistant", parts: [call({ severity: "high", state: "ongoing" })] },
-    text("user", "Follow-up timer (set 10:00, due 10:05, now 10:06): check. Check it now."),
-  ]);
-  await settleMonitorRun(context, "s1", "Interrupted by a restart");
-  assert.ok(await timerOf(context.db));
-});
-
 test("a completed run acks the issues still open and unacked in New Relic when triage is on", async () => {
   const { context, acked } = fakeNewRelic({ a: "ACTIVATED", b: "CLOSED", c: "ACTIVATED" });
   for (const id of ["a", "b", "c"]) await addIssue(context.db, id);
@@ -742,4 +736,138 @@ test("a wake-up turn is still one when a steered message trails it", async () =>
   const text = (t: string, extra: object = {}) => ({ id: "", role: "user", parts: [{ type: "text", text: t }], ...extra }) as never;
   const messages = [text(`${WAKEUP_MARK}1 of 3)`), { id: "", role: "assistant", parts: [] } as never, text("look at x", { metadata: { steered: true } })];
   assert.equal(isWakeupTurn(messages), true);
+});
+
+const HANDOVER = /Tracer stopped re-checking\. A person needs to look\./;
+
+test("an ongoing report with no timer sets none and posts one hand-over line with a ping", async () => {
+  const { context } = fakeNewRelic({});
+  await context.db.update(schema.monitorTriggers).set({ triggeredAt: nowSeconds() }).run();
+  await report(context.db, { ...SLACK_REPORT, notify: false });
+  await addIssue(context.db, "a", { state: "watching", verdict: "ongoing", severity: "low", watchUntil: nowSeconds() + 3600 });
+  await withSlack(context.db, async (posts) => {
+    await writeSlackConfig(context.db, { webhookUrl: "https://hooks.slack.com/services/T/B/x", mentions: "@here" });
+    (await wakeupExtras(context, "s1")).onComplete!({});
+    await settle(() => posts.length > 0);
+    await checkWatches(context);
+    await settle(() => false);
+    assert.equal(await timerOf(context.db), undefined);
+    assert.equal(posts.length, 1, "one post for the run, none from the watch sweep");
+    assert.match(posts[0], HANDOVER);
+    assert.ok(posts[0].includes("<!here>"));
+    assert.equal((await context.db.select().from(schema.alertIssues).get())?.state, "left_open");
+  });
+});
+
+test("an ongoing report with a timer of the agent posts no hand-over line", async () => {
+  const { context } = fakeNewRelic({});
+  await context.db.update(schema.monitorTriggers).set({ triggeredAt: nowSeconds() }).run();
+  await report(context.db, { ...SLACK_REPORT, notify: false });
+  await addTimer(context.db);
+  await withSlack(context.db, async (posts) => {
+    await writeSlackConfig(context.db, { webhookUrl: "https://hooks.slack.com/services/T/B/x", mentions: "@here" });
+    (await wakeupExtras(context, "s1")).onComplete!({});
+    await settle(() => posts.length > 0);
+    assert.equal(posts.length, 1);
+    assert.doesNotMatch(posts[0], HANDOVER);
+    assert.equal(posts[0].includes("<!here>"), false);
+    assert.ok(await timerOf(context.db));
+  });
+});
+
+test("a first run that reports ongoing with no timer posts one card with the hand-over line and a ping", async () => {
+  const { context } = fakeNewRelic({});
+  await context.db.update(schema.monitorTriggers).set({ triggeredAt: nowSeconds() }).run();
+  await report(context.db, { ...SLACK_REPORT, notify: false });
+  await withSlack(context.db, async (posts) => {
+    await writeSlackConfig(context.db, { webhookUrl: "https://hooks.slack.com/services/T/B/x", mentions: "@here" });
+    (await firingRerun(context, "s1"))!.onComplete({});
+    await settle(() => posts.length > 0);
+    assert.equal(posts.length, 1);
+    assert.match(posts[0], HANDOVER);
+    assert.ok(posts[0].includes("<!here>"));
+    assert.equal(await timerOf(context.db), undefined);
+  });
+});
+
+test("closed issues end the loop: the timer is dropped and a due timer does not wake the session", async () => {
+  const { context } = fakeNewRelic({});
+  await context.db.update(schema.monitorTriggers).set({ triggeredAt: nowSeconds() }).run();
+  await addIssue(context.db, "a", { state: "closed" });
+  await addIssue(context.db, "b", { state: "left_open" });
+  await addTimer(context.db);
+  const end = await ensureFollowUp(context, "s1", { severity: "low", state: "ongoing" });
+  assert.equal(await timerOf(context.db), undefined);
+  assert.equal(end, null);
+
+  await addTimer(context.db);
+  await context.db.update(schema.sessionTimers).set({ fireAt: 1 }).run();
+  const started: StartSessionOptions[] = [];
+  await fireDueTimers(context, async (_c, options) => { started.push(options); return { ok: true }; });
+  assert.equal(started.length, 0);
+  assert.equal(await timerOf(context.db), undefined);
+
+  await addIssue(context.db, "c", { state: "watching" });
+  await addTimer(context.db);
+  await context.db.update(schema.sessionTimers).set({ fireAt: 1 }).run();
+  await fireDueTimers(context, async (_c, options) => { started.push(options); return { ok: true }; });
+  assert.equal(started.length, 1, "one open issue keeps the loop");
+});
+
+test("the 24h line names the last reported state", async () => {
+  const { context } = fakeNewRelic({});
+  await context.db.update(schema.monitorTriggers).set({ triggeredAt: nowSeconds() - CONFIG.triageWatchMaxSeconds - 60 }).run();
+  await report(context.db, { ...SLACK_REPORT, state: "unclear", notify: false });
+  await addTimer(context.db);
+  await withSlack(context.db, async (posts) => {
+    await writeSlackConfig(context.db, { webhookUrl: "https://hooks.slack.com/services/T/B/x", mentions: "@here" });
+    (await wakeupExtras(context, "s1")).onComplete!({});
+    await settle(() => posts.length > 1);
+    assert.equal(posts.length, 2);
+    assert.match(posts[1], /Still unclear after 24h\. Re-checks stopped\./);
+  });
+});
+
+test("a failed wake-up re-arms nothing from an older ongoing report and hands the alert to a person", async () => {
+  const { context } = fakeNewRelic({});
+  await context.db.update(schema.monitorTriggers).set({ triggeredAt: nowSeconds(), reported: "done" }).run();
+  await setMessages(context.db, [
+    text("user", "Monitor triggered"),
+    { id: "", role: "assistant", parts: [call({ severity: "high", state: "ongoing" })] },
+    text("user", "Follow-up timer (set 10:00, due 10:05, now 10:06): check."),
+  ]);
+  await withSlack(context.db, async (posts) => {
+    await writeSlackConfig(context.db, { webhookUrl: "https://hooks.slack.com/services/T/B/x", mentions: "@here" });
+    await settleMonitorRun(context, "s1", "Interrupted by a restart");
+    // A re-check that failed before it reported must not end the watch unseen.
+    assert.equal(posts.length, 1);
+    assert.match(posts[0], HANDOVER);
+    assert.equal(await timerOf(context.db), undefined);
+  });
+
+  await setMessages(context.db, [
+    text("user", "Monitor triggered"),
+    { id: "", role: "assistant", parts: [call({ ...SLACK_REPORT, notify: false })] },
+    text("user", "Follow-up timer (set 10:00, due 10:05, now 10:06): check."),
+    { id: "", role: "assistant", parts: [call({ ...SLACK_REPORT, notify: false })] },
+  ]);
+  await withSlack(context.db, async (posts) => {
+    await writeSlackConfig(context.db, { webhookUrl: "https://hooks.slack.com/services/T/B/x", mentions: "@here" });
+    await settleMonitorRun(context, "s1", "Interrupted by a restart");
+    assert.equal(posts.length, 1);
+    assert.match(posts[0], HANDOVER);
+    assert.equal(await timerOf(context.db), undefined);
+  });
+});
+
+test("the prompts name the three outcomes and the wake-up does not presume the alert is ongoing", async () => {
+  assert.match(MONITOR_ROLE, /Resolved:.*Handed to a person:.*Still changing:/);
+  assert.match(MONITOR_ROLE, /whole episode/);
+  const { context } = fakeNewRelic({});
+  await addIssue(context.db, "a", { state: "closed" });
+  await addIssue(context.db, "b", { state: "watching", watchUntil: nowSeconds() + 3600 });
+  const lines = (await wakeupExtras(context, "s1")).lines.join("\n");
+  assert.match(lines, /Tracer already closed this issue of the alert: Errors\./);
+  assert.doesNotMatch(lines, /since the last check only/);
+  assert.doesNotMatch(TRIAGE_EFFECT, /follow up with a timer/);
 });

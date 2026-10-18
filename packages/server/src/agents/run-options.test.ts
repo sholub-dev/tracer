@@ -9,6 +9,7 @@ import { UNIFIED_SCOPE } from "@tracer-sh/shared";
 import type { Context } from "../trpc/context.js";
 import { buildRunOptions, chatRunOptions } from "./chat-run.js";
 import { settleInterruptedRuns } from "./resume.js";
+import { writeSlackConfig } from "../integrations/slack.js";
 import { isWakeupTurn } from "../monitors/triage.js";
 
 async function env() {
@@ -38,12 +39,15 @@ test("user chat and unattended runs use their own retry delays", async () => {
   assert.equal((await chatRunOptions(context, "s1")).retryDelaysMs, CONFIG.chatRetryDelaysMs);
 });
 
-test("a chat turn inside a monitor session has no unscoped ack or close tool", async () => {
-  const { context } = await env();
-  await context.db.update(monitorTriggers).set({ reported: "done" }).run();
-  const tools = await collect(await chatRunOptions(context, "s1"));
-  assert.equal(tools.close_nr_issue, undefined);
-  assert.ok(tools.query && tools.set_timer && tools.report_finding);
+test("a monitor session and an interactive session get the same tools", async () => {
+  const { db, context } = await env();
+  await writeSlackConfig(db, { webhookUrl: "https://hooks.slack.com/services/T/B/x" });
+  await db.update(monitorTriggers).set({ reported: "done" }).run();
+  const names = async (options: Awaited<ReturnType<typeof buildRunOptions>>) => Object.keys(await collect(options)).sort();
+  const monitor = await names(await buildRunOptions(context, { sessionId: "s1", kind: "monitor", scope: UNIFIED_SCOPE }));
+  const chat = await names(await buildRunOptions(context, { sessionId: "s1", scope: UNIFIED_SCOPE, interactive: true }));
+  assert.deepEqual(monitor, chat);
+  for (const name of ["query", "close_nr_issue", "set_timer", "report_finding", "ask_user", "post_slack_message"]) assert.ok(monitor.includes(name), name);
 });
 
 test("a monitor run gets its extras and its completion hook, also when resumed", async () => {

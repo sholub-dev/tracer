@@ -16,7 +16,7 @@ type RunOptions = Pick<ChatAgentConfig, "collectTools" | "sessionTitle" | "retry
 
 export interface RunSpec {
   sessionId: string;
-  /** chat_sessions.kind. A monitor session loses the unscoped ack/close tools, also for a chat turn. */
+  /** chat_sessions.kind. A monitor session gets its firing's re-run hooks. */
   kind?: SessionKind | string | null;
   /** chat_sessions.runScope: a provider name, the unified sentinel or the monitor builder marker. */
   scope?: string | null;
@@ -66,7 +66,7 @@ export async function buildRunOptions(context: Context, spec: RunSpec): Promise<
       const readPast = await pastSessionToolFor(context.db, sessionId);
       return {
         ...collected,
-        tools: withSessionTools(collected.tools, context.db, sessionId, (kind ?? undefined) as SessionKind | undefined, { ...(readPast ? { read_past_session: readPast } : {}), ...rerun?.tools, ...extras }, !interactive),
+        tools: withSessionTools(collected.tools, context.db, sessionId, { ...(readPast ? { read_past_session: readPast } : {}), ...rerun?.tools, ...extras }),
         afterComplete,
       };
     },

@@ -5,14 +5,14 @@ import { eq } from "drizzle-orm";
 import { createNodeDb } from "../db/node-db.js";
 import { runSetup } from "../db/setup.js";
 import { writeAppSetting } from "../db/config-reader.js";
-import { alertIssues, monitors, monitorTriggers } from "../db/schema.js";
+import { alertIssues, chatSessions, monitors, monitorTriggers, sessionTimers } from "../db/schema.js";
 import { SETTINGS_KEYS } from "../config.js";
 import type { Context } from "../trpc/context.js";
 import type { StartSessionOptions } from "../agents/start-session.js";
 import { NewRelicProvider } from "../providers/newrelic/newrelic.provider.js";
 import type { AiIssue } from "../providers/newrelic/nerdgraph.client.js";
 import { recordIssues, reportIssueStatusTool } from "./triage.js";
-import { runDueMonitors, runMonitorsNow } from "./scheduler.js";
+import { resolveFiring, runDueMonitors, runMonitorsNow } from "./scheduler.js";
 
 // The tests and the scheduler both read the clock; a 5-minute boundary between those reads would shift the window.
 before(() => {
@@ -25,6 +25,12 @@ const QUERY = "SELECT count(*) FROM NrAiIncident WHERE event = 'open' FACET cond
 const now = () => Math.floor(Date.now() / 1000);
 // The window the scheduler evaluates right now: the latest 5-minute boundary at least one lag ago.
 const windowEndNow = () => Math.floor((now() - 60) / 300) * 300;
+
+// A firing that would start a session first waits for a Yes or No; these tests press Yes.
+async function confirmAll(context: Context, start: Parameters<typeof resolveFiring>[3]) {
+  const pending = await context.db.select({ id: monitorTriggers.id }).from(monitorTriggers).where(eq(monitorTriggers.status, "pending")).all();
+  for (const { id } of pending) await resolveFiring(context, id, "start", start);
+}
 
 const issue = (id: string, state = "ACTIVATED") =>
   ({ issueId: id, state, incidentIds: ["inc1"], title: [`Title ${id}`], conditionName: ["Errors"] }) as AiIssue;
@@ -46,8 +52,11 @@ async function env(issues: AiIssue[], { triage = true, query = QUERY }: { triage
   const providers = { whenLoaded: async () => {}, reconnectDisconnected: async () => {}, getProvider: () => provider, getAllProviders: () => [provider] };
   const context = { db, providers, activeStreams: new Map() } as unknown as Context;
   const started: StartSessionOptions[] = [];
-  const run = (result: { ok: true } | { error: string } = { ok: true }) =>
-    runDueMonitors(context, async (_c, options) => { started.push(options); return result; });
+  const run = async (result: { ok: true } | { error: string } = { ok: true }) => {
+    const start = async (_c: Context, options: StartSessionOptions) => { started.push(options); return result; };
+    await runDueMonitors(context, start);
+    await confirmAll(context, start);
+  };
   // The other device's earlier firing, as sync delivers it.
   const syncedFiring = async (fields: Partial<typeof monitorTriggers.$inferInsert> = {}) => {
     await db.insert(monitorTriggers).values({
@@ -186,12 +195,31 @@ test("a crossing while the latest session still runs is recorded as muted and it
   assert.equal(started.length, 1, "the next crossing starts a session once the run ended");
 });
 
+test("a crossing while an earlier session of the monitor has a pending re-check is muted; once it has none, a new session starts", async () => {
+  const { db, started, run, syncedFiring } = await env([], { triage: false });
+  await syncedFiring({ deviceId: await deviceId(db), triggeredAt: now() - 600, windowStart: windowEndNow() - 600, windowEnd: windowEndNow() - 300 });
+  await db.insert(chatSessions).values({ id: "s0", title: "Firing", messages: "[]", createdAt: now(), updatedAt: now() }).run();
+  await db.insert(sessionTimers).values({ sessionId: "s0", fireAt: now() + 300, note: "check", setAt: now() }).run();
+  await run();
+  assert.equal(started.length, 0);
+  const muted = (await db.select().from(monitorTriggers).all()).find((t) => t.id !== "t0")!;
+  assert.equal(muted.status, "muted");
+  assert.ok((await db.select().from(monitors).get())!.lastCheckedAt);
+
+  await db.delete(sessionTimers).run();
+  await db.update(monitors).set({ lastCheckedAt: null }).run();
+  await run();
+  assert.equal(started.length, 1);
+});
+
 test("a session start that throws leaves no firing, issue or session row, and the window is retried", async () => {
   const { db, context } = await env([issue("i1")]);
   const quiet = console.error;
   console.error = () => {};
   try {
-    await runDueMonitors(context, async () => { throw new Error("db busy"); });
+    const throwing = async () => { throw new Error("db busy"); };
+    await runDueMonitors(context, throwing);
+    await confirmAll(context, throwing);
   } finally {
     console.error = quiet;
   }
@@ -199,5 +227,7 @@ test("a session start that throws leaves no firing, issue or session row, and th
   assert.deepEqual(await db.select().from(alertIssues).all(), []);
   const monitor = (await db.select().from(monitors).get())!;
   assert.equal(monitor.lastStatus, "error");
-  assert.equal(monitor.lastCheckedAt, null);
+  assert.equal(monitor.lastCheckedAt, windowEndNow() - 300, "back at the window start, so the window is checked again");
+  await runDueMonitors(context, async () => ({ ok: true }));
+  assert.deepEqual(await db.select().from(monitorTriggers).all(), [], "the retry waits for the next clock boundary, not the next tick");
 });

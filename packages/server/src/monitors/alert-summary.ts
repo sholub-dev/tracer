@@ -8,7 +8,7 @@ export const SLACK_RULE = "This text is posted to Slack as written: state facts 
 export const SEVERITIES = ["high", "medium", "low"] as const;
 export const ALERT_STATES = ["ongoing", "resolved", "unclear"] as const;
 
-export const MONITOR_ROLE = "You own this alert until it is resolved. If the data up to now shows it stopped: close it when your close tools are listed, otherwise state it stopped. If it is ongoing: call set_timer to check again; choose the interval from the impact (shorter when users are affected). On each re-check, look at the data since the last check, then resolve or set the next timer.";
+export const MONITOR_ROLE = "You own this alert until it needs no more attention. On each re-check, look at the whole episode up to now and compare it with your earlier reports, not only the time since the last check. Ask whether another look can change what a person does. If not, end it in one of two ways. Resolved: the value is back to its normal level (the level before the spike) and stays there. Report resolved, and close the issues when your close tools are listed. If the cause is in a system this alert does not cover and the value is back to its normal level, report resolved and name that system. Handed to a person: the problem is still present but more watching cannot change anything (it is stable, not worsening, or its cause is outside what this alert covers). Report ongoing, set no timer, and say why in the headline. Still changing: only then call set_timer, and choose the interval from how fast the value changes and the impact.";
 
 /** The step that reports the alert; Slack posts the details only when Slack is connected. */
 export function summaryInstruction(slack: boolean): string {
@@ -21,13 +21,13 @@ const baseFields = {
   severity: z.enum(SEVERITIES)
     .describe("high: outage, users blocked or a key flow degraded; medium: limited impact; low: noise or no user impact"),
   state: z.enum(ALERT_STATES)
-    .describe("ongoing: errors in the latest minutes up to now; resolved: stopped; unclear: the data does not show it"),
+    .describe("ongoing: the problem is present in the latest minutes, as errors or as a value outside its normal level; resolved: back to its normal level (the level before the spike) and staying there; unclear: the data does not show it"),
 };
 
 const slackFields = {
   policy: z.string().describe("The name of the alert policy or condition that fired, never an id"),
   started: z.string().describe("The first bad minute, time and time zone only, e.g. 22:14 PDT"),
-  status: z.string().describe("One of: ongoing; stopped at <time>; recurring <pattern, e.g. hourly since 06:00>. At most 6 words. Check the data up to now."),
+  status: z.string().describe("One of: ongoing; back to normal at <time>; recurring <pattern, e.g. hourly since 06:00>. At most 6 words. Check the data up to now."),
   issues: z.array(z.object({
     service: z.string(),
     endpoint: z.string().describe("Route pattern such as /loans/{id}"),
@@ -35,7 +35,7 @@ const slackFields = {
     userImpact: z.string().describe("What the user sees, or exactly \"none\""),
     journeyStep: z.string().describe("The user journey step, or exactly \"none\""),
   })).max(5).describe("Up to 3, one per endpoint, largest first"),
-  notify: z.boolean().describe("Ping the people tagged in Slack: true when the impact needs a person now; on a re-check, true while it is still ongoing with user impact"),
+  notify: z.boolean().describe("Ping the people tagged in Slack: true when the impact needs a person now, including a hand-over to a person; false on a re-check that found nothing new"),
 };
 
 // Saved reports can lack the Slack fields (no Slack when written) or the state (older sessions).

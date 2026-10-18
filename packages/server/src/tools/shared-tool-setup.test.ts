@@ -8,6 +8,7 @@ import type { ProviderRegistry } from "../providers/registry.js";
 import { writeAppSetting } from "../db/config-reader.js";
 import { writeJiraConfig } from "../integrations/jira/config.js";
 import { DEFAULTS, SETTINGS_KEYS } from "../config.js";
+import { writeSlackConfig } from "../integrations/slack.js";
 import { collectBaseTools } from "./shared-tool-setup.js";
 
 function memoryDb(): Db {
@@ -70,4 +71,18 @@ test("with a provider tool the unified prompt is the full prompt and includes Ji
   assert.match(setup.systemPrompt!, /Response Format/);
   assert.match(setup.systemPrompt!, /## Jira/);
   assert.deepEqual(setup.providerTypes, ["newrelic"]);
+});
+
+test("Slack adds post_slack_message and its prompt fragment to chat, and not to the builder", async () => {
+  const db = memoryDb();
+  await writeSlackConfig(db, { webhookUrl: "https://hooks.slack.com/services/T/B/x" });
+  for (const mode of ["unified", "direct"] as const) {
+    const setup = await collectBaseTools(fakeRegistry([provider]), db, undefined, mode, undefined, true);
+    assert.ok("post_slack_message" in setup.tools);
+    assert.match(setup.systemPrompt!, /post_slack_message/);
+  }
+  const none = await collectBaseTools(fakeRegistry([]), db, undefined, "unified", undefined, true);
+  assert.match(none.systemPrompt!, /No observability providers[\s\S]*## Slack/);
+  assert.equal("post_slack_message" in (await collectBaseTools(fakeRegistry([provider]), db, undefined, "unified")).tools, false);
+  assert.equal("post_slack_message" in (await collectBaseTools(fakeRegistry([provider]), memoryDb(), undefined, "unified", undefined, true)).tools, false);
 });

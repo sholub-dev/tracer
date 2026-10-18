@@ -31,7 +31,7 @@ export async function putTimer(db: Db, sessionId: string, minutes: number, note:
 
 export function setTimerTool(db: Db, sessionId: string): Tool<TimerInput, TimerResult> {
   return tool({
-    description: `Wake this chat later to follow up. Use it only when a follow-up is truly needed (e.g. an issue may recover, a deploy is rolling out). For a live incident wait ${CONFIG.timerFollowUpMinutes} minutes; checking too often beats waiting too long.`,
+    description: "Wake this chat later to follow up. Use it only when a follow-up is truly needed (e.g. the value is still changing, a deploy is rolling out). Choose the interval from how fast the value changes and the impact. Set none when the alert is resolved or handed to a person.",
     inputSchema: z.object({
       minutes: z.number().describe(`Minutes from now, ${CONFIG.timerMinMinutes} to ${CONFIG.timerMaxMinutes}; 0 cancels the pending timer`),
       note: z.string().describe("What to check when it fires; no customer data"),

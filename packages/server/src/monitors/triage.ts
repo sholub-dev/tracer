@@ -13,7 +13,7 @@ import { buildIssueActionTool } from "../providers/newrelic/tools.js";
 import { clip, postSlack, readSlackConfig, triageUpdate } from "../integrations/slack.js";
 import { hasPendingTimer } from "../tools/timer-tool.js";
 import { MONITOR_ROLE, reportAlertSummaryTool, SEVERITIES, SLACK_RULE, summaryInstruction } from "./alert-summary.js";
-import { ensureFollowUp, postExpiry, postRecheck } from "./follow-up.js";
+import { ensureFollowUp, postEnd, postRecheck } from "./follow-up.js";
 import { outcomeSummary, readOutcome, saveOutcome } from "./repeats.js";
 import { withTimeout } from "../lib/with-timeout.js";
 
@@ -30,7 +30,7 @@ const ISSUE_LOOKBACK_SECONDS = 6 * 3600;
 const PENDING_STALE_SECONDS = 3600;
 const TITLE_MAX_CHARS = 150;
 const REASON_MAX_CHARS = 200;
-const TERMINAL_STATES = ["closed", "nr_closed", "left_open"];
+export const TERMINAL_STATES = ["closed", "nr_closed", "left_open"];
 
 /** Settings switch, off by default: when off, monitors only post their analysis. */
 export async function triageEnabled(db: Db): Promise<boolean> {
@@ -125,8 +125,8 @@ const issueList = (issues: ListedIssue[], closes: Map<string, number> = new Map(
   });
 
 // In the tool result too, so later chat turns can explain what the report did in New Relic.
-export const TRIAGE_EFFECT = "Alert triage is on: you act on these issues yourself. close_nr_issue acks and closes a stopped issue in New Relic, which closes its JSM alert. Tracer records what happened and reports it after the run. Ongoing or recurring: leave the issue open and follow up with a timer. Unknown: leave it open; people are pinged.";
-const REPORT_INSTRUCTION = "for each issue id above that a query result up to now shows stopped (no error since a time you name in reason), call close_nr_issue alone in its own step: it acks first, then closes. Then call report_issue_status once with the severity and, for each issue id above, its status: stopped, ongoing, recurring or unknown. Without that result, use unknown and close nothing. An issue that keeps coming back after closes is usually recurring: decide from the data whether closing it again helps, and say why in the reason.";
+export const TRIAGE_EFFECT = "Alert triage is on: you act on these issues yourself. close_nr_issue acks and closes a stopped issue in New Relic, which closes its JSM alert. Tracer records what happened and reports it after the run. Ongoing or recurring: leave the issue open; set a timer only while the value is still changing, otherwise it is handed to a person and people are pinged. Unknown: leave it open; people are pinged.";
+const REPORT_INSTRUCTION = "for each issue id above that a query result up to now shows stopped (no error, or the value back to its normal level, since a time you name in reason), call close_nr_issue alone in its own step: it acks first, then closes. Then call report_issue_status once with the severity and, for each issue id above, its status: stopped, ongoing, recurring or unknown. Without that result, use unknown and close nothing. An issue that keeps coming back after closes is usually recurring: decide from the data whether closing it again helps, and say why in the reason.";
 
 export function issuesPrompt(open: AiIssue[], closes: Map<string, number>): string[] {
   if (open.length === 0) return [];
@@ -164,7 +164,7 @@ export function reportIssueStatusTool(db: Db, allowedIds: string[], sessionId: s
       issues: z.array(z.object({
         issueId: z.string(),
         status: z.enum(ISSUE_STATUSES),
-        reason: z.string().describe("Why this status, at most 12 words, with the key number, e.g. \"Apdex back to 0.97 since 13:58\". For stopped, name the result and the time of the last error. No customer data. " + SLACK_RULE),
+        reason: z.string().describe("Why this status, at most 12 words, with the key number, e.g. \"Value back to its level before the spike since 13:58\". For stopped, name the result and the time of the last error. No customer data. " + SLACK_RULE),
       })),
     }),
     execute: async ({ severity, issues }) => {
@@ -454,7 +454,7 @@ async function watchedIssues(context: Context, sessionId: string): Promise<Watch
       "",
       "New Relic issues still being followed up:",
       ...issueList(active, await closeCounts(db, rows[0].monitorId, sessionId, active)),
-      `Look at the data since the last check only, with the fewest queries possible. Then ${REPORT_INSTRUCTION}`,
+      `Look at the whole episode up to now, with the fewest queries possible. Then ${REPORT_INSTRUCTION}`,
     ],
     tools: { report_issue_status: reportIssueStatusTool(db, activeIds, sessionId), ...monitorIssueTools(context, activeIds, sessionId) },
     triage: () => applyTriage(context, sessionId, true, activeIds),
@@ -463,14 +463,17 @@ async function watchedIssues(context: Context, sessionId: string): Promise<Watch
 }
 
 /**
- * A wake-up that failed or was interrupted must not end the chain: its issues go back to watching, and an alert
- * that was ongoing at its last report gets another check. Posts nothing, except the final line when the 24h ended.
+ * A wake-up that failed or was interrupted: its issues go back to watching. Only its own report counts, so an older
+ * ongoing report re-arms nothing. Posts nothing, except the final line when the chain ended.
  */
 export async function wakeupFailed(context: Context, sessionId: string): Promise<void> {
   const { db } = context;
   await db.update(alertIssues).set({ state: "watching", verdict: null, reason: null })
     .where(and(eq(alertIssues.sessionId, sessionId), eq(alertIssues.state, "pending"), isNotNull(alertIssues.watchUntil))).run();
-  if (await ensureFollowUp(context, sessionId, (await readOutcome(db, sessionId)).report)) await postExpiry(context, sessionId);
+  const { report, latestReport } = await readOutcome(db, sessionId);
+  // A re-check that failed before it reported leaves the alert open, so a person takes it over.
+  const end = await ensureFollowUp(context, sessionId, latestReport ?? (report && { severity: report.severity, state: "ongoing" }));
+  if (end) await postEnd(context, sessionId, end);
 }
 
 /** Turns a follow-up timer wake-up of a monitor session into a re-check: role lines, alert report, and the triage re-check of watched issues. */
@@ -480,8 +483,13 @@ export async function wakeupExtras(context: Context, sessionId: string): Promise
   if (!trigger) return { lines: [] };
   const watched = await watchedIssues(context, sessionId);
   const slack = await readSlackConfig(db) !== null;
+  const closed = await db.select().from(alertIssues).where(and(eq(alertIssues.sessionId, sessionId), eq(alertIssues.state, "closed"))).all();
   return {
-    lines: ["", MONITOR_ROLE, ...watched.lines, `Answer with report_finding.${summaryInstruction(slack)}`],
+    lines: [
+      "", MONITOR_ROLE, ...watched.lines,
+      ...(closed.length > 0 ? ["", `Tracer already closed ${closed.length === 1 ? "this issue" : "these issues"} of the alert: ${closed.map(nameOf).join("; ")}.`] : []),
+      `Answer with report_finding.${summaryInstruction(slack)}`,
+    ],
     tools: { report_alert_summary: reportAlertSummaryTool({ slack }), ...watched.tools },
     onComplete: ({ error }) => {
       void (async () => {
@@ -489,8 +497,8 @@ export async function wakeupExtras(context: Context, sessionId: string): Promise
         const outcome = await readOutcome(db, sessionId);
         // Later firings read the stored outcome, so it follows each re-check.
         await saveOutcome(db, sessionId, outcome);
-        const expired = await ensureFollowUp(context, sessionId, outcome.latestReport);
-        await postRecheck(context, sessionId, await watched.triage?.() ?? null, expired);
+        const end = await ensureFollowUp(context, sessionId, outcome.latestReport);
+        await postRecheck(context, sessionId, await watched.triage?.() ?? null, end);
       })().catch((err) => console.error("[triage] follow-up failed:", errorText(err)));
     },
     revert: watched.revert,

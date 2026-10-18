@@ -34,6 +34,16 @@ const SPIKE_RATIO = 2;
 const PEAK_LEAD = 1.5;
 const MIN_SPIKE_POINTS = 8;
 const MAX_LEGEND_ENTRIES = 5;
+// Past this many series the legend is a one-per-row list; a few rows show, the rest expand in place.
+const LIST_LEGEND_MIN = 4;
+const LIST_LEGEND_ROWS = 3;
+const LEGEND_ROW = 22;
+
+const isListLegend = (count: number) => count >= LIST_LEGEND_MIN;
+function listLegendRows(count: number, hasPrefix: boolean, expanded: boolean): number {
+  const shown = expanded ? count : Math.min(count, LIST_LEGEND_ROWS);
+  return shown + (count > LIST_LEGEND_ROWS ? 1 : 0) + (hasPrefix ? 1 : 0);
+}
 
 function isSpike(value: number | null, median: number): boolean {
   return value != null && median > 0 && value >= SPIKE_RATIO * median;
@@ -161,11 +171,13 @@ export function usesDualAxis({ hasFacet, hasComparison, threshold }: { hasFacet:
   return !hasFacet && (hasComparison || !threshold);
 }
 
-function SeriesLegend({ series, labels, prefix, isVisible, onToggle, onRight }: { series: Series[]; labels: string[]; prefix: string; isVisible: (name: string) => boolean; onToggle: (name: string) => void; onRight?: boolean[] }) {
+function SeriesLegend({ series, labels, prefix, isVisible, onToggle, onRight, expanded, onExpand }: { series: Series[]; labels: string[]; prefix: string; isVisible: (name: string) => boolean; onToggle: (name: string) => void; onRight?: boolean[]; expanded?: boolean; onExpand?: (expanded: boolean) => void }) {
+  const list = isListLegend(series.length);
+  const limit = list ? (expanded ? series.length : LIST_LEGEND_ROWS) : MAX_LEGEND_ENTRIES;
   return (
-    <div className="chart-legend flex flex-wrap justify-center gap-x-4 gap-y-1.5 pt-3">
-      {prefix && <span className="w-full truncate text-center text-xs text-muted-foreground/70" title={prefix}>{prefix}</span>}
-      {series.slice(0, MAX_LEGEND_ENTRIES).map((s, i) => {
+    <div className={cn("chart-legend flex gap-y-1.5 pt-3", list ? "flex-col items-start" : "flex-wrap justify-center gap-x-4")}>
+      {prefix && <span className={cn("w-full truncate text-xs text-muted-foreground/70", !list && "text-center")} title={prefix}>{prefix}</span>}
+      {series.slice(0, limit).map((s, i) => {
         const on = isVisible(s.name);
         return (
           <button
@@ -188,20 +200,31 @@ function SeriesLegend({ series, labels, prefix, isVisible, onToggle, onRight }: 
           </button>
         );
       })}
-      {series.length > MAX_LEGEND_ENTRIES && <span className="shrink-0 text-xs text-muted-foreground">+{series.length - MAX_LEGEND_ENTRIES} more</span>}
+      {list && series.length > LIST_LEGEND_ROWS ? (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => onExpand?.(!expanded)}
+          className="rounded-sm text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+        >
+          {expanded ? "Show less" : `+${series.length - LIST_LEGEND_ROWS} more`}
+        </button>
+      ) : !list && series.length > MAX_LEGEND_ENTRIES && <span className="shrink-0 text-xs text-muted-foreground">+{series.length - MAX_LEGEND_ENTRIES} more</span>}
     </div>
   );
 }
 
-function ChartFrame({ config, containerSize, plotHeight, label, children }: {
+function ChartFrame({ config, containerSize, plotHeight, legendExtra = 0, label, children }: {
   config: ChartConfig;
   containerSize?: ContainerSize;
   plotHeight: number;
+  /** Height the legend needs beyond the one-row reserve. */
+  legendExtra?: number;
   label: string;
   children: ComponentProps<typeof ChartContainer>["children"];
 }) {
   // The legend reserve is kept without a legend too, so the box matches its loading placeholder.
-  const height = containerSize ? Math.max(containerSize.height - 8, 80) : plotHeight + LEGEND_RESERVE;
+  const height = (containerSize ? Math.max(containerSize.height - 8, 80) : plotHeight + LEGEND_RESERVE) + legendExtra;
   return (
     <ChartContainer
       config={config}
@@ -227,6 +250,7 @@ function TimeseriesPlot({ series, containerSize, plotHeight, threshold, dualAxis
   dualAxis: boolean;
 }) {
   const { toggle, isVisible } = useSeriesVisibility();
+  const [legendExpanded, setLegendExpanded] = useState(false);
   const gradientId = useId();
   const keys = useMemo(() => series.map((_, i) => `s${i}`), [series]);
   const counts = useMemo(() => series.map(isCountSeries), [series]);
@@ -267,13 +291,14 @@ function TimeseriesPlot({ series, containerSize, plotHeight, threshold, dualAxis
 
   // A lone `count` series is a per-bucket total, so it draws as bars; averages and other metrics stay lines.
   const single = series.length === 1 ? series[0] : undefined;
+  const legendRows = !single && isListLegend(series.length) ? listLegendRows(series.length, !!prefix, legendExpanded) : 1;
   const asBars = !!single && single.name === "count" && counts[0] && !threshold;
   const run = single ? findSpike(data.map((row) => row.s0)) : null;
   const spike = run ? (data[run.peak] as { x: number; s0: number }) : undefined;
   const fillOpacity = single ? 0.15 : 0.06;
 
   return (
-    <ChartFrame config={config} containerSize={containerSize} plotHeight={plotHeight} label={`Chart of ${series.map((s) => s.name).join(", ")}`}>
+    <ChartFrame config={config} containerSize={containerSize} plotHeight={plotHeight} legendExtra={(legendRows - 1) * LEGEND_ROW} label={`Chart of ${series.map((s) => s.name).join(", ")}`}>
       <ComposedChart data={data} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
         <defs>
           {keys.map((k) => (
@@ -338,7 +363,7 @@ function TimeseriesPlot({ series, containerSize, plotHeight, threshold, dualAxis
             />
           }
         />
-        {!single && <ChartLegend content={<SeriesLegend series={series} labels={labels} prefix={prefix} isVisible={isVisible} onToggle={toggle} onRight={onRight} />} />}
+        {!single && <ChartLegend content={<SeriesLegend series={series} labels={labels} prefix={prefix} isVisible={isVisible} onToggle={toggle} onRight={onRight} expanded={legendExpanded} onExpand={setLegendExpanded} />} />}
         {series.map((s, i) => asBars ? (
           <Bar
             key={keys[i]}

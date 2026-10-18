@@ -11,6 +11,7 @@ export const WRITE_TOOLS: ReadonlySet<string> = new Set([
   "dismiss_alert",
   "set_timer",
   "add_jira_comment",
+  "post_slack_message",
   "ack_nr_issue",
   "close_nr_issue",
   "create_memory",

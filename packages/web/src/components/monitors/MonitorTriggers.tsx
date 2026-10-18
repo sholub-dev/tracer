@@ -80,6 +80,8 @@ const TriggerRow = memo(function TriggerRow({ trigger: t, repeatLabels, onNaviga
           </button>
         )}
         {!sessionId && t.status === "investigating" && <span>Investigation deleted</span>}
+        {t.status === "skipped" && <Badge className="rounded-md bg-muted font-normal text-ink-2">Skipped</Badge>}
+        {t.status === "closed" && <Badge className="rounded-md bg-muted font-normal text-ink-2">Already closed</Badge>}
         {t.status === "muted" && <Badge className="rounded-md bg-muted font-normal text-ink-2">Alert off</Badge>}
       </span>
       {sessionId && <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />}

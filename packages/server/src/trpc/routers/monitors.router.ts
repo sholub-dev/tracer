@@ -8,6 +8,8 @@ import { chatSessions, monitors, monitorTriggers } from "../../db/schema.js";
 import { alertBrief, parseTriggerGroups } from "../../monitors/repeats.js";
 import { deleteMonitor, setMonitorToggles } from "../../monitors/store.js";
 import { ingestLagSeconds } from "../../monitors/triage.js";
+import { pendingFirings, resolveFiring } from "../../monitors/scheduler.js";
+import { pendingFiringChanges } from "../../lib/firing-events.js";
 
 const unreadSession = and(eq(chatSessions.kind, SESSION_KIND.MONITOR), eq(chatSessions.status, "done"));
 
@@ -106,6 +108,15 @@ export const monitorsRouter = router({
         .all())
         .map((t) => ({ ...t, groups: parseTriggerGroups(t.groups) }));
     }),
+
+  /** The firings waiting for a Yes or No, now and after each change. */
+  pendingFirings: publicProcedure.subscription(async function* ({ ctx, signal }) {
+    for await (const _ of pendingFiringChanges(signal)) yield await pendingFirings(ctx.db);
+  }),
+
+  decideFiring: publicProcedure
+    .input(z.object({ id: z.string(), start: z.boolean() }))
+    .mutation(({ ctx, input }) => resolveFiring(ctx, input.id, input.start ? "start" : "skip")),
 
   builderChats: publicProcedure.query(async ({ ctx }) => {
     return await ctx.db

@@ -6,6 +6,8 @@ import { combineSets, memorySetFor } from "./memory-notes.js";
 import { applyStepBudget, buildNoProviderPrompt, buildUnifiedModePrompt } from "../lib/shared-prompts.js";
 import { injectMemories } from "../agents/chat/sub-agent.js";
 import { getJiraChatTools } from "../integrations/jira/tools.js";
+import { readSlackConfig } from "../integrations/slack.js";
+import { postSlackMessageTool, SLACK_PROMPT_FRAGMENT } from "./slack-tool.js";
 import { DEFAULTS, SETTINGS_KEYS } from "../config.js";
 import { readAppSetting } from "../db/config-reader.js";
 
@@ -90,6 +92,13 @@ export async function collectBaseTools(
     promptFragments.push(jiraKit.promptFragment);
   }
 
+  const slackOn = includeIntegrations && await readSlackConfig(db) !== null;
+  if (slackOn) {
+    tools.post_slack_message = postSlackMessageTool(db);
+    promptFragments.push(SLACK_PROMPT_FRAGMENT);
+  }
+  const integrationFragments = promptFragments.slice(providerFragmentCount);
+
   // System prompt assembly:
   // - unified: ONE coherent prompt — shared intro/discipline/analysis once + each provider's
   //   role-less fragment (begin_analysis already comes from the merged direct tools).
@@ -97,7 +106,7 @@ export async function collectBaseTools(
   let systemPrompt: string | undefined;
   if (!hasProviderTools) {
     // Without a provider tool the observability prompt would describe tools the run does not have.
-    if (jiraKit) systemPrompt = buildNoProviderPrompt([jiraKit.promptFragment]);
+    if (integrationFragments.length > 0) systemPrompt = buildNoProviderPrompt(integrationFragments);
   } else if (mode === "unified") {
     systemPrompt = providerFragmentCount > 0
       ? injectMemories(
@@ -114,7 +123,7 @@ export async function collectBaseTools(
   } else if (systemPrompts.length > 0) {
     // Provider prompts are built at load, before the setting is known.
     systemPrompt = applyStepBudget(systemPrompts.join("\n\n---\n\n"), maxSteps);
-    if (jiraKit) systemPrompt += "\n\n" + jiraKit.promptFragment;
+    if (integrationFragments.length > 0) systemPrompt += "\n\n" + integrationFragments.join("\n\n");
   }
 
   // Chain afterComplete callbacks so all providers run their post-processing

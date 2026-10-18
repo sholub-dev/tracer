@@ -108,7 +108,11 @@ export const CONFIG = {
   monitorIncidentLagSeconds: 15,
   /** The iOS app's check on open skips a monitor checked within this many seconds of the new window's end. */
   monitorOpenSkipSeconds: 60,
+  /** After the app slept, a monitor on NrAiIncident checks the missed time up to this far back, in one window. */
+  monitorCatchUpSeconds: 4 * 3600,
   monitorRepeatWindowSeconds: 86_400,
+  /** A firing that would start a session waits this long for a Yes or No from an open Tracer window, then starts. */
+  monitorFiringConfirmSeconds: 5,
   triageWatchMaxSeconds: 86_400,
   triageLoopWindowSeconds: 86_400,
   /** Closed, nr_closed and left_open issue rows are deleted after this long. */
@@ -124,7 +128,6 @@ export const CONFIG = {
 
   timerMinMinutes: 1,
   timerMaxMinutes: 60,
-  timerFollowUpMinutes: 5,
   /** A timer may not fire later than this after its session was created. */
   timerMaxAfterSessionSeconds: 86_400,
   timerMaxWakeupsPerTick: 3,

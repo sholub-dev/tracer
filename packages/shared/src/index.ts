@@ -5,6 +5,7 @@ export * from "./chat.types.js";
 export * from "./feature-flags.js";
 export * from "./condition.js";
 export * from "./finding.js";
+export * from "./ask-user.js";
 export * from "./newrelic-rows.js";
 export * from "./sync-session.js";
 export * from "./steered.js";

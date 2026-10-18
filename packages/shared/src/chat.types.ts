@@ -65,6 +65,7 @@ export const TOOL_NAMES = {
   SAVE_MONITOR: "save_monitor",
   DELETE_MONITOR: "delete_monitor",
   BEGIN_ANALYSIS: "begin_analysis",
+  ASK_USER: "ask_user",
 } as const;
 
 /** AI SDK prefixes tool names with "tool-" on the client */

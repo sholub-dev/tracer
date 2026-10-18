@@ -171,9 +171,9 @@ export function Composer({
         {cost}
         {streaming && onSteer && (
           <>
-            <Button type="button" variant="outline" size="sm" disabled={!canSteer || disabled} onClick={onSteer} title="Steer (Ctrl/Cmd+Enter)" aria-label="Steer the reply now">
+            <Button type="button" variant="outline" size="sm" className="max-sm:size-8 max-sm:px-0" disabled={!canSteer || disabled} onClick={onSteer} title="Steer (Ctrl/Cmd+Enter)" aria-label="Steer the reply now">
               <CornerDownRight />
-              Steer
+              <span className="max-sm:sr-only">Steer</span>
             </Button>
             <IconButton label="Queue (Enter)" variant="secondary" type="submit" className="rounded-full" disabled={!canSend || disabled}>
               <ArrowUp />

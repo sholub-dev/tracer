@@ -3,6 +3,7 @@ import type { UIMessage } from "ai";
 import { Bell, FileText, Timer } from "lucide-react";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
+import type { AskState } from "../../lib/ask-card";
 import type { ProgressStore } from "../../lib/progress-store";
 import { formatTime } from "../../lib/format";
 import { FoldTrigger } from "../common/FoldTrigger";
@@ -21,7 +22,7 @@ Structure it with these sections:
 Base the report entirely on the investigation data and findings from this conversation. Be specific — include actual error messages, metric values, service names, and query results where relevant.`;
 
 const MONITOR_FIRED = /^Monitor "(.+)" triggered\./;
-const FOLLOW_UP = /^Follow-up timer \(set .+?, due .+?, now (.+?)\): (.+?)\. Check it now\./;
+const FOLLOW_UP = /^Follow-up timer \(set .+?, due .+?, now (.+?)\): (.+?)\. (?:Check it now|First decide from the data whether the alert still needs attention)\./;
 
 interface ServerEvent {
   kind: "alert" | "followup";
@@ -106,9 +107,11 @@ interface MessageViewProps extends MessageViewOptions {
   progressStore: ProgressStore;
   compact?: boolean;
   meta?: SourceMeta;
+  ask?: AskState;
+  onAsk?: (label: string) => void;
 }
 
-export const MessageView = memo(function MessageView({ msg, isAnimating, progressStore, compact = false, meta, actions, showActions = !isAnimating, body, dimmed, footer }: MessageViewProps) {
+export const MessageView = memo(function MessageView({ msg, isAnimating, progressStore, compact = false, meta, ask, onAsk, actions, showActions = !isAnimating, body, dimmed, footer }: MessageViewProps) {
   const contentRef = useRef<HTMLDivElement>(null);
   const isUser = msg.role === "user";
   const text = isUser ? textOf(msg) : "";
@@ -133,7 +136,7 @@ export const MessageView = memo(function MessageView({ msg, isAnimating, progres
       </div>
     );
   } else {
-    content = <MessageParts parts={msg.parts} isAnimating={isAnimating} progressStore={progressStore} compact={compact} />;
+    content = <MessageParts parts={msg.parts} isAnimating={isAnimating} progressStore={progressStore} compact={compact} ask={ask} onAsk={onAsk} />;
   }
 
   const plain = isUser && !event;

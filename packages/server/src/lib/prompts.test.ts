@@ -72,6 +72,21 @@ test("prompts require competing explanations and a challenge check, and never fo
   }
 });
 
+test("prompts follow a change in client activity to who drove it, and only where it applies", () => {
+  for (const [name, prompt] of allPrompts) {
+    assert.equal(prompt.split("### Actor check").length - 1, 1, `${name}: expected one Actor check`);
+    for (const phrase of ["is not the end of the chain: run the Actor check", "Run it only when the chain reaches a change in client or user activity", "state the result that rules it out", "legitimate or abuse, and which result decides it"]) {
+      assert.ok(prompt.includes(phrase), `${name}: missing "${phrase}"`);
+    }
+  }
+});
+
+test("prompts never let the agent claim an action or owner that no result shows", () => {
+  for (const [name, prompt] of allPrompts) {
+    assert.ok(prompt.includes("Never state or imply that anything was escalated, notified, paged, assigned"), `${name}: missing action grounding rule`);
+  }
+});
+
 test("prompts tell the agent to report a finding in every turn that ran at least one query", () => {
   for (const [name, prompt] of allPrompts) {
     assert.ok(prompt.includes("call `report_finding` once, alone in its step, in every turn that ran at least one query"), `${name}: missing report_finding rule`);

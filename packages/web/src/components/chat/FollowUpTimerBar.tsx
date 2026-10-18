@@ -12,7 +12,7 @@ const countdown = (secs: number) => {
 };
 
 // One CSS animation from the width at mount to empty, so it stays smooth between the 1s text ticks.
-function ShrinkingBar({ fireAt, setAt }: { fireAt: number; setAt: number }) {
+export function ShrinkingBar({ fireAt, setAt }: { fireAt: number; setAt: number }) {
   const [style] = useState(() => {
     const left = Math.max(0, fireAt - unixNow());
     return { transform: `scaleX(${Math.min(1, left / Math.max(1, fireAt - setAt))})`, animationDuration: `${left}s` };

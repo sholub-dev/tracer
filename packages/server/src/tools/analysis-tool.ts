@@ -12,6 +12,7 @@ const ledgerSchema = z.object({
   })).describe("Competing explanations. For a cause, include normal background noise when it applies."),
   baseline: z.string().describe("For a cause: the suspected cause in a normal window against the incident window, with numbers. Empty when not checked."),
   causeEvidence: z.string().optional().describe("The query result, with its numbers, that shows the cause itself, not only the symptom. Empty when no result shows it."),
+  actor: z.string().optional().describe("When the chain reaches a change in client or user activity: who drove it (source and share against the normal window), the verdict (legitimate driver, suspected abuse or undetermined) and the result that decides it. Empty when the chain does not reach client or user activity."),
   contradictions: z.string().describe("Results that do not fit the conclusion. Empty when none."),
 });
 

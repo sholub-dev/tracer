@@ -10,6 +10,9 @@ import { issuesEnded, monitorStopped } from "./follow-up.js";
 import { sessionChanged } from "../lib/session-events.js";
 
 const NOTE_MAX_CHARS = 300;
+const REARM_DELAYS_SECONDS = [120];
+/** Re-arms per timer (session and set time) since its last successful wake-up; an app restart starts the count again. */
+const rearms = new Map<string, number>();
 
 /** The note is text the agent wrote earlier; the wake-up shows it as one quoted line of data. */
 export function quoteNote(note: string): string {
@@ -34,6 +37,23 @@ export async function fireDueTimers(context: Context, start = startAgentSession)
         ? db.delete(sessionTimers).where(eq(sessionTimers.sessionId, sessionId)).run()
         : db.update(sessionTimers).set({ fireAt: unixNow() + CONFIG.timerBusyRetrySeconds }).where(eq(sessionTimers.sessionId, sessionId)).run());
       sessionChanged(sessionId);
+    };
+    // A monitor session hands a failed re-check to a person. Any other session retries once, later, which covers a network
+    // that is not up yet after the app wakes; a run already retries its model calls, so a second failure ends the follow-up.
+    // A timer the run set again stays.
+    const rearmOnFailure = ({ error }: { error?: string }) => {
+      const key = `${sessionId}:${timer.setAt}`;
+      const tries = rearms.get(key) ?? 0;
+      if (!error) { rearms.delete(key); return; }
+      if (tries >= REARM_DELAYS_SECONDS.length || unixNow() >= timer.setAt + CONFIG.timerMaxAfterSessionSeconds) { rearms.delete(key); return; }
+      rearms.set(key, tries + 1);
+      const fireAt = unixNow() + REARM_DELAYS_SECONDS[tries]!;
+      void (async () => {
+        // The fired row can still be there; it is replaced, so the cleanup of fired rows cannot drop the re-arm.
+        await db.insert(sessionTimers).values({ ...timer, fireAt })
+          .onConflictDoUpdate({ target: sessionTimers.sessionId, set: { fireAt }, setWhere: isNull(sessionTimers.fireAt) }).run();
+        sessionChanged(sessionId);
+      })().catch((err) => console.error(`[timer] could not keep the follow-up for session ${sessionId}:`, err instanceof Error ? err.message : String(err)));
     };
     if (kind === SESSION_KIND.MONITOR && (await monitorStopped(db, sessionId) || await issuesEnded(db, sessionId))) {
       await db.delete(sessionTimers).where(eq(sessionTimers.sessionId, sessionId)).run();
@@ -60,7 +80,7 @@ export async function fireDueTimers(context: Context, start = startAgentSession)
           ...extras.lines,
         ].join("\n"),
         tools: extras.tools,
-        onComplete: extras.onComplete,
+        onComplete: extras.onComplete ?? rearmOnFailure,
       });
       if ("error" in result) {
         await extras.revert?.();

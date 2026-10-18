@@ -41,13 +41,20 @@ export const sessionsRouter = router({
         status: chatSessions.status,
         kind: chatSessions.kind,
         updatedAt: chatSessions.updatedAt,
+        fireAt: sessionTimers.fireAt,
+        setAt: sessionTimers.setAt,
       })
       .from(chatSessions)
+      .leftJoin(sessionTimers, eq(sessionTimers.sessionId, chatSessions.id))
       .where(notLike(chatSessions.id, `${SESSION_PREFIX.MONITORS}%`))
       .orderBy(desc(chatSessions.updatedAt))
       .limit(CONFIG.sessionListLimit)
       .all())
-      .map(s => ({ ...s, titlePending: s.title === DEFAULT_SESSION_TITLE }));
+      .map(({ fireAt, setAt, ...s }) => ({
+        ...s,
+        titlePending: s.title === DEFAULT_SESSION_TITLE,
+        timer: fireAt && setAt ? { fireAt, setAt } : null,
+      }));
   }),
 
   getTitle: publicProcedure

@@ -19,6 +19,8 @@ Check each point:
 - The suspected cause is new or higher than in a normal window. It is not background noise.
 - The suspected cause explains the scale and scope of the symptom: all affected services and endpoints, not a small share.
 - No competing explanation is left untested.
+- The conclusion claims no action, escalation, notification, owner or team that no result shows. Only tool calls that succeeded count as the agent's own actions.
+- When the chain reaches a change in client or user activity (traffic, logins, sign-ups, applications, payments), the conclusion says who drove it and whether it is legitimate or abuse, from a result. A rise in traffic alone is not a root cause. A verdict of "not abuse" names the result that rules abuse out.
 - No result that contradicts the conclusion is ignored.
 - A pattern seen in 1-2 samples is confirmed with a count before the agent generalizes it.
 - The confidence label is not higher than the evidence.

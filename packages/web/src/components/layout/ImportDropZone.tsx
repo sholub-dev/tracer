@@ -34,6 +34,7 @@ export function ImportDropZone({ onImported }: { onImported: (id: string) => voi
           kind: SESSION_KIND.IMPORTED as string | null,
           updatedAt: Math.floor(Date.now() / 1000),
           titlePending: false,
+          timer: null,
         };
         return prev ? [row, ...prev] : [row];
       });

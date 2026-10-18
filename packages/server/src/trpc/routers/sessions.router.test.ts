@@ -5,7 +5,7 @@ import type { UIMessage } from "ai";
 import { createNodeDb } from "../../db/node-db.js";
 import { runSetup } from "../../db/setup.js";
 import { eq } from "drizzle-orm";
-import { chatSessions } from "../../db/schema.js";
+import { chatSessions, sessionTimers } from "../../db/schema.js";
 import { encodeMessages, decodeMessages } from "../../lib/messages-codec.js";
 import { CONFIG } from "../../config.js";
 import { sessionsRouter } from "./sessions.router.js";
@@ -67,4 +67,15 @@ test("a blank summary edit is rejected and the stored summary stays", async () =
   await db.insert(chatSessions).values({ id: "s", title: "t", messages: encodeMessages([msg("a", "user"), msg("b", "assistant")]), status: "done", summary: "kept", summaryUpTo: 2 }).run();
   await assert.rejects(api.updateSummary({ id: "s", summary: "  \n " }));
   assert.equal((await db.select().from(chatSessions).get())!.summary, "kept");
+});
+
+test("the session list carries a pending timer and none for a fired or missing one", async () => {
+  const { db, api } = await caller();
+  for (const id of ["a", "b", "c"]) await db.insert(chatSessions).values({ id, title: id, messages: encodeMessages([]), status: "idle" }).run();
+  await db.insert(sessionTimers).values([
+    { sessionId: "a", fireAt: 200, setAt: 100, note: "n" },
+    { sessionId: "b", fireAt: null, setAt: 100, note: "n" },
+  ]).run();
+  const byId = Object.fromEntries((await api.list()).map((s) => [s.id, s.timer]));
+  assert.deepEqual(byId, { a: { fireAt: 200, setAt: 100 }, b: null, c: null });
 });

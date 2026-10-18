@@ -8,6 +8,7 @@ import { formatClock, formatShortDate } from "../../lib/format";
 import { useDeleteSession, usePersistedState } from "../../lib/hooks";
 import { sessionKindKey, sessionKindLabel, type SessionKindKey } from "../../lib/session-kind";
 import { trpc } from "../../lib/trpc";
+import { ShrinkingBar } from "../chat/FollowUpTimerBar";
 import { ConfirmDialog } from "../common/ConfirmDialog";
 import { MoreActionsMenu } from "../common/MoreActionsMenu";
 import { SegmentedControl } from "../common/SegmentedControl";
@@ -23,6 +24,7 @@ interface SessionItem {
   status: string;
   kind: string | null;
   updatedAt: number;
+  timer: { fireAt: number; setAt: number } | null;
 }
 
 // The iOS app has no API and no import.
@@ -185,6 +187,11 @@ const SessionRow = memo(function SessionRow({ session: s, day, active, animateIn
           </span>
         </span>
       </SidebarMenuButton>
+      {s.timer && (
+        <span role="img" aria-label="Follow-up pending" className="pointer-events-none absolute inset-x-2 bottom-0.5 h-0.5 overflow-hidden rounded-full bg-muted">
+          <ShrinkingBar key={s.timer.fireAt} fireAt={s.timer.fireAt} setAt={s.timer.setAt} />
+        </span>
+      )}
       <MoreActionsMenu lazy label={`More actions for ${s.title}`} sidebar side="right" align="start" triggerClassName="top-2! size-6 w-6">
         <DropdownMenuItem variant="destructive" disabled={running} onSelect={() => onDelete(s)}>Delete</DropdownMenuItem>
       </MoreActionsMenu>

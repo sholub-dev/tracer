@@ -61,7 +61,8 @@ export async function runSetup(sqlite: SetupDriver): Promise<void> {
       run_scope TEXT,
       resumed INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      active_at INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS monitors (
@@ -182,6 +183,7 @@ export async function runSetup(sqlite: SetupDriver): Promise<void> {
     ["chat_sessions", "summary_created_at", "INTEGER"],
     ["chat_sessions", "run_scope", "TEXT"],
     ["chat_sessions", "resumed", "INTEGER NOT NULL DEFAULT 0"],
+    ["chat_sessions", "active_at", "INTEGER"],
     ["monitors", "last_error", "TEXT"],
     ["monitors", "sort_order", "INTEGER"],
     ["monitors", "card_width", "INTEGER"],
@@ -209,6 +211,7 @@ export async function runSetup(sqlite: SetupDriver): Promise<void> {
   await sqlite.exec(`
     CREATE INDEX IF NOT EXISTS idx_sessions_status_kind ON chat_sessions(status, kind, id);
     CREATE INDEX IF NOT EXISTS idx_sessions_list ON chat_sessions(updated_at, kind, status, id, title);
+    CREATE INDEX IF NOT EXISTS idx_sessions_active ON chat_sessions(coalesce(active_at, updated_at), kind, status, id, title);
     DROP INDEX IF EXISTS idx_sessions_updated;
     DROP INDEX IF EXISTS idx_agent_runs_type;
   `);

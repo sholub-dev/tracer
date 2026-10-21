@@ -59,8 +59,9 @@ export class PosthogProvider extends BaseProvider {
     this.connected = false;
   }
 
-  async executeRawQuery(query: string): Promise<unknown> {
-    return rowsToObjects(await this.client.query(query));
+  async executeRawQuery(query: string, signal?: AbortSignal): Promise<unknown> {
+    // A HogQL query that timed out is expensive: running it again would time out again.
+    return rowsToObjects(await this.client.query(query, { retry: false, signal }));
   }
 
   getChatTools(options: {

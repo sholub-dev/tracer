@@ -113,8 +113,8 @@ export function buildMessage(
     "",
     MONITOR_ROLE,
     "",
-    "If this looks like a past issue, its past cause is only a hypothesis. Read the most relevant past session, then check in this window that the same cause appears, starts before this firing and explains its groups and size. If it does, say which session; if any part differs, investigate fully.",
-    `${dismissible ? "Unless you dismissed the alert, find" : "Find"} the root cause, or state where the data stops. Answer with report_finding as in any session.${summaryInstruction(slack)}`,
+    "If this looks like a past issue, its past cause is only a hypothesis. Read the most relevant past session, then check in this window that the same cause appears, starts before this firing and explains its groups and size. If it does, say which session. When that session stopped short of the mechanism, or any part differs, continue the chain in this window.",
+    `${dismissible ? "Unless you dismissed the alert, treat" : "Treat"} the firing as a symptom: verify it in the data, find its onset and end, and follow the chain to the root cause, or to the data boundary that stops it. Answer with report_finding as in any session.${summaryInstruction(slack)}`,
   );
   return lines.join("\n");
 }

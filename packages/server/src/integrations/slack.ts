@@ -124,7 +124,7 @@ export interface Verdict {
   confidence: string;
   /** Policy, start and status, "" when missing or unknown. */
   facts: { policy: string; started: string; status: string };
-  /** Each issue: service, endpoint, errors, user impact, journey step ("" when unknown). */
+  /** Each issue: service, endpoint, errors, user impact ("" when unknown). */
   issues: string[][];
   /** Facts from the card, used when the alert lists no issues. */
   evidence: string[];
@@ -139,10 +139,10 @@ export function verdictOf(summary: AlertSummary | null, finding: Finding | null)
     verdict: card?.verdict?.replace("_", " ") ?? "",
     confidence: card?.verdict ? card.confidence ?? "unverified" : "",
   };
-  const cardFacts = finding?.kind === "summary" ? finding.points ?? [] : card?.evidence?.map((e) => e.fact) ?? [];
+  const cardFacts = finding?.kind === "summary" ? finding.points ?? [] : card?.chain?.map((e) => e.fact) ?? [];
   const evidenceFrom = (issues: string[][]) => (issues.length > 0 ? [] : cardFacts.map((f) => field(f)).filter(Boolean).slice(0, MAX_ISSUES));
   if (!summary) return { severity: "unknown", ...head, facts: { policy: "", started: "", status: "" }, issues: [], evidence: evidenceFrom([]) };
-  const issues = (summary.issues ?? []).map((i) => [i.service, i.endpoint, i.errors, i.userImpact, i.journeyStep].map((v) => field(v)))
+  const issues = (summary.issues ?? []).map((i) => [i.service, i.endpoint, i.errors, i.userImpact].map((v) => field(v)))
     .filter((parts) => parts.some(Boolean));
   return {
     severity: summary.severity,
@@ -172,10 +172,10 @@ function mentionsFor(raw: string | undefined, ping: boolean | undefined): string
   return "mentions" in parsed ? mentionPrefix(parsed.mentions) : "";
 }
 
-function issueLine([service = "", endpoint = "", error = "", experience = "", funnel = ""]: string[]): string {
-  const where = [service && `*${escape(service)}*`, endpoint && `\`${escape(endpoint)}\``].filter(Boolean).join(" ");
+function issueLine([service = "", endpoint = "", error = "", experience = ""]: string[]): string {
+  // A bare "/" or the service name again stands for the whole service and tells the reader nothing.
+  const where = [service && `*${escape(service)}*`, endpoint && endpoint !== "/" && endpoint !== service && `\`${escape(endpoint)}\``].filter(Boolean).join(" ");
   const what = [error, experience].filter(Boolean).map(escape);
-  if (funnel) what.push(`Funnel: ${escape(funnel)}`);
   return `• ${[where, what.join(". ")].filter(Boolean).join(": ")}`;
 }
 
@@ -190,7 +190,9 @@ export function monitorAlert(a: MonitorAlert): Required<SlackPayload> {
   lines.push(...issues.slice(0, MAX_ISSUES).map(issueLine));
   if (issues.length > MAX_ISSUES) lines.push(`+${issues.length - MAX_ISSUES} more`);
   lines.push(...evidence.map((f) => `• ${escape(f)}`));
-  const when = [facts.policy && `*${escape(facts.policy)}*`, facts.started && `started ${escape(facts.started)}`, facts.status && escape(facts.status)].filter(Boolean);
+  // A policy named like the monitor would repeat the footer.
+  const policy = facts.policy.toLowerCase() === name.toLowerCase() ? "" : facts.policy;
+  const when = [policy && `*${escape(policy)}*`, facts.started && `started ${escape(facts.started)}`, facts.status && escape(facts.status)].filter(Boolean);
   if (when.length > 0) lines.push(when.join(" · "));
   const action = a.action ? clip(`*Action:* ${escape(redact(a.action))}`, SECTION_MAX_CHARS / 2) : "";
   const room = SECTION_MAX_CHARS - (action ? action.length + 1 : 0);

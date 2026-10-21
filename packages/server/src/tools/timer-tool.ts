@@ -8,9 +8,7 @@ import { CONFIG } from "../config.js";
 import { formatLocalTime, getTimezone } from "../lib/current-context.js";
 import { sessionChanged } from "../lib/session-events.js";
 
-const NOTE_MAX_CHARS = 300;
-
-type TimerInput = { minutes: number; note: string };
+type TimerInput = { minutes: number; message: string };
 type TimerResult = { error: string } | { cancelled: true } | { dueAt: string };
 
 export async function hasPendingTimer(db: Db, sessionId: string): Promise<boolean> {
@@ -22,7 +20,7 @@ export async function hasPendingTimer(db: Db, sessionId: string): Promise<boolea
 export async function putTimer(db: Db, sessionId: string, minutes: number, note: string): Promise<number> {
   const now = unixNow();
   const fireAt = now + Math.round(minutes * 60);
-  const row = { fireAt, note: note.trim().slice(0, NOTE_MAX_CHARS), setAt: now };
+  const row = { fireAt, note: note.trim(), setAt: now };
   await db.insert(sessionTimers).values({ sessionId, ...row })
     .onConflictDoUpdate({ target: sessionTimers.sessionId, set: row }).run();
   sessionChanged(sessionId);
@@ -34,9 +32,9 @@ export function setTimerTool(db: Db, sessionId: string): Tool<TimerInput, TimerR
     description: "Wake this chat later to follow up. Use it only when a follow-up is truly needed (e.g. the value is still changing, a deploy is rolling out). Choose the interval from how fast the value changes and the impact. Set none when the alert is resolved or handed to a person.",
     inputSchema: z.object({
       minutes: z.number().describe(`Minutes from now, ${CONFIG.timerMinMinutes} to ${CONFIG.timerMaxMinutes}; 0 cancels the pending timer`),
-      note: z.string().describe("What to check when it fires; no customer data"),
+      message: z.string().describe("The message you get when the timer fires: what to check and why, written to yourself. No customer data"),
     }),
-    execute: async ({ minutes, note }) => {
+    execute: async ({ minutes, message }) => {
       if (minutes === 0) {
         await db.delete(sessionTimers).where(eq(sessionTimers.sessionId, sessionId)).run();
         sessionChanged(sessionId);
@@ -51,7 +49,7 @@ export function setTimerTool(db: Db, sessionId: string): Tool<TimerInput, TimerR
       if (unixNow() + Math.round(minutes * 60) > limit) {
         return { error: `Too late: follow-ups must fire within ${CONFIG.timerMaxAfterSessionSeconds / 3600}h of the session start (by ${formatLocalTime(limit, await getTimezone(db))})` };
       }
-      const fireAt = await putTimer(db, sessionId, minutes, note);
+      const fireAt = await putTimer(db, sessionId, minutes, message);
       return { dueAt: formatLocalTime(fireAt, await getTimezone(db)) };
     },
   });

@@ -19,12 +19,13 @@ export class PosthogClient {
     this.host = (host?.trim() || DEFAULT_HOST).replace(/\/+$/, "");
   }
 
-  async query(hogql: string, options?: { retry?: boolean }): Promise<HogQLQueryResponse> {
+  async query(hogql: string, options?: { retry?: boolean; signal?: AbortSignal }): Promise<HogQLQueryResponse> {
     // The key goes to this host and the project id lands in the URL path, so both need a strict shape.
     if (!this.host.startsWith("https://") || !URL.canParse(this.host)) throw new Error("PostHog host must be an https URL");
     if (!/^\d+$/.test(this.projectId)) throw new Error("PostHog project ID must be a number");
     const response = await fetchWithRetry(`${this.host}/api/projects/${this.projectId}/query/`, {
       method: "POST",
+      signal: options?.signal,
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${this.apiKey}`,
@@ -33,7 +34,12 @@ export class PosthogClient {
         query: { kind: "HogQLQuery", query: hogql },
         name: "tracer",
       }),
-    }, { timeoutMs: 35_000, retry: options?.retry });
+    }, { timeoutMs: 35_000, retry: options?.retry }).catch((err: unknown) => {
+      if (err instanceof Error && err.name === "TimeoutError") {
+        throw new Error("The query timed out: narrow the window, aggregate, or lower the LIMIT");
+      }
+      throw err;
+    });
 
     if (!response.ok) {
       // PostHog returns a JSON error body; surface its `detail`/`error` so auth

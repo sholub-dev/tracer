@@ -209,6 +209,11 @@ export default memo(function ResultView({ data, containerSize, threshold, chartT
 
   const rows = normalized as Record<string, unknown>[];
 
+  // A series with no value in any bucket would draw axes with no line and no hint why.
+  if ("beginTimeSeconds" in rows[0] && !rows.some((r) => Object.entries(r).some(([k, v]) => !HIDDEN_KEYS.has(k) && v != null && typeof v !== "string"))) {
+    return <p className="text-[13px] leading-[18px] text-muted-foreground">No data: every bucket in the window is empty.</p>;
+  }
+
   // chartType override: when explicitly set, skip auto-detection
   if (chartType && chartType !== "auto") {
     if (chartType === "timeseries") return <TimeseriesChart rows={rows} containerSize={containerSize} threshold={threshold} />;

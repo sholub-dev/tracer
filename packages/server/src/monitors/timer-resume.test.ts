@@ -34,7 +34,7 @@ async function env(connected = true) {
 async function chatWithTimer(db: Awaited<ReturnType<typeof env>>["db"], status = "idle", minutes = 15, id = "s1") {
   const t = now();
   await db.insert(chatSessions).values({ id, title: id, messages: "[]", status, runScope: "unified", createdAt: t, updatedAt: t }).run();
-  await setTimerTool(db, id).execute!({ minutes, note: "check" }, { toolCallId: "c", messages: [] } as never);
+  await setTimerTool(db, id).execute!({ minutes, message: "check" }, { toolCallId: "c", messages: [] } as never);
 }
 
 const timer = (db: Awaited<ReturnType<typeof env>>["db"]) => db.select().from(sessionTimers).get();

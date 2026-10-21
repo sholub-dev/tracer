@@ -1,4 +1,5 @@
 import { generateText, type UIMessage } from "ai";
+import { cardRejected } from "@tracer-sh/shared";
 import { resolveModel } from "../../llm/resolve.js";
 import { recordEachCall } from "../../llm/usage.js";
 import type { Db } from "../../db/driver.js";
@@ -36,8 +37,11 @@ Approaches tried and abandoned, queries that errored or returned empty, hypothes
 ## Conclusions & current state
 Each conclusion the assistant reached, stated together with the evidence supporting it, so it is never re-derived. Keep the confidence label (confirmed, likely, unverified) the assistant gave each conclusion; never raise a label. Write a cause the user suggested as the user's claim unless a result confirmed it. What was communicated or delivered to the user (answers, reports), and any artifacts produced.
 
+## Causal chain
+The chain from the symptom to the deepest cause reached, link by link. Give each link its evidence (the log entry) and its confidence label. End with the next link that would go one level deeper and the source that holds its data, or the data boundary that stops the chain and the result that shows it. If no cause was investigated, write "None."
+
 ## Open items
-Unresolved questions, pending checks and unanswered requests, anything the user asked for that has not been delivered yet. If none, write "None."
+Unresolved questions, pending checks and unanswered requests, anything the user asked for that has not been delivered yet. Include every lead not yet followed, such as a dependency, a change at the onset or a comparison with healthy peers. If none, write "None."
 
 Rules:
 - Be detailed. Length is not a concern; losing information is. A long, precise summary is always better than a short, vague one.
@@ -97,6 +101,8 @@ export function serializeMessagesForSummary(messages: UIMessage[]): string {
       const p = part as { type: string; toolCallId?: string; input?: unknown; output?: unknown; errorText?: string };
       if (p.toolCallId) {
         const name = p.type.startsWith("tool-") ? p.type.slice(5) : p.type;
+        // A card the review sent back was never shown; the card that replaced it is the answer.
+        if (name === "report_finding" && cardRejected(p.output)) continue;
         // Failed tool calls (state "output-error") carry the failure in
         // errorText, not output — keep the exact error so dead ends survive.
         // The formatted `analysis` CSV is what the model read; raw `parts` come first in the

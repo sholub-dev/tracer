@@ -12,4 +12,5 @@ test("a string or number output does not throw", () => {
 test("object outputs keep their wording", () => {
   assert.equal(smallToolLabel({ type: "t", output: { error: "bad" } }, spec), "Finding not recorded: bad");
   assert.equal(smallToolLabel({ type: "t", output: { dueAt: "10:00" }, input: { note: "n" } }, spec), "Finding reported for 10:00: n");
+  assert.equal(smallToolLabel({ type: "t", output: { dueAt: "10:00" }, input: { message: "m" } }, spec), "Finding reported for 10:00: m");
 });

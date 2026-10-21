@@ -542,7 +542,7 @@ function DebugChat({ chatId, initialMessages, sources, cost, costText, activePro
           if (status === "submitted") {
             utils.sessions.list.setData(undefined, (prev) => {
               if (!prev || prev.some((s) => s.id === chatId)) return prev;
-              return [{ id: chatId, title: DEFAULT_SESSION_TITLE, status: "streaming", kind: null, updatedAt: Math.floor(Date.now() / 1000), titlePending: true, timer: null }, ...prev];
+              return [{ id: chatId, title: DEFAULT_SESSION_TITLE, status: "streaming", kind: null, activeAt: Math.floor(Date.now() / 1000), titlePending: true, timer: null }, ...prev];
             });
           }
           if (status === "ready") {

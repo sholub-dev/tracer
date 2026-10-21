@@ -62,6 +62,16 @@ test("the session list returns the newest sessions up to the limit", async () =>
   assert.equal(list[0].id, `s${total - 1}`);
 });
 
+test("the session list orders by the last trigger, not by the last write", async () => {
+  const { db, api } = await caller();
+  await db.insert(chatSessions).values([
+    { id: "late-write", title: "t", messages: "[]", status: "done", activeAt: 10, updatedAt: 99 },
+    { id: "late-trigger", title: "t", messages: "[]", status: "done", activeAt: 20, updatedAt: 30 },
+    { id: "old-row", title: "t", messages: "[]", status: "done", updatedAt: 15 },
+  ]).run();
+  assert.deepEqual((await api.list()).map((s) => [s.id, s.activeAt]), [["late-trigger", 20], ["old-row", 15], ["late-write", 10]]);
+});
+
 test("a blank summary edit is rejected and the stored summary stays", async () => {
   const { db, api } = await caller();
   await db.insert(chatSessions).values({ id: "s", title: "t", messages: encodeMessages([msg("a", "user"), msg("b", "assistant")]), status: "done", summary: "kept", summaryUpTo: 2 }).run();

@@ -22,7 +22,7 @@ export function toolModelOutput(output: unknown): { type: "text"; value: string 
   if (output && typeof output === "object" && "error" in output) {
     return { type: "text", value: `Error: ${(output as { error: string }).error}` };
   }
-  return { type: "text", value: String(output) };
+  return { type: "text", value: output !== null && typeof output === "object" ? JSON.stringify(output) : String(output) };
 }
 
 /**

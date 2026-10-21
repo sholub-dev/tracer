@@ -454,7 +454,7 @@ async function watchedIssues(context: Context, sessionId: string): Promise<Watch
       "",
       "New Relic issues still being followed up:",
       ...issueList(active, await closeCounts(db, rows[0].monitorId, sessionId, active)),
-      `Look at the whole episode up to now, with the fewest queries possible. Then ${REPORT_INSTRUCTION}`,
+      `Look at the whole episode up to now. Then ${REPORT_INSTRUCTION}`,
     ],
     tools: { report_issue_status: reportIssueStatusTool(db, activeIds, sessionId), ...monitorIssueTools(context, activeIds, sessionId) },
     triage: () => applyTriage(context, sessionId, true, activeIds),

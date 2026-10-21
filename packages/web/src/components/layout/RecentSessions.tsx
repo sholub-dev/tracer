@@ -23,7 +23,7 @@ interface SessionItem {
   title: string;
   status: string;
   kind: string | null;
-  updatedAt: number;
+  activeAt: number;
   timer: { fireAt: number; setAt: number } | null;
 }
 
@@ -102,7 +102,7 @@ export const RecentSessions = memo(function RecentSessions({ currentSessionId, o
       />
       {filter === "imported" && <ImportDropZone onImported={onImported} />}
       {days.map(({ day, label }) => {
-        const rows = shown.filter((s) => dayOf(new Date(s.updatedAt * 1000)) === day);
+        const rows = shown.filter((s) => dayOf(new Date(s.activeAt * 1000)) === day);
         if (!rows.length) return null;
         return (
           <section key={day} aria-label={label} className="mt-2">
@@ -165,7 +165,7 @@ const SessionRow = memo(function SessionRow({ session: s, day, active, animateIn
   const [firstTitle] = useState(s.title);
   const running = s.status === "streaming";
   const unread = s.status === "done" && !active;
-  const when = day === "earlier" ? formatShortDate(s.updatedAt) : formatClock(s.updatedAt);
+  const when = day === "earlier" ? formatShortDate(s.activeAt) : formatClock(s.activeAt);
 
   return (
     <SidebarMenuItem className={cn(enter && "animate-row-in")}>

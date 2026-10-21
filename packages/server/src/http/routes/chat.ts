@@ -100,7 +100,17 @@ export function registerChatRoutes(app: Hono, context: Context): void {
     const { sessionId, message } = body.data;
     // Whatever role and metadata the client sends, the model gets a steered user message: one without the mark would start a new turn once saved.
     const steered: UIMessage = { id: message.id ?? crypto.randomUUID(), role: "user", metadata: { ...message.metadata, steered: true }, parts: message.parts };
-    return c.json({ steered: await steerChat(context, sessionId, steered) });
+    const taken = await steerChat(context, sessionId, steered);
+    if (taken) {
+      // The run already holds the message: a failed write must not tell the client to send it again.
+      try {
+        await context.db.update(chatSessions).set({ activeAt: unixNow() }).where(eq(chatSessions.id, sessionId)).run();
+        sessionChanged(sessionId);
+      } catch (err) {
+        console.warn(`[chat] Failed to move ${sessionId} up the session list:`, err);
+      }
+    }
+    return c.json({ steered: taken });
   });
 
   // Subscribe to an active stream via SSE (for reconnection after navigate-away)

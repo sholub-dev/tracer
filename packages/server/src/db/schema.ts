@@ -1,4 +1,5 @@
 import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
 import { unixNow } from "@tracer-sh/shared";
 
 export const providerConfigs = sqliteTable("provider_configs", {
@@ -59,9 +60,12 @@ export const chatSessions = sqliteTable("chat_sessions", {
   updatedAt: integer("updated_at")
     .notNull()
     .$defaultFn(() => unixNow()),
+  /** When a user message, timer or alert last started a run; orders the session list. Null on rows from before it: use updatedAt. */
+  activeAt: integer("active_at"),
 }, (t) => [
   index("idx_sessions_status_kind").on(t.status, t.kind, t.id),
   index("idx_sessions_list").on(t.updatedAt, t.kind, t.status, t.id, t.title),
+  index("idx_sessions_active").on(sql`coalesce(${t.activeAt}, ${t.updatedAt})`, t.kind, t.status, t.id, t.title),
 ]);
 
 export const monitors = sqliteTable("monitors", {

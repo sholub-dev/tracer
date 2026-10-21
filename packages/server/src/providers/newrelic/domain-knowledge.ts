@@ -17,16 +17,17 @@ const NRQL_QUICK_REFERENCE = `## NRQL Reference
 - \`WHERE attr op value\` — filter. Operators: \`=\`, \`!=\`, \`<\`, \`>\`, \`<=\`, \`>=\`, \`IN ('a','b')\`, \`IS [NOT] NULL\`.
   - \`LIKE '%pattern%'\` — **case-sensitive**, \`%\` wildcard. Leading wildcard \`LIKE '%x'\` is slow.
   - \`RLIKE '(?i)timeout|refused'\` — regex (RE2 syntax). Must match ENTIRE string for extraction; use \`.*pattern.*\` for partial matching. Use \`(?i)\` flag for case-insensitive matching.
-- \`FACET attr [, attr2]\` — group by (max 5 attributes). Default LIMIT 10 facet values, max 5000. LIMIT applies per-facet group.
+- \`FACET attr [, attr2]\` — group by (max 5 attributes). Default LIMIT 10 facet values, max 5000. LIMIT caps the number of facet values (the number of combinations for several attributes), not the rows inside a group.
 - \`FACET CASES (WHERE cond AS 'label', ...)\` — custom grouping buckets. Order matters: first match wins.
 - \`LIMIT n\` — max rows/facets. Default 10 for FACET, 100 for non-FACET. \`LIMIT MAX\` for maximum allowed.
 - \`SINCE time_expr\` — always include. NR default is 1 hour if omitted. Supports: \`N hours ago\`, \`today\`, \`yesterday\`, \`'2024-01-15T14:00'\`, epoch ms.
 - \`UNTIL time_expr\` — end time (default NOW).
 - \`COMPARE WITH N time_unit ago\` — current vs prior period. Requires SINCE. Charts support it: with TIMESERIES the previous period draws dashed over the current one, so \`COMPARE WITH 1 week ago\` + TIMESERIES is the preferred way to show current against a baseline. Scalar and FACET results show current and previous side by side.
-- \`TIMESERIES N time_unit\` or \`TIMESERIES AUTO\` — time-bucketed series. Max 366 buckets. Be explicit with bucket size — AUTO can hide short spikes.
+- \`TIMESERIES N time_unit\` or \`TIMESERIES AUTO\` — time-bucketed series. At most 366 buckets: choose the bucket size so that window / bucket is 366 or less. Be explicit with bucket size — AUTO can hide short spikes.
 - \`SLIDE BY N time_unit\` — sliding windows. Cannot use with TIMESERIES AUTO.
 - \`EXTRAPOLATE\` — compensate for APM event sampling. Only works with: count, average, sum, histogram, rate, percentage, apdex, stddev. Does NOT work with: uniqueCount, percentile, min, max, latest, earliest.
-- \`ORDER BY attr [ASC|DESC]\` — sort non-aggregation results only (not for FACET queries).
+- \`ORDER BY attr [ASC|DESC]\` — sorts the rows of a non-aggregation query.
+- \`FACET x ORDER BY max(duration) LIMIT n\` — ranks the facets by a function that is not the first in SELECT. It sorts highest first. Write no ASC or DESC there: \`ORDER BY agg DESC\` after FACET is a syntax error. Ascending order is not available. For the lowest values use \`LIMIT MAX\`, or \`FACET CASES\`, or a filter.
 - \`WITH TIMEZONE 'America/New_York'\` — affects literal times, time display and time functions. Tracer adds the user's timezone automatically; do not add it yourself.
 - Subqueries: \`WHERE x IN (SELECT ... FROM ...)\` or \`FROM (SELECT ... FACET y) WHERE ...\` — max 3 per query, cannot reference outer query attributes.
 
@@ -51,7 +52,7 @@ const NR_ANTI_PATTERNS = `## Common Mistakes — AVOID THESE
 - No \`GROUP BY\` — use \`FACET\`.
 - No backslashes in NRQL strings. Backtick dotted field names: \`SELECT \\\`error.message\\\` FROM TransactionError\`.
 - \`WHERE attr != 'value'\` does NOT include rows where attr is NULL. Use \`WHERE attr != 'value' OR attr IS NULL\`.
-- NULL values are excluded from FACET groups.
+- A FACET can return a group for rows where the attribute is null. It shows as "(none)".
 - \`count(*)\` counts all rows. \`count(attr)\` counts non-null values only.
 - \`SELECT *\` over long ranges is slow — always aggregate for > 1 hour.
 - \`Span\` data is sampled — never use for aggregate metrics (counts, averages). Use \`Transaction\` or \`Metric\` instead.
@@ -61,116 +62,53 @@ const NR_ANTI_PATTERNS = `## Common Mistakes — AVOID THESE
 export const NR_INSIDE_OUT_DEBUGGING = `## Inside-Out Debugging
 
 **With a specific identifier** (ID, error message, trace ID, user):
-1. Find it — TransactionError first (\`\\\`error.message\\\` LIKE '%value%'\`, \`request.uri LIKE '%value%'\`). No match → Transaction → Log.
+1. Find it. Look in the event type most likely to hold it: TransactionError, Transaction, Log or Span (for example \`\\\`error.message\\\` LIKE '%value%'\`, \`request.uri LIKE '%value%'\`). Try the other types when it does not match.
 2. Extract context — traceId, appName, transactionName, error.class, timestamp.
-3. Expand ONLY if needed — \`FROM Transaction WHERE traceId = '...'\` for the request chain, but only if the error context doesn't already answer the question.
+3. Follow the chain. The first error or slow part is a link, not the end. Take the trace (\`FROM Transaction WHERE traceId = '...'\`, or \`FROM Span\` for the call path). Find the callee or resource that owns the failing or slow part. Investigate it the same way.
 4. If multiple identifiers surface, investigate 1-2 representative samples. Then count how many of all matches share their pattern (FACET by the shared attribute). Only a count makes it THE pattern.
 
 **Without a specific identifier** (vague symptoms):
-1. Golden Signals — \`SELECT count(*), average(duration), percentage(count(*), WHERE error IS TRUE) FROM Transaction WHERE appName = '...' SINCE 1 hour ago\` — get multiple signals in ONE query.
-2. FACET to scope — drill by appName, transactionName, or error.class to narrow down.
+1. Read throughput, latency and errors over a window that includes a normal period before the problem, so the onset shows. Get several signals in one query, for example \`SELECT count(*), average(duration), percentage(count(*), WHERE error IS TRUE) FROM Transaction WHERE appName = '...' TIMESERIES\`.
+2. FACET by app, transaction, host or error class to find the part that changed. Then follow it.
 3. Once you have a specific identifier, switch to the "with identifier" flow above.
 
+**Slow responses or an Apdex drop:** a response time is a sum of parts. Find the part that grew, follow it to the service or resource that owns it, and start again there.
+- Measure what the user measures. The app's own Apdex is in the metric \`apm.service.apdex\` (per transaction: \`apm.service.transaction.apdex\`). Read it with \`apdex(apm.service.apdex)\`. \`average()\` or \`min()\` of it is not a score. Nested aggregates such as \`min(apdex(...))\` or \`max(percentage(...))\` are not allowed. Server-side errors count as frustrated at any response time, so an Apdex drop can be errors, not slowness. \`apdex(duration, t: ...)\` ignores errors and uses a T you choose.
+- Split the time against a normal window: database, external calls, and the service's own code (Transaction \`databaseDuration\`, \`externalDuration\`, \`databaseCallCount\`, \`externalCallCount\`). More calls per request and slower calls are different causes.
+- Each part has an owner with its own data. External time: \`apm.service.external.host.duration\` by \`external.host\` names the called host; find its service and investigate it. Database time: \`apm.service.datastore.operation.duration\` by \`datastoreType\`, \`table\`, \`operation\`, and \`db.statement\` on datastore spans. Own time: load, \`apm.service.cpu.usertime.utilization\`, \`apm.service.memory.physical\`, \`apm.service.instance.count\`, host samples, and CPU throttling in \`K8sContainerSample\`. Changes: \`ChangeTrackingEvent\` and \`Deployment\`.
+- Caller to callee: take \`external.host\`, or the downstream span in a trace (\`http.url\`, \`category\`). Find the service that owns it (its \`appName\`). Query that service with the same method.
+- Compare a host or instance with its healthy peers (\`FACET host\`). This separates one bad node from a service-wide cause.
+- Find the onset to the minute with \`TIMESERIES\` of the part that grew. Then look for changes at that minute.
+- Fields differ by agent and setup. Before you call a field or metric absent, confirm it with \`keyset()\` or \`uniques(metricName)\`.
+
 **Diagnostic safeguards:**
-- **No data?** If your first 2 queries across different event types return empty, verify data exists: \`SELECT count(*) FROM Transaction SINCE 1 day ago\`. If zero, report no data — stop investigating.
+- **No data?** Check the app name, the event type and the field with \`keyset()\`. Widen the window. Report no data only when the source holds nothing for the entity.
 
-**Identifier extraction:** \`error.message\` often contains IDs — extract with \`capture()\` or \`LIKE\` and search across types. \`request.uri\` has entity IDs (e.g. \`/api/users/12345\`). Custom attributes: \`keyset() FROM Transaction\`.
-
-NEVER start with schema discovery (\`keyset()\`, \`SHOW EVENT TYPES\`) when you have a specific value.`;
+**Identifier extraction:** \`error.message\` often contains IDs — extract with \`capture()\` or \`LIKE\` and search across types. \`request.uri\` has entity IDs (e.g. \`/api/users/12345\`). Custom attributes: \`keyset() FROM Transaction\`.`;
 
 export const NR_SERVICE_HEALTH_RUNBOOK = `## Service Health Runbook
 
-### Step 0 — Identify Entity Types
-Before running any checks, determine which entity types exist for the service:
-- **APM application present** → run the APM Health Checklist below
-- **Browser application present** → run the Browser Health Checklist below
-- **Both present** → run both checklists
-- **Neither found** → report that no monitorable entity was found and stop
+Judge health per entity type from its signals against a normal window. Find which entity types exist for the service (APM application, Browser application, or both). If none exists, report that no monitorable entity was found.
 
----
+**Signals**
+- APM: latency P99 and median, error rate, throughput and success count, outbound call errors and duration.
+- Browser: JS errors, AJAX error rate and time, LCP, AJAX volume.
 
-### APM Health Checklist
-Run all 4 checks for any APM application entity.
-
-**[ ] Check 1 — Response Time P99**
-Measure the 99th percentile response time for all transactions.
-_Why:_ P99 catches worst-case latency that average metrics hide. Degradation here means the slowest 1% of users are experiencing a significant problem even if the average looks fine.
-_Baseline:_ Compare against the same time range exactly 1 week ago (same day of week).
-_Flag if:_ Current P99 is more than 50% higher than the baseline.
-
-**[ ] Check 2 — Transaction Error Rate**
-Measure the percentage of all transactions that ended in an error.
-_Why:_ Error rate directly reflects the fraction of user requests that are failing. Even a small uptick is significant because it represents real users hitting errors.
-_Baseline:_ Compare against the same time range 1 week ago (same day of week).
-_Flag if:_ Current rate is more than 50% relatively higher than baseline, OR the absolute increase is more than 1 percentage point when the baseline was near zero.
-
-**[ ] Check 3 — External Services Errors**
-Measure the error rate of outbound HTTP calls this service makes to external services or APIs.
-_Why:_ Compares this service's errors with its downstream calls' errors. A shared onset is a candidate link to test, not a finding.
-_Applicability:_ Only run this check if the service makes external calls. If it does not, mark as N/A.
-_Baseline:_ Compare non-2xx response rate against the same time range 1 week ago (same day of week).
-_Flag if:_ Non-2xx rate is more than 2× the baseline, or it newly appears where the baseline was near zero.
-
-**[ ] Check 4 — Success Transactions Drop**
-Measure the count of transactions that completed successfully (no error).
-_Why:_ A drop in successful transactions signals a blockage or anomaly even when the error rate is stable — requests may simply not be arriving or being processed at expected volumes.
-_Baseline:_ Compare count against the same time range exactly 1 week ago (same day of week). **Never compare different days of the week — traffic patterns differ significantly between weekdays and weekends.**
-_Flag if:_ Count is more than 20% lower than the baseline.
-
----
-
-### Browser Health Checklist
-Run all 5 checks for any Browser application entity.
-
-**[ ] Check 1 — Browser JS Errors**
-Measure the count of JavaScript errors recorded in users' browsers.
-_Why:_ JS errors silently break features and flows without producing HTTP errors — they are completely invisible to server-side APM.
-_Baseline:_ Compare count against the same time range 1 week ago (same day of week).
-_Flag if:_ Count is more than 50% higher than baseline.
-
-**[ ] Check 2 — AJAX Request Error Rate**
-Measure the percentage of AJAX/XHR requests from the browser that received a non-2xx HTTP response.
-_Why:_ Catches API failures from the client's perspective, including calls to third-party APIs or CDN endpoints that server-side APM may miss entirely.
-_Baseline:_ Compare against the same time range 1 week ago (same day of week).
-_Flag if:_ Error rate is more than 50% relatively higher than baseline, or the absolute increase is more than 1 percentage point when baseline was near zero.
-
-**[ ] Check 3 — Browser LCP P75**
-Measure the 75th percentile of Largest Contentful Paint (LCP) — the time until the page's primary content is visible to the user.
-_Why:_ LCP is the primary user-perceived load speed signal. P75 means 3 out of 4 users experience this load time or better. A regression here directly impacts perceived performance for the majority of users.
-_Baseline:_ Compare against the same time range 1 week ago (same day of week).
-_Flag if:_ P75 is more than 30% higher (slower) than baseline.
-
-**[ ] Check 4 — AJAX Response Time P75**
-Measure the 75th percentile of AJAX request round-trip time as measured from the browser.
-_Why:_ Slow AJAX responses degrade interactivity even when the initial page load looks fine. This catches API latency that users feel during active interactions.
-_Baseline:_ Compare against the same time range 1 week ago (same day of week).
-_Flag if:_ P75 is more than 30% higher than baseline.
-
-**[ ] Check 5 — AJAX Success Requests Drop**
-Measure the count of AJAX requests that completed with a successful (2xx) response.
-_Why:_ Fewer successful AJAX requests. Possible meanings to test, not findings: a feature not reached, a routing or CDN change, rejected requests.
-_Baseline:_ Compare against the same time range exactly 1 week ago (same day of week). **Never compare different days of the week.**
-_Flag if:_ Count is more than 20% lower than the baseline.
-
----
-
-### Baseline Comparison Rule
-**Always compare the same day of week, same time range, 7 days prior.**
-- Correct: "Tuesday 14:00–15:00" vs "last Tuesday 14:00–15:00"
-- **WRONG: comparing Monday vs Tuesday, or weekday vs weekend.** Traffic patterns differ significantly — cross-day comparisons produce false positives and miss real issues.
-
----
+**Method**
+- Choose the baseline from the traffic pattern. The same weekday and hour a week earlier is the usual choice. Never compare a weekday with a weekend. Pick a window free of known incidents and say which one you picked.
+- Report each change with both numbers. Judge its size against the normal variation of that signal.
+- A moved signal is a symptom. Follow it with the slow-response method or the chain.
+- Put several moved signals on one timeline. A shared onset points to one cause.
+- If you cannot evaluate a signal, mark it N/A and give the reason.
 
 ### Reporting Format
-Do not write a results table or a verdict line. Put the result in the finding card: the headline gives the overall verdict (all checks pass, or the flagged check names), and the details give each check's current value against its baseline. Show the checks that matter most with queries (for example \`COMPARE WITH 1 week ago\` for current against baseline).
-
-**If 2 or more checks are flagged, plot them over the same window (TIMESERIES) and compare onsets before reporting.** A shared onset likely means ONE incident across several checks.
-
-If a check could not be evaluated (no baseline data available, service has no external calls, etc.), mark it as **N/A** with a brief note. Never silently skip a check.`;
+Do not write a results table or a verdict line. Put the result in the finding card: the headline gives the overall verdict, and the details give each signal's current value against its baseline. Show the signals that matter most with queries (for example \`COMPARE WITH 1 week ago\` for current against baseline).`;
 
 const NR_QUERY_DEFAULTS = `## Query Defaults
-- Always include \`SINCE\`. Default: \`SINCE 24 hours ago\`. "recent" → 1 hour. "today" → today.
-- Default: \`LIMIT 10\`. Increase to 20–50 only when needed. Never start with 100+.`;
+- Always include \`SINCE\`. Match the window to the question. Look wider than the incident, to find its onset and a normal baseline.
+- Use a \`LIMIT\` that shows the whole distribution you reason about. Raise it when a facet may hide the cause.
+- A FACET result keeps the facets with the highest value of the first function. For the lowest values (the worst Apdex) or the biggest change (\`COMPARE WITH\`), use \`LIMIT MAX\`, so that every candidate is in the result. You see every row the query returns, up to a text budget per result. A note tells you when rows are cut.
+- To rank all candidates by a spike or a drop, take each one's worst interval against its own normal level, counted in requests. Put a TIMESERIES per candidate in a subquery and aggregate it outside, for example \`SELECT max(n) - average(n), max(n), average(n) FROM (SELECT filter(count(*), WHERE error IS TRUE) AS n FROM Transaction WHERE appName LIKE 'PROD-%' FACET appName TIMESERIES 5 minutes LIMIT MAX) FACET appName SINCE 1 day ago LIMIT 10\`. For latency or Apdex, count slow requests instead: \`WHERE apdexPerfZone = 'F'\`. SINCE goes on the outer query only.`;
 
 const NR_EVENT_TYPES = `## Event Types & Field Reference
 
@@ -188,8 +126,8 @@ Same values, different field names. \`FROM Transaction WHERE traceId = 'abc'\` b
 
 ### Event Types
 
-**Transaction** — One event per request per service. ~2000 events/min/instance before sampling.
-Fields: \`duration\`, \`name\`, \`appName\`, \`traceId\`, \`guid\`, \`httpResponseCode\`, \`request.uri\`, \`request.method\`, \`error\` (boolean), \`host\`, \`entity.guid\`, \`databaseDuration\`, \`externalDuration\`, \`parent.app\`/\`parent.type\`/\`parent.transportDuration\`.
+**Transaction** — One event per request per service. Sampled on high-volume agents: use Metric or EXTRAPOLATE for totals.
+Fields: \`duration\`, \`name\`, \`appName\`, \`traceId\`, \`guid\`, \`httpResponseCode\`, \`request.uri\`, \`request.method\`, \`error\` (boolean), \`host\`, \`entity.guid\`, \`databaseDuration\`, \`databaseCallCount\`, \`externalDuration\`, \`externalCallCount\`, \`parent.app\` (the caller's app identifier, not its name)/\`parent.type\`/\`parent.transportDuration\`.
 Use for: health checks, error rates, latency, throughput, cross-service tracing.
 
 **TransactionError** — Error details. Separate sampling pool (~100/harvest cycle).
@@ -200,9 +138,10 @@ Key difference: Transaction only has boolean \`error\`; TransactionError has the
 Fields: \`message\`, \`level\` / \`log.level\`, \`entity.name\`, \`hostname\`, \`trace.id\`, \`span.id\`, \`entity.guid\`.
 Note: Linking fields (\`trace.id\`, \`span.id\`) require agent logs-in-context. If missing, the data does not link logs to traces; the reason is unknown.
 
-**Span** — Sub-transaction operations (DB, HTTP, method timings). **HEAVILY SAMPLED: ~10 traces/min (120 for Java), max 2000 spans/min.** Never use for aggregate counts/averages — counts will be far too low.
+**Span** — Sub-transaction operations (DB, HTTP, method timings). Sampled (roughly 10 traces/min, more for Java), so counts and averages are too low. Totals come from Transaction or Metric.
 Fields: \`name\`, \`duration\`, \`category\` (generic/http/datastore/external), \`span.kind\`, \`traceId\`, \`parentId\`, \`nr.entryPoint\`, \`http.url\`, \`http.statusCode\`, \`db.statement\`, \`error.class\`, \`error.message\`.
-Use ONLY for: tracing individual request paths when Transaction's \`duration\` isn't granular enough.
+Use it to follow one request: which child call or datastore span took the time, and which service the call went to.
+A Span has no \`transaction.name\`. To scope spans to one transaction, filter by trace: \`WHERE traceId IN (SELECT traceId FROM Transaction WHERE appName = 'x' AND name = 'y' LIMIT MAX)\`.
 
 **Metric** — Dimensional metrics. **NEVER SAMPLED** — always accurate. Use when event sampling is suspected.
 Query: \`FROM Metric SELECT average(apm.service.transaction.duration) WHERE appName = 'x'\`.
@@ -213,10 +152,10 @@ Fields: \`cpuPercent\`, \`memoryUsedPercent\`, \`diskUsedPercent\`, \`hostname\`
 const NR_CROSS_SIGNAL = `## Cross-Signal Correlation
 - **Transaction → TransactionError**: Same \`traceId\`. Transaction has boolean \`error\`; TransactionError has \`error.message\`/\`error.class\`.
 - **Transaction → Log**: \`traceId\` (Transaction) = \`trace.id\` (Log, backtick-quoted). \`appName\` (Transaction) = \`entity.name\` (Log).
-- **Transaction → Span**: Same \`traceId\`. Use Span ONLY for sub-request breakdown — never for aggregates (heavily sampled).
+- **Transaction → Span**: Same \`traceId\`. Use Span to follow one request: which child call took the time and which service it went to. Take totals from Transaction or Metric (Span is sampled).
 - **Any → Metric**: When event counts seem low, compare: \`FROM Transaction SELECT count(*)\` vs \`FROM Metric SELECT rate(count(apm.service.transaction.duration), 1 minute)\`. If Metric is significantly higher, events are sampled — add \`EXTRAPOLATE\`.
 - **\`entity.guid\`**: Universal cross-type linker across Transaction, Span, Log, Metric, Infrastructure.
-- **Diagnostic shortcut**: Health → Transaction | Error cause → TransactionError | Slow? → Transaction FACET name, then Span for breakdown | Which service? → Transaction WHERE traceId | Infra → SystemSample WHERE hostname = '...'`;
+- **Diagnostic shortcut**: Health → Transaction | Error cause → TransactionError | Slow or Apdex drop? → the "Slow responses or an Apdex drop" flow | Which service? → Transaction WHERE traceId | Infra → SystemSample WHERE hostname = '...'`;
 
 const NR_ALERTS = `## Alerts: Issues, Incidents, Policies
 - A **condition** belongs to a **policy**. A condition opens an **incident**. New Relic groups related incidents into one **issue**.

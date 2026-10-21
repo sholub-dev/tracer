@@ -16,7 +16,7 @@ import { writeAppSetting } from "../db/config-reader.js";
 import { SETTINGS_KEYS } from "../config.js";
 import type { Context } from "../trpc/context.js";
 import type { ProviderRegistry } from "../providers/registry.js";
-import { runChatAgent, sanitizeMessages } from "./base-agent.js";
+import { budgetNote, owesFinding, runChatAgent, sanitizeMessages, turnToolNames } from "./base-agent.js";
 import { newSteerState, steerChat } from "./steer.js";
 import { resumeRuns, settleInterruptedRuns } from "./resume.js";
 import { startAgentSession } from "./start-session.js";
@@ -42,7 +42,7 @@ function memoryDb(): Db {
     CREATE TABLE provider_configs (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL UNIQUE, config TEXT NOT NULL, created_at INTEGER NOT NULL);
     CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
     CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, messages TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'idle',
-      kind TEXT, summary TEXT, summary_up_to INTEGER, summary_created_at INTEGER, run_scope TEXT, resumed INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+      kind TEXT, summary TEXT, summary_up_to INTEGER, summary_created_at INTEGER, run_scope TEXT, resumed INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, active_at INTEGER);
     CREATE TABLE tool_memories (id INTEGER PRIMARY KEY AUTOINCREMENT, tool_name TEXT NOT NULL, note TEXT NOT NULL, review_note TEXT, source_session_id TEXT, source TEXT NOT NULL DEFAULT 'agent', last_used_at INTEGER, uid TEXT, created_at INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE monitor_triggers (id TEXT PRIMARY KEY, monitor_id TEXT, triggered_at INTEGER, window_start INTEGER NOT NULL, session_id TEXT, reported TEXT, device_id TEXT);
     CREATE TABLE agent_runs (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, agent_type TEXT NOT NULL, model TEXT,
@@ -230,7 +230,7 @@ test("Anthropic chat request: date-only system prompt with cache breakpoint, tim
   }
 });
 
-async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string | null)[]; onRequest?: (n: number) => Promise<void> }, retryDelaysMs: number[], whileRunning?: (ctx: Context) => Promise<void>, tools?: ToolSet | ((writer: { write: (part: Record<string, unknown>) => void }) => ToolSet)) {
+async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string | null)[]; onRequest?: (n: number) => Promise<void> }, retryDelaysMs: number[], whileRunning?: (ctx: Context) => Promise<void>, tools?: ToolSet | ((writer: { write: (part: Record<string, unknown>) => void }) => ToolSet), maxSteps?: number, thinking = true) {
   const db = memoryDb();
   // The session status at each model request.
   const statusAtRequest: (string | undefined)[] = [];
@@ -245,12 +245,14 @@ async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string 
   try {
     await db.insert(schema.providerConfigs).values({ type: "anthropic", config: JSON.stringify({ apiKey: "test" }) }).run();
     await writeAppSetting(db, SETTINGS_KEYS.chatModel, { provider: "anthropic", modelId: "claude-test" });
+    // Anthropic extended thinking rejects a forced tool choice, so the agent forces the card only without it.
+    if (!thinking) await writeAppSetting(db, SETTINGS_KEYS.thinkingBudgetAnthropic, 0);
     const context: Context = { db, providers: {} as ProviderRegistry, activeStreams: new Map() };
     let completed = 0;
     const failed: string[] = [];
     const res = await runChatAgent({
       sessionId: "s1", messages: [{ id: "u1", role: "user", parts: [{ type: "text", text: "why?" }] }], context,
-      collectTools: async (writer) => ({ tools: typeof tools === "function" ? tools(writer) : tools, afterComplete: () => { completed++; } }),
+      collectTools: async (writer) => ({ tools: typeof tools === "function" ? tools(writer) : tools, maxSteps, afterComplete: () => { completed++; } }),
       sessionTitle: () => "t", retryDelaysMs, onFailed: (e) => failed.push(e),
     });
     assert.ok("stream" in res && res.stream);
@@ -373,7 +375,7 @@ test("a turn that ran a query and stopped without a finding card gets one extra 
   const r = await retryRun({ script: [TOOL_CALL_SSE, EMPTY_TEXT_SSE, FINDING_CALL_SSE, SSE] }, [], undefined, findingTools);
   assert.equal(r.bodies.length, 3, "the repair pass is one step, so nothing follows the card");
   const toolNames = (i: number) => (r.bodies[i].tools as { name: string }[]).map((t) => t.name);
-  assert.deepEqual(toolNames(1), ["lookup", "report_finding"]);
+  assert.deepEqual(toolNames(1), ["lookup", "report_finding", "read_result"]);
   assert.deepEqual(toolNames(2), ["report_finding"], "the first repair step offers only the card");
   const last = r.bodies[2].messages as { role: string }[];
   assert.equal(last.at(-1)!.role, "user", "the repair request ends with a nudge, not a prefill");
@@ -419,7 +421,8 @@ test("a failed repair pass still runs the follow-up work of the complete reply a
 
 test("a turn that already has a finding card or ran no query gets no repair pass", async () => {
   const carded = await retryRun({ script: [TOOL_CALL_SSE, FINDING_CALL_SSE, SSE] }, [], undefined, findingTools);
-  assert.equal(carded.bodies.length, 3);
+  // The card review is one more model call.
+  assert.equal(carded.bodies.length, 4);
   const plain = await retryRun({ script: [SSE] }, [], undefined, findingTools);
   assert.equal(plain.bodies.length, 1);
   assert.equal(plain.completed, 1);
@@ -894,4 +897,51 @@ test("a run and a stop work without AbortSignal.any, which iOS before 17.4 lacks
   } finally {
     AbortSignal.any = any;
   }
+});
+
+test("the agent hears once when a tenth of its steps remain, and again on its last step", () => {
+  const notes = Array.from({ length: 100 }, (_, i) => budgetNote(i, 100, ["execute_nrql"]));
+  assert.deepEqual(notes.flatMap((n, i) => (n ? [i] : [])), [90, 99]);
+  assert.match(notes[90]!, /^At this point 10 steps remained.*call begin_analysis/);
+  assert.match(notes[99]!, /last step/);
+  assert.deepEqual(Array.from({ length: 5 }, (_, i) => budgetNote(i, 5, ["execute_nrql"])).flatMap((n, i) => (n ? [i] : [])), [4]);
+  assert.equal(budgetNote(4, 5, []), undefined, "a turn with no query is not told to report");
+});
+
+test("the step notice does not ask for a second analysis or card", () => {
+  assert.match(budgetNote(90, 100, ["execute_nrql", "begin_analysis"])!, /settle the challenges/);
+  assert.equal(budgetNote(90, 100, ["begin_analysis", "report_finding"]), undefined);
+  assert.equal(budgetNote(99, 100, ["report_finding"]), undefined);
+});
+
+const forcedCard = { type: "tool", name: "report_finding" };
+
+test("the last step forces the card", async () => {
+  const r = await retryRun({ script: [TOOL_CALL_SSE, FINDING_CALL_SSE] }, [], undefined, findingTools, 2, false);
+  assert.equal(r.bodies.length, 2);
+  assert.notDeepEqual(r.bodies[0].tool_choice, forcedCard);
+  assert.deepEqual(r.bodies[1].tool_choice, forcedCard);
+});
+
+test("a re-run attempt keeps spending the step budget of the reply", async () => {
+  // Attempt 1 runs step 0 and fails in step 1. The re-run's first request is step 1 of 3, its second is the last step.
+  const r = await retryRun({ script: [TOOL_CALL_SSE, DROPPED, TOOL_CALL_SSE, FINDING_CALL_SSE] }, [0], undefined, findingTools, 3, false);
+  assert.equal(r.bodies.length, 4);
+  assert.notDeepEqual(r.bodies[2].tool_choice, forcedCard);
+  assert.deepEqual(r.bodies[3].tool_choice, forcedCard);
+});
+
+test("a card that was aborted, sent back or never recorded does not count as the answer", () => {
+  const card = { kind: "summary", headline: "Slow", details: "d", points: [] };
+  const turn = (finding: object) => sanitizeMessages([
+    { id: "u", role: "user", parts: [{ type: "text", text: "why?" }] },
+    { id: "a", role: "assistant", parts: [
+      { type: "tool-lookup", toolCallId: "1", state: "output-available", input: {}, output: "ok" },
+      { type: "tool-report_finding", toolCallId: "2", input: card, ...finding },
+    ] } as UIMessage,
+  ]);
+  assert.equal(owesFinding(turnToolNames(turn({ state: "input-available" }))), true, "an aborted card");
+  assert.equal(owesFinding(turnToolNames(turn({ state: "output-available", output: { recorded: false, problems: "x" } }))), true, "a sent-back card");
+  assert.equal(owesFinding(turnToolNames(turn({ state: "output-available", output: { recorded: true } }))), false);
+  assert.equal(owesFinding(turnToolNames(turn({ state: "output-available", output: "Recorded" }))), false, "a card saved before the output said so");
 });

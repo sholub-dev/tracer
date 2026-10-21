@@ -38,6 +38,20 @@ function withTitleField(schema: any) {
   });
 }
 
+/** The MCP server reports API failures as a `{"error":{name,message,stack}}` text without isError. */
+function mcpFailure(result: unknown, normalized: unknown): { message: string; text: string } | undefined {
+  const text = typeof normalized === "string" ? normalized : JSON.stringify(normalized);
+  const flagged = (result as { isError?: boolean } | null)?.isError === true;
+  const err = normalized && typeof normalized === "object" && !Array.isArray(normalized) ? (normalized as { error?: unknown }).error : undefined;
+  if (!flagged && !err) return undefined;
+  if (typeof err === "string") return { message: err, text };
+  if (err && typeof err === "object") {
+    const message = (err as { message?: unknown }).message;
+    return { message: typeof message === "string" ? message : JSON.stringify(err), text };
+  }
+  return { message: text, text };
+}
+
 /** Runs the call with a limit and the caller's abort. The race also ends a call that ignores the signal. */
 async function withCallLimit<T>(call: (signal: AbortSignal) => Promise<T>, caller: AbortSignal | undefined, message: string, onLimit: () => void): Promise<T> {
   const controller = new AbortController();
@@ -115,13 +129,17 @@ export function createGcpDirectTools(
           const timeoutMessage = `${name} timed out after ${CONFIG.mcpToolCallTimeoutMs / 1000}s. Narrow the filter or the time range, or try again.`;
           const result = await withCallLimit((signal) => originalExecute(input, { ...options, abortSignal: signal }), options?.abortSignal, timeoutMessage, () => { otherCalls = provider.callsRunning - 1; });
           const normalized = extractMcpContent(result);
-          // MCP reports API failures as an isError result, not a thrown error.
-          if ((result as { isError?: boolean } | null)?.isError) noteReauth(typeof normalized === "string" ? normalized : JSON.stringify(normalized));
+          const failure = mcpFailure(result, normalized);
+          if (failure) {
+            noteReauth(failure.text);
+            collectedQueries.push({ query: `${name}: ${queryStr}`, results: { error: failure.message } });
+            return { error: failure.message };
+          }
 
           if (detectTruncation(normalized)) {
             const errorMsg =
               `The result exceeded the server's size limit. ` +
-              `Reduce pageSize (use 5-10), add more specific filters, or request a shorter time range.`;
+              `Add more specific filters, request a shorter time range, or lower pageSize, then retry.`;
             collectedQueries.push({ query: `${name}: ${queryStr}`, results: { error: errorMsg } });
             return { error: errorMsg };
           }

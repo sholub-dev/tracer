@@ -14,6 +14,13 @@ import {
   nrUnifiedFragment,
 } from "./tools.js";
 
+export interface NrqlOutcome {
+  rows: Record<string, unknown>[];
+  futureRemoved: number;
+  window: { begin: number; end: number } | null;
+  messages: string[];
+}
+
 export class NewRelicProvider extends BaseProvider {
   readonly name = "newrelic";
   readonly type = "newrelic";
@@ -60,13 +67,22 @@ export class NewRelicProvider extends BaseProvider {
   }
 
   async executeRawQuery(query: string): Promise<unknown> {
+    return (await this.executeNrql(query)).rows;
+  }
+
+  /** Rows plus the window and messages New Relic reports. `futureRemoved` counts rows dropped for starting after now. */
+  async executeNrql(query: string): Promise<NrqlOutcome> {
     const response = await this.client.query(query);
-    const results = response.data?.actor.account.nrql.results ?? [];
+    const { results, metadata } = response.data?.actor.account.nrql ?? { results: [] };
     // An UNTIL in the future returns empty buckets that read as a drop to zero.
     const now = Date.now() / 1000;
-    return normalizeNewRelicRows(
-      results.filter((r: NrqlResult) => !(typeof r.beginTimeSeconds === "number" && r.beginTimeSeconds > now)),
-    );
+    const kept = results.filter((r: NrqlResult) => !(typeof r.beginTimeSeconds === "number" && r.beginTimeSeconds > now));
+    return {
+      rows: normalizeNewRelicRows(kept),
+      futureRemoved: results.length - kept.length,
+      window: metadata?.timeWindow ?? null,
+      messages: metadata?.messages ?? [],
+    };
   }
 
   aiIssues(filter: AiIssuesFilter, startMs: number, endMs: number): Promise<AiIssue[]> {

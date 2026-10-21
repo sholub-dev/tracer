@@ -22,6 +22,10 @@ export interface NerdGraphError {
 /** NRQL query result */
 export interface NrqlQueryResult {
   results: NrqlResult[];
+  metadata?: {
+    timeWindow?: { begin: number; end: number } | null;
+    messages?: string[] | null;
+  } | null;
 }
 
 /** Single NRQL result row */

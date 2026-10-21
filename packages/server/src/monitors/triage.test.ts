@@ -33,9 +33,9 @@ function memoryDb(globalOn = true): Db {
     INSERT INTO monitors VALUES ('m1', 'M', 'newrelic', 'q', NULL, 'c', 60, 1, NULL, 'ok', NULL, NULL, NULL, 1, 0, 0);
     CREATE TABLE chat_sessions (
       id TEXT PRIMARY KEY, title TEXT NOT NULL, messages TEXT NOT NULL, status TEXT NOT NULL, kind TEXT,
-      summary TEXT, summary_up_to INTEGER, summary_created_at INTEGER, run_scope TEXT, resumed INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      summary TEXT, summary_up_to INTEGER, summary_created_at INTEGER, run_scope TEXT, resumed INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, active_at INTEGER
     );
-    INSERT INTO chat_sessions VALUES ('s1', 'Firing', '[]', 'idle', 'monitor', NULL, NULL, NULL, NULL, 0, 0, 0);
+    INSERT INTO chat_sessions VALUES ('s1', 'Firing', '[]', 'idle', 'monitor', NULL, NULL, NULL, NULL, 0, 0, 0, NULL);
     CREATE TABLE session_timers (session_id TEXT PRIMARY KEY, fire_at INTEGER, note TEXT NOT NULL, set_at INTEGER NOT NULL);
     CREATE TABLE monitor_triggers (
       id TEXT PRIMARY KEY, monitor_id TEXT, triggered_at INTEGER, window_start INTEGER NOT NULL, session_id TEXT, reported TEXT, device_id TEXT, outcome TEXT
@@ -289,8 +289,8 @@ test("checkWatches leaves watched issues open once their follow-up timer is gone
 
 test("checkWatches orphans only watched issues without a pending timer", async () => {
   const { context } = fakeNewRelic({});
-  await context.db.run(sql`INSERT INTO chat_sessions VALUES ('s2', 'Two', '[]', 'idle', 'monitor', NULL, NULL, NULL, NULL, 0, 0, 0)`);
-  await context.db.run(sql`INSERT INTO chat_sessions VALUES ('s3', 'Three', '[]', 'idle', 'monitor', NULL, NULL, NULL, NULL, 0, 0, 0)`);
+  await context.db.run(sql`INSERT INTO chat_sessions VALUES ('s2', 'Two', '[]', 'idle', 'monitor', NULL, NULL, NULL, NULL, 0, 0, 0, NULL)`);
+  await context.db.run(sql`INSERT INTO chat_sessions VALUES ('s3', 'Three', '[]', 'idle', 'monitor', NULL, NULL, NULL, NULL, 0, 0, 0, NULL)`);
   await addIssue(context.db, "kept", { state: "watching", sessionId: "s1" });
   await addIssue(context.db, "spent", { state: "watching", sessionId: "s2" });
   await addIssue(context.db, "none", { state: "watching", sessionId: "s3" });

@@ -50,6 +50,20 @@ function formatTs(ms: number, timeZone = "UTC"): string {
 /** Returns the current Unix timestamp in seconds. */
 export const unixNow = () => Math.floor(Date.now() / 1000);
 
+const NOT_A_TIME = /^(sum|average|count|rate|percentile|stddev)\(|duration|totalTime|timeout|uptime/i;
+
+/** Whether a result key names a point in time, not an amount of time. */
+function namesPointInTime(key: string): boolean {
+  if (NOT_A_TIME.test(key)) return false;
+  return (
+    /^(startTime|endTime|eventTime|beginTime|start|end|timestamp|time|beginTimeSeconds|endTimeSeconds)$/.test(key) ||
+    /([._]timestamp|Timestamp)$/.test(key) ||
+    /^(latest|earliest|max|min)\(.*timestamp\)/i.test(key) ||
+    /(At|_at)$/.test(key) ||
+    /\.(time|Time)$/.test(key)
+  );
+}
+
 /** Convert unix timestamps in query results to human-readable strings so the model doesn't hallucinate dates. */
 export function formatTimestamps(results: unknown, timeZone?: string): unknown {
   if (!Array.isArray(results)) return results;
@@ -57,12 +71,10 @@ export function formatTimestamps(results: unknown, timeZone?: string): unknown {
     if (typeof row !== "object" || row === null) return row;
     const out: Record<string, unknown> = { ...(row as Record<string, unknown>) };
     for (const [key, val] of Object.entries(out)) {
-      if (typeof val === "number") {
-        if (isUnixMs(key, val)) {
-          out[key] = formatTs(val, timeZone);
-        } else if (isUnixSec(key, val)) {
-          out[key] = formatTs(val * 1000, timeZone);
-        }
+      if (typeof val === "number" && namesPointInTime(key)) {
+        // Microsecond and nanosecond values are not milliseconds: they would show a far-future date, or throw past the Date range.
+        if (val > 1_000_000_000_000 && val < 3_000_000_000_000) out[key] = formatTs(val, timeZone);
+        else if (val > 1_000_000_000 && val < 3_000_000_000) out[key] = formatTs(val * 1000, timeZone);
       }
     }
     return out;

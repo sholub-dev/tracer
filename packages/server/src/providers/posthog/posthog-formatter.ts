@@ -2,13 +2,29 @@
 
 import type { HogQLQueryResponse } from "./types.js";
 
+/** Suffix repeated column names (`count()`, `count()` -> `count()`, `count()_2`) so no column overwrites another. */
+function uniqueNames(columns: string[]): string[] {
+  const seen = new Map<string, number>();
+  const used = new Set(columns);
+  return columns.map((col) => {
+    const n = (seen.get(col) ?? 0) + 1;
+    seen.set(col, n);
+    if (n === 1) return col;
+    let name = `${col}_${n}`;
+    for (let k = n; used.has(name); k++) name = `${col}_${k + 1}`;
+    used.add(name);
+    return name;
+  });
+}
+
 /** Zip the columnar Query API response into row objects keyed by column name. */
 export function rowsToObjects(resp: HogQLQueryResponse): Record<string, unknown>[] {
   const { columns, results } = resp;
   if (!Array.isArray(results) || !Array.isArray(columns)) return [];
+  const names = uniqueNames(columns);
   return results.map((row) => {
     const obj: Record<string, unknown> = {};
-    columns.forEach((col, i) => {
+    names.forEach((col, i) => {
       obj[col] = row[i];
     });
     return obj;
@@ -87,27 +103,36 @@ export function toChartRows(rows: Record<string, unknown>[]): Record<string, unk
   });
 }
 
-// Cap how much of any one cell reaches the MODEL. PostHog `events` rows carry wide `properties`
-// maps (GeoIP, UTM, device, $exception_list, ...) and long strings (URLs, messages); unbounded,
-// a single row can be hundreds of tokens, and tool results are re-sent on every later step, so
-// the cost compounds. The UI still gets the full untruncated rows via the query `parts`.
-const MAX_CELL_CHARS = 200;
+// Cap what reaches the MODEL: tool results are re-sent on every later step, so the cost compounds.
+// The UI still gets the full untruncated rows via the query `parts`.
+const MAX_CELL_CHARS = 1000;
+const MAX_ARRAY_ITEMS = 50;
+/** Text budget for one result, in characters. */
+const MAX_RESULT_CHARS = 30_000;
 
-/** Rows that reach the model. */
-const MAX_DISPLAY_ROWS = 50;
+function capCell(s: string): string {
+  return s.length <= MAX_CELL_CHARS ? s : `${s.slice(0, MAX_CELL_CHARS)}… (+${s.length - MAX_CELL_CHARS} chars)`;
+}
 
 function fmtVal(v: unknown): string {
-  if (v == null) return "";
+  if (v == null) return "null";
   if (typeof v === "number") return Number.isInteger(v) ? String(v) : Math.abs(v) < 1 ? Number(v.toPrecision(3)).toString() : v.toFixed(2);
-  if (Array.isArray(v)) return v.length <= 5 ? v.join("; ") : `[${v.length} items]`;
-  if (typeof v === "object") {
-    const json = JSON.stringify(v);
-    // A large map (typically a whole `properties` blob): show just the keys. That is what schema
-    // discovery actually needs, without dumping every nested value into the model's context.
-    return json.length <= MAX_CELL_CHARS ? json : `{ ${Object.keys(v).join(", ")} }`;
+  if (Array.isArray(v)) {
+    const items = v.slice(0, MAX_ARRAY_ITEMS).map((x) => (x !== null && typeof x === "object" ? JSON.stringify(x) : String(x)));
+    const more = v.length > MAX_ARRAY_ITEMS ? `; … +${v.length - MAX_ARRAY_ITEMS} more` : "";
+    return capCell(items.join("; ") + more);
   }
+  if (typeof v === "object") return capCell(JSON.stringify(v));
   const s = String(v);
-  return s.length <= MAX_CELL_CHARS ? s : `${s.slice(0, MAX_CELL_CHARS)}… [${s.length} chars]`;
+  // HogQL returns a `properties` map as a JSON string: show it compact.
+  if (/^\s*[{[]/.test(s)) {
+    try {
+      const parsed: unknown = JSON.parse(s);
+      // Strip whitespace outside strings only: reparsing would round integers above 2^53.
+      if (parsed !== null && typeof parsed === "object") return capCell(s.replace(/"(?:[^"\\]|\\.)*"|\s+/g, (m) => (m[0] === '"' ? m : "")));
+    } catch { /* not JSON: print as text */ }
+  }
+  return capCell(s);
 }
 
 /** Escape a value for CSV: quote if it contains commas, quotes, or newlines. */
@@ -121,6 +146,28 @@ function csvEscape(val: string): string {
 /** What the HogQL API returns when a query has no LIMIT clause. */
 const DEFAULT_LIMIT = 100;
 
+/** The row limit of the outermost query: skips string literals and anything inside parentheses. */
+function outerLimit(query: string): number | null {
+  let depth = 0;
+  let quote = "";
+  let found: number | null = null;
+  for (let i = 0; i < query.length; i++) {
+    const c = query[i];
+    if (quote) {
+      if (c === "\\") i++;
+      else if (c === quote) quote = "";
+    } else if (c === "'" || c === '"' || c === "`") quote = c;
+    else if (c === "(") depth++;
+    else if (c === ")") depth--;
+    else if (depth === 0 && /[Ll]/.test(c) && !/\w/.test(query[i - 1] ?? " ")) {
+      const m = /^LIMIT\s+(\d+)(?:\s*,\s*(\d+))?/i.exec(query.slice(i));
+      // `LIMIT a, b` is offset a, count b.
+      if (m) found = Number(m[2] ?? m[1]);
+    }
+  }
+  return found ?? DEFAULT_LIMIT;
+}
+
 /**
  * Format HogQL row objects as CSV for the LLM. PostHog already returns columnar
  * data, so this is a flat table — no facet/timeseries/comparison branches needed.
@@ -129,21 +176,30 @@ export function formatHogqlCsv(rows: Record<string, unknown>[], query?: string):
   if (rows.length === 0) return "No results.";
 
   const headers = Object.keys(rows[0]);
+  const hdr = headers.map(csvEscape).join(",");
 
-  let displayRows = rows;
-  let note = "";
-  if (rows.length > MAX_DISPLAY_ROWS) {
-    displayRows = rows.slice(0, MAX_DISPLAY_ROWS);
-    note = `\n(${rows.length - MAX_DISPLAY_ROWS} more rows omitted)`;
+  const lines: string[] = [];
+  let size = hdr.length;
+  let rowCut = false;
+  for (const r of rows) {
+    let line = headers.map((k) => csvEscape(fmtVal(r[k]))).join(",");
+    if (lines.length === 0 && size + line.length + 1 > MAX_RESULT_CHARS) {
+      line = line.slice(0, Math.max(0, MAX_RESULT_CHARS - size - 1));
+      rowCut = true;
+    }
+    // Always show one row, so a result is never empty.
+    if (lines.length > 0 && size + line.length + 1 > MAX_RESULT_CHARS) break;
+    lines.push(line);
+    size += line.length + 1;
+  }
+
+  let note = rowCut ? `\n(Row cut at ${MAX_RESULT_CHARS} characters; select fewer columns.)` : "";
+  if (lines.length < rows.length) {
+    note = `\n(Showing ${lines.length} of ${rows.length} rows; the rest do not fit the ${MAX_RESULT_CHARS}-character result cap. Aggregate, narrow the window or lower the LIMIT to see the rest.)`;
   }
   // A result that fills the query's row limit, explicit or default, can be cut short.
-  const limit = query === undefined ? null : Number(/\bLIMIT\s+(\d+)/i.exec(query)?.[1] ?? DEFAULT_LIMIT);
+  const limit = query === undefined ? null : outerLimit(query);
   if (rows.length === limit) note += `\n(The result fills the query's row limit of ${limit}; there can be more. This is not a total.)`;
 
-  const hdr = headers.map(csvEscape).join(",");
-  const body = displayRows
-    .map((r) => headers.map((k) => csvEscape(fmtVal(r[k]))).join(","))
-    .join("\n");
-
-  return `${hdr}\n${body}${note}`;
+  return `${hdr}\n${lines.join("\n")}${note}`;
 }

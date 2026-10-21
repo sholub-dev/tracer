@@ -65,7 +65,15 @@ export const CONFIG = {
   reviewTimeoutMs: 90_000,
 
   /** Cap on the run transcript sent to the conclusion reviewer. */
-  reviewTranscriptMaxChars: 60_000,
+  reviewTranscriptMaxChars: 150_000,
+
+  /** A tool result this long or longer shrinks to a stub once it is older than contextKeepSteps steps of the question. */
+  contextMaskMinChars: 1500,
+  contextKeepSteps: 10,
+  /** The mask moves only this often, so the model input stays identical between moves and the provider cache holds. */
+  contextMaskEverySteps: 10,
+  /** Text of cut results the analysis cites, returned whole before the card. */
+  citedResultsMaxChars: 24_000,
 
   /**
    * Code-level cap on the reasoning ("thinking") text a model may stream within a

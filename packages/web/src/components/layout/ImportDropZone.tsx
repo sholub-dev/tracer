@@ -32,7 +32,7 @@ export function ImportDropZone({ onImported }: { onImported: (id: string) => voi
           title: parsed.sourceTitle.slice(0, 80) || DEFAULT_SESSION_TITLE,
           status: "idle" as const,
           kind: SESSION_KIND.IMPORTED as string | null,
-          updatedAt: Math.floor(Date.now() / 1000),
+          activeAt: Math.floor(Date.now() / 1000),
           titlePending: false,
           timer: null,
         };

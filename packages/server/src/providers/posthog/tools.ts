@@ -34,9 +34,9 @@ function buildExecuteHogqlTool(
       query: z.string().describe("The HogQL query to execute"),
       title: z.string().optional().describe("Short chart title in plain words, e.g. \"Checkout p95 latency\""),
     }),
-    execute: async ({ query }) => {
+    execute: async ({ query }, { abortSignal }) => {
       try {
-        const raw = (await provider.executeRawQuery(query)) as Record<string, unknown>[];
+        const raw = (await provider.executeRawQuery(query, abortSignal)) as Record<string, unknown>[];
         // Reshape time-bucketed results into New Relic's chartable contract so they plot as a
         // timeseries (no-op for non-timeseries shapes — they keep rendering as tables/badges).
         const rows = toChartRows(raw);

@@ -9,15 +9,24 @@ export interface AiIssue {
   conditionName: string[] | null;
   acknowledgedAt: number | null;
   acknowledgedBy: string | null;
+  priority: string | null;
+  entityNames: string[] | null;
+  createdAt: number | null;
+  activatedAt: number | null;
+  closedAt: number | null;
 }
 
 export interface AiIssuesFilter {
   ids?: string[];
+  states?: AiIssue["state"][];
   policyIds?: number[];
   conditionIds?: number[];
 }
 
 const AI_ISSUES_MAX_PAGES = 10;
+const NRQL_TIMEOUT_S = 60;
+const NRQL_FETCH_TIMEOUT_MS = 65_000;
+const NRQL_TIMEOUT_MESSAGE = "The query timed out: narrow the window, add a WHERE clause or aggregate";
 
 export class NerdGraphClient {
   private readonly apiKey: string;
@@ -28,7 +37,7 @@ export class NerdGraphClient {
     this.accountId = accountId;
   }
 
-  private async graphql<T>(query: string, variables: Record<string, unknown>, optIn?: string, retry?: boolean): Promise<T> {
+  private async graphql<T>(query: string, variables: Record<string, unknown>, optIn?: string, retry?: boolean, timeoutMs = 35_000): Promise<T> {
     const response = await fetchWithRetry("https://api.newrelic.com/graphql", {
       method: "POST",
       headers: {
@@ -37,31 +46,42 @@ export class NerdGraphClient {
         ...(optIn ? { "nerd-graph-unsafe-experimental-opt-in": optIn } : {}),
       },
       body: JSON.stringify({ query, variables: { accountId: parseInt(this.accountId, 10), ...variables } }),
-    }, { timeoutMs: 35_000, retry });
+    }, { timeoutMs, retry });
 
     if (!response.ok) {
-      throw new Error(`NerdGraph request failed: ${response.status} ${response.statusText}`);
+      const body = (await response.text().catch(() => "")).slice(0, 500);
+      throw new Error(`NerdGraph request failed: ${response.status} ${response.statusText}${body ? `: ${body}` : ""}`);
     }
 
     const result = (await response.json()) as { errors?: { message: string }[] };
 
     if (result.errors?.length) {
-      throw new Error(`NerdGraph error: ${result.errors[0].message}`);
+      throw new Error(`NerdGraph error: ${result.errors.map((e) => e.message).join("; ")}`);
     }
 
     return result as T;
   }
 
   async query(nrql: string, options?: { retry?: boolean }): Promise<NerdGraphResponse> {
-    return this.graphql<NerdGraphResponse>(`query($accountId: Int!, $nrql: Nrql!) {
-      actor {
-        account(id: $accountId) {
-          nrql(query: $nrql, timeout: 30) {
-            results
+    let res: NerdGraphResponse;
+    try {
+      res = await this.graphql<NerdGraphResponse>(`query($accountId: Int!, $nrql: Nrql!) {
+        actor {
+          account(id: $accountId) {
+            nrql(query: $nrql, timeout: ${NRQL_TIMEOUT_S}) {
+              results
+              metadata { timeWindow { begin end } messages }
+            }
           }
         }
-      }
-    }`, { nrql }, undefined, options?.retry);
+      }`, { nrql }, undefined, options?.retry, NRQL_FETCH_TIMEOUT_MS);
+    } catch (err) {
+      // Quoted parts echo the query, so an attribute or a value such as 'timeout' or '504' is not a timeout.
+      const message = (err instanceof Error ? err.message : String(err)).replace(/'[^']*'/g, "");
+      throw /\btime(d)?[ -]?out\b|\b504\b/i.test(message) ? new Error(NRQL_TIMEOUT_MESSAGE) : err;
+    }
+    if (!res.data?.actor.account.nrql) throw new Error("New Relic returned no result for this query");
+    return res;
   }
 
   async aiIssues(filter: AiIssuesFilter, startMs: number, endMs: number): Promise<AiIssue[]> {
@@ -76,7 +96,7 @@ export class NerdGraphClient {
           aiIssues {
             issues(filter: $filter, timeWindow: $tw, cursor: $cursor) {
               nextCursor
-              issues { issueId state title incidentIds conditionName acknowledgedAt acknowledgedBy }
+              issues { issueId state title incidentIds conditionName acknowledgedAt acknowledgedBy priority entityNames createdAt activatedAt closedAt }
             }
           }
         }

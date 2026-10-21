@@ -10,7 +10,7 @@ If any tool returns an authentication or permission error (e.g. "unauthenticated
 Do NOT retry. Do NOT try alternative tools.
 Sibling calls in the same step may return the same auth error; treat them as one failure.`;
 
-export const GCP_PAGE_SIZE_RULE = `**NEVER request large result sets.** Always set pageSize ≤ 20. Always use specific filters (severity, resource type, service name, time range). If you get a size-limit error, halve your pageSize and add tighter filters before retrying.`;
+export const GCP_PAGE_SIZE_RULE = `Use specific filters (severity, resource type, service name, time range). On a size-limit error, narrow the filter or the window, or lower pageSize, and retry. The tools return no page token. When the first page does not answer the question, narrow the filter or the window. For logs, repeat the call with \`timestamp < "<oldest timestamp seen>"\` and \`orderBy: "timestamp desc"\`.`;
 
 const GCP_LOGGING_FILTER_SYNTAX = `## Cloud Logging Filter Syntax
 - Comparison operators: \`=\`, \`!=\`, \`>\`, \`>=\`, \`<\`, \`<=\`, \`:\` (has/substring), \`=~\` (regex), \`!~\` (not regex)
@@ -50,22 +50,24 @@ const GCP_TOOL_PARAMS = `## Tool Parameter Reference
 
 ### list_log_entries
 \`\`\`json
-{ "projectName": "projects/PROJECT_ID", "filter": "resource.type=\\"cloud_run_revision\\" AND severity>=ERROR", "pageSize": 10, "orderBy": "timestamp desc" }
+{ "resourceNames": ["projects/PROJECT_ID"], "filter": "resource.type=\\"cloud_run_revision\\" AND severity>=ERROR", "pageSize": 20, "orderBy": "timestamp desc" }
 \`\`\`
-GOTCHA: \`projectName\` must be \`"projects/PROJECT_ID"\` format, NOT just \`"PROJECT_ID"\`
-GOTCHA: Always include \`orderBy: "timestamp desc"\` — default may return oldest entries first
+GOTCHA: \`resourceNames\` is an ARRAY of \`"projects/PROJECT_ID"\` strings, NOT a bare \`"PROJECT_ID"\` and NOT \`projectName\`
+GOTCHA: Always include \`orderBy: "timestamp desc"\` — default is \`timestamp asc\` (oldest first)
+Paging: there is no page token. Repeat the call with \`timestamp < "<oldest timestamp seen>"\` in the filter, or narrow the filter.
 
 ### list_time_series
 \`\`\`json
-{ "name": "projects/PROJECT_ID", "filter": "metric.type=\\"run.googleapis.com/request_count\\" resource.type=\\"cloud_run_revision\\"", "interval": { "startTime": "RFC3339", "endTime": "RFC3339" }, "aggregation": { "alignmentPeriod": "60s", "perSeriesAligner": "ALIGN_RATE" } }
+{ "name": "projects/PROJECT_ID", "filter": "metric.type=\\"run.googleapis.com/request_count\\" AND resource.type=\\"cloud_run_revision\\"", "interval": { "startTime": "RFC3339", "endTime": "RFC3339" }, "aggregation": { "alignmentPeriod": "60s", "perSeriesAligner": "ALIGN_RATE" } }
 \`\`\`
 GOTCHA: \`interval\` is REQUIRED — always compute startTime/endTime from the user's timeframe
-GOTCHA: Metric filter uses SPACE-separated conditions (no explicit AND between metric.type and resource.type)
+GOTCHA: Join metric filter conditions with \`AND\`; use \`metric.labels.X\` and \`resource.labels.X\` for labels. \`interval.endTime\` is required, \`startTime\` is optional.
 
 ### list_traces
 \`\`\`json
-{ "projectId": "PROJECT_ID", "filter": "latency:>100ms", "startTime": "RFC3339", "endTime": "RFC3339", "pageSize": 10 }
+{ "projectId": "PROJECT_ID", "filter": "latency:100ms", "startTime": "RFC3339", "endTime": "RFC3339", "pageSize": 10 }
 \`\`\`
+Filters: \`latency:100ms\` (at least this slow), \`root:NAME_PREFIX\`, \`+root:EXACT_NAME\`, \`http.status_code:500\`, \`method:Get\`. \`orderBy\` takes \`duration desc\`, \`start desc\`, \`name\`, \`trace_id\`.
 
 ### get_trace
 \`\`\`json
@@ -74,25 +76,31 @@ GOTCHA: Metric filter uses SPACE-separated conditions (no explicit AND between m
 
 ### list_group_stats
 \`\`\`json
-{ "projectId": "PROJECT_ID", "timeRange": { "startTime": "RFC3339", "endTime": "RFC3339" } }
+{ "projectName": "projects/PROJECT_ID", "timeRangePeriod": "PERIOD_6_HOURS", "order": "COUNT_DESC", "pageSize": 20 }
 \`\`\`
+\`timeRangePeriod\`: PERIOD_1_HOUR, PERIOD_6_HOURS, PERIOD_1_DAY, PERIOD_1_WEEK, PERIOD_30_DAYS. \`order\`: COUNT_DESC, LAST_SEEN_DESC, CREATED_DESC, AFFECTED_USERS_DESC. There is no custom start/end time.
 
 ### list_metric_descriptors
 \`\`\`json
-{ "projectName": "projects/PROJECT_ID", "filter": "metric.type = starts_with(\\"run.googleapis.com\\")" }
+{ "name": "projects/PROJECT_ID", "filter": "metric.type = starts_with(\\"run.googleapis.com\\")" }
 \`\`\`
-Use this FIRST when you don't know the exact metric type.`;
+Use this FIRST when you don't know the exact metric type.
+
+### Other tools
+- \`list_alerts\` (\`parent: "projects/PROJECT_ID"\`, \`filter: 'state="OPEN"'\`): active and past incidents. Check it to see what fires now.
+- \`list_alert_policies\` (\`name: "projects/PROJECT_ID"\`): configured alert conditions and thresholds.
+- \`list_log_names\`, \`list_buckets\`, \`list_views\`, \`list_sinks\`, \`list_log_scopes\` (\`parent\`): log discovery and routing setup.`;
 
 const GCP_ANTI_PATTERNS = `## Common Mistakes — AVOID THESE
 
 ### Filter Syntax Errors
-1. Using bare \`PROJECT_ID\` where \`"projects/PROJECT_ID"\` is required (\`list_log_entries\`, \`list_time_series\`, \`list_metric_descriptors\`)
+1. Using bare \`PROJECT_ID\` where \`"projects/PROJECT_ID"\` is required (\`list_log_entries\` takes \`resourceNames: ["projects/ID"]\`; \`list_time_series\`, \`list_metric_descriptors\`, \`list_alert_policies\` take \`name\`; \`list_group_stats\` takes \`projectName\`)
 2. Quoting severity: \`severity >= ERROR\` NOT \`severity >= "ERROR"\`
 3. Boolean operators MUST be uppercase: \`AND\`, \`OR\`, \`NOT\` — lowercase \`and\`/\`or\`/\`not\` silently fails or produces wrong results
 4. \`:\` (has/substring) vs \`=\` (exact match) confusion: \`textPayload:"error"\` matches substring, \`textPayload="error"\` requires exact string equality. Use \`:\` for searching within messages.
 5. Using SQL syntax in Cloud Logging filters — it is NOT SQL (no WHERE, SELECT, FROM)
 6. Missing \`interval\` for \`list_time_series\` — it is REQUIRED
-7. Using AND in metric filters — \`metric.type\` and \`resource.type\` are SPACE-separated, not AND-separated
+7. Sending \`timeRange\` start/end to \`list_group_stats\` — use \`timeRangePeriod\` and \`order\`
 8. Forgetting \`orderBy: "timestamp desc"\` — default returns oldest entries first
 
 ### Tool Misuse
@@ -108,9 +116,10 @@ const GCP_ANTI_PATTERNS = `## Common Mistakes — AVOID THESE
 16. Empty results with no filter adjustments — try: broader time range, remove resource.type filter, or filter by just \`severity>=ERROR\``;
 
 const GCP_QUERY_DEFAULTS = `## Query Defaults
-- **pageSize: 10** (default) for \`list_log_entries\`. Maximum 20. Exceeding this WILL cause the server to reject the response.
-- Always use a **specific filter** — never fetch all logs unfiltered. Filter by severity, resource type, service name, or time window.
-- For metrics: fetch **1–3 metric types** per call, not broad dumps.`;
+- Use a **specific filter**. Filter by severity, resource type, service name, or time window.
+- Choose pageSize so the page shows what you need. Results show what the API returned (up to a text limit). When a result says it shows N of M, narrow the filter or the window, or lower pageSize.
+- There is no page token. For more logs, repeat the call with \`timestamp < "<oldest timestamp seen>"\` added to the filter and \`orderBy: "timestamp desc"\`.
+- For metrics: fetch the metric types the question needs. Avoid broad dumps.`;
 
 const GCP_FIELD_REFERENCE = `## GCP Field Reference & Payload Types
 
@@ -142,7 +151,7 @@ Cloud Run structured JSON → \`jsonPayload\` with proper severity IF the app wr
 - Traces → Logs: ADD the prefix — \`trace="projects/PROJECT/traces/TRACE_ID"\`
 
 ### Error Reporting Structure
-- \`list_group_stats\` returns: \`group.groupId\`, \`group.title\` (first line of stack trace), \`count\`, \`firstSeenTime\`, \`lastSeenTime\`, \`representative.message\`
+- \`list_group_stats\` returns: \`group.groupId\`, \`count\`, \`affectedUsersCount\`, \`affectedServices\`, \`firstSeenTime\`, \`lastSeenTime\`, \`representative.message\`
 - Error groups are clustered by STACK TRACE SIMILARITY — they are for recurring exceptions, NOT arbitrary error searches
 - To search for a specific error message, use \`list_log_entries\` with \`severity>=ERROR\` and \`textPayload:"message"\` or \`jsonPayload.message:"message"\``;
 
@@ -155,21 +164,25 @@ export const GCP_CROSS_SIGNAL = `## Cross-Signal Correlation
 export const GCP_INSIDE_OUT_DEBUGGING = `## Inside-Out Debugging
 
 **With a specific identifier** (service name, error message, trace ID):
-1. Search directly — \`list_log_entries\` with a filter targeting that identifier. Do NOT start with broad overviews.
+1. Start with the signal that matches the question: logs for an error text (\`list_log_entries\` with a filter for that identifier), metrics for latency or saturation, traces for a request path.
 2. Extract context — resource type, service name, trace ID, severity pattern, timestamps.
-3. Expand ONLY if needed — \`get_trace\` for the request chain, \`list_time_series\` for trends. But only if the log context doesn't already answer the question.
+3. Follow the chain. A log error or a slow span is a link, not the end. Use \`get_trace\` to see which child span or downstream service took the time or failed. Investigate that service the same way. Use \`list_time_series\` to find the onset and compare it with a normal window.
 4. If multiple trace IDs surface, investigate 1-2 representative samples. Then count how many of all matching entries share their pattern (a filtered log count or Error Reporting group counts). Only a count makes it THE pattern.
 
 **Without a specific identifier** (vague symptoms):
-1. Start broad — \`list_log_entries\` with \`severity>=ERROR\` and pageSize=5 to discover what's happening.
+1. Look at what is happening — \`list_log_entries\` with \`severity>=ERROR\`, plus metrics for the affected resource.
 2. Check Error Reporting — \`list_group_stats\` for grouped patterns.
 3. Once you have a specific identifier, switch to the "with identifier" flow above.
 
 **Diagnostic safeguards:**
-- **No data?** If your first 2 tool calls across different signals return empty, try: broader time range, remove resource.type filter, try just \`severity>=ERROR\`. If still nothing, report no data — stop investigating.
+- **No data?** Check the project, the resource type, the labels and the window. Widen the window. Remove the resource.type filter. Report no data only when the source holds nothing for the entity.
 - **Suspiciously few results?** Check the filter syntax — remember: boolean operators must be uppercase (AND, OR, NOT), severity is unquoted, string values must be double-quoted.
 
-NEVER start with \`list_metric_descriptors\` or \`list_group_stats\` when you have a specific error message or service name — go straight to logs.`;
+**Moving across the system:**
+- Service to callees: use \`get_trace\` and read the span tree. The child span with the largest share of the time is the next link.
+- Service to its database and platform resources: query the metrics of the resource it uses (Cloud SQL, Load Balancing, GKE, GCE) with \`list_time_series\`.
+- Compare a revision, instance or pod with its peers. Use labels such as \`revision_name\`, \`instance_id\` or \`pod_name\`. This separates one bad unit from a service-wide cause.
+- Changes at the onset: look for a new \`revision_name\` first seen at that time. Check audit logs (\`protoPayload\`) for changes at that time.`;
 
 export const GCP_DOMAIN_KNOWLEDGE = `${GCP_QUERY_DEFAULTS}
 

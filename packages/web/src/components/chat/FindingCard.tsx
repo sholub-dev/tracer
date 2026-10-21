@@ -62,13 +62,13 @@ function Body({ text, compact }: { text: string; compact: boolean }) {
   );
 }
 
-function Checks({ items, verified, compact }: { items: { fact: string; toolCallId?: string; title?: string }[]; verified: boolean; compact: boolean }) {
+function Checks({ items, verified, numbered = false, compact }: { items: { fact: string; toolCallId?: string; title?: string }[]; verified: boolean; numbered?: boolean; compact: boolean }) {
   return (
     <ul className={cn("space-y-2.5", compact && "space-y-2")}>
       {items.map(({ fact, toolCallId, title }, i) => (
         <li key={i} className="flex items-start gap-3 text-[15px] text-foreground">
           <span className={cn("mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full", verified ? "bg-success-tint text-success" : "bg-secondary text-muted-foreground")}>
-            {verified ? <Check className="size-3" strokeWidth={3} aria-hidden="true" /> : <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />}
+            {numbered ? <span className="text-[11px] font-semibold tabular-nums">{i + 1}</span> : verified ? <Check className="size-3" strokeWidth={3} aria-hidden="true" /> : <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />}
           </span>
           <span className="min-w-0 [overflow-wrap:anywhere]">
             <Inline text={fact} />
@@ -118,18 +118,16 @@ export function FindingCard({ finding, compact = false, queries = [] }: { findin
       <h3 className={cn("mt-1.5 text-xl/[1.25] font-semibold tracking-tight text-foreground", compact && "text-base/[1.25]")}>{stripInline(finding.headline)}</h3>
       {isCause ? (
         <>
-          {finding.happened && <Section label="What happened" compact={compact}><Body text={finding.happened} compact={compact} /></Section>}
-          {finding.cause && <Section label="Why" compact={compact}><Body text={finding.cause} compact={compact} /></Section>}
-          {finding.evidence && finding.evidence.length > 0 && (
-            <Section label="Evidence" compact={compact}>
-              <Checks items={finding.evidence.map((e) => ({ fact: e.fact, ...link(e.query) }))} verified={confidence === "confirmed"} compact={compact} />
+          {finding.chain && finding.chain.length > 0 && (
+            <Section label="Chain" compact={compact}>
+              <Checks items={finding.chain.map((e) => ({ fact: e.fact, ...link(e.query) }))} verified={confidence === "confirmed"} numbered compact={compact} />
             </Section>
           )}
           {finding.impact && <Section label="Impact" compact={compact}><Body text={finding.impact} compact={compact} /></Section>}
           {finding.action && <Section label="Action taken" compact={compact}><Body text={finding.action} compact={compact} /></Section>}
-          {finding.toConfirm && (
+          {finding.gap && (
             <p className={cn("mt-5 rounded-[10px] bg-secondary px-4 py-3 text-sm text-ink-2 [overflow-wrap:anywhere]", compact && "mt-4 px-3 py-2.5")}>
-              <b className="font-semibold text-foreground">To confirm:</b> <Inline text={finding.toConfirm} />
+              <b className="font-semibold text-foreground">Unknown:</b> <Inline text={finding.gap} />
             </p>
           )}
         </>

@@ -94,3 +94,40 @@ test("a call that hits the limit leaves the clients open while another call stil
     config.mcpToolCallTimeoutMs = saved;
   }
 });
+
+function toolReturning(result: unknown) {
+  const provider = {
+    connected: true,
+    callsRunning: 0,
+    invalidateTools() {},
+    getCachedTools: () => ({ list_log_entries: { description: "d", inputSchema: z.object({}), execute: async () => result } }),
+  };
+  const { tools } = createGcpDirectTools(provider as never, undefined, undefined, "p");
+  return { run: (tools.list_log_entries as any).execute as (i: unknown, o?: unknown) => Promise<{ error?: string; analysis?: string }>, provider };
+}
+
+test("an error object in the result text becomes an error and triggers reauth handling", async () => {
+  await withAuth(async () => {
+    const text = JSON.stringify({ error: { name: "Error", message: "Failed to list log entries: invalid_grant", stack: "at x" } });
+    const { run, provider } = toolReturning({ content: [{ type: "text", text }] });
+    const out = await run({}, {});
+    assert.equal(out.error, "Failed to list log entries: invalid_grant");
+    assert.equal(provider.connected, false);
+  });
+});
+
+test("a bare error string from a failed call becomes an error", async () => {
+  await withAuth(async () => {
+    const { run } = toolReturning({ isError: true, content: [{ type: "text", text: "Request failed" }] });
+    assert.equal((await run({}, {})).error, "Request failed");
+  });
+});
+
+test("a normal result still formats", async () => {
+  await withAuth(async () => {
+    const { run } = toolReturning({ content: [{ type: "text", text: JSON.stringify([{ timestamp: "t", textPayload: "hi" }]) }] });
+    const out = await run({}, {});
+    assert.equal(out.error, undefined);
+    assert.ok(out.analysis?.includes("hi"));
+  });
+});

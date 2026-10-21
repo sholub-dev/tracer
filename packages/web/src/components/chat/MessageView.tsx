@@ -22,7 +22,7 @@ Structure it with these sections:
 Base the report entirely on the investigation data and findings from this conversation. Be specific — include actual error messages, metric values, service names, and query results where relevant.`;
 
 const MONITOR_FIRED = /^Monitor "(.+)" triggered\./;
-const FOLLOW_UP = /^Follow-up timer \(set .+?, due .+?, now (.+?)\): (.+?)\. (?:Check it now|First decide from the data whether the alert still needs attention)\./;
+const FOLLOW_UP = /^Follow-up timer \(set .+?, due .+?, now (.+?)\): (.+)/;
 
 interface ServerEvent {
   kind: "alert" | "followup";

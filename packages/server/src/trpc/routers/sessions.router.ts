@@ -32,6 +32,9 @@ const AGENT_TYPE_LABELS: Record<string, string> = {
   review: "Conclusion review",
 };
 
+// Matches the expression of idx_sessions_active, so the list reads that index alone.
+const activeAt = sql<number>`coalesce(${chatSessions.activeAt}, ${chatSessions.updatedAt})`;
+
 export const sessionsRouter = router({
   list: publicProcedure.query(async ({ ctx }) => {
     return (await ctx.db
@@ -40,14 +43,14 @@ export const sessionsRouter = router({
         title: chatSessions.title,
         status: chatSessions.status,
         kind: chatSessions.kind,
-        updatedAt: chatSessions.updatedAt,
+        activeAt,
         fireAt: sessionTimers.fireAt,
         setAt: sessionTimers.setAt,
       })
       .from(chatSessions)
       .leftJoin(sessionTimers, eq(sessionTimers.sessionId, chatSessions.id))
       .where(notLike(chatSessions.id, `${SESSION_PREFIX.MONITORS}%`))
-      .orderBy(desc(chatSessions.updatedAt))
+      .orderBy(desc(activeAt))
       .limit(CONFIG.sessionListLimit)
       .all())
       .map(({ fireAt, setAt, ...s }) => ({

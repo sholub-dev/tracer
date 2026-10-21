@@ -98,3 +98,20 @@ test("the New Relic issue actions are write tools", async () => {
   assert.ok(WRITE_TOOLS.has("ack_nr_issue") && WRITE_TOOLS.has("close_nr_issue"));
   assert.ok(!WRITE_TOOLS.has("list_nr_issues"));
 });
+
+test("the gate lists the reads that finished in the current step, as the model reads them", async () => {
+  const gate = createToolGate();
+  const tools = gate({
+    lookup: { toModelOutput: ({ output }: { output: { n: number } }) => ({ type: "text", value: `n=${output.n}` }), execute: async () => ({ n: 7 }) },
+    plain: { execute: async () => ({ a: 1 }) },
+    set_timer: { execute: async () => "ok" },
+  }) as Record<string, any>;
+  gate.startStep();
+  await Promise.all([tools.lookup.execute({ q: "x" }, { toolCallId: "1" }), tools.plain.execute("p", {}), tools.set_timer.execute(1, {})]);
+  assert.deepEqual(gate.stepReads().sort((a, b) => a.toolName.localeCompare(b.toolName)), [
+    { toolName: "lookup", input: { q: "x" }, text: "n=7" },
+    { toolName: "plain", input: "p", text: '{"a":1}' },
+  ]);
+  gate.startStep();
+  assert.deepEqual(gate.stepReads(), []);
+});

@@ -23,7 +23,7 @@ async function env(...parts: unknown[]) {
 }
 
 test("alertBrief reads severity, verdict and a markdown-free headline before the outcome is stored", async () => {
-  const db = await env(card({ kind: "root_cause", verdict: "problem", headline: "Pool of `db` is **exhausted**." }), report);
+  const db = await env(card({ kind: "root_cause", verdict: "problem", title: "", explanation: [{ statement: "x", source: "q" }], answer: "Pool of `db` is **exhausted**." }), report);
   assert.deepEqual(await alertBrief(db, "s1"), {
     name: "Checkout errors", triggeredAt: 1000, severity: "high", verdict: "problem", headline: "Pool of db is exhausted.", dismissed: false,
   });

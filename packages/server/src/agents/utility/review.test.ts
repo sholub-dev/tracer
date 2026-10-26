@@ -148,26 +148,6 @@ test("a follow-up review sees the card the person got, not the drafts the review
   assert.doesNotMatch(t, /Treasury draft|Current draft/);
 });
 
-test("a query the card cites stays in an over-long transcript", () => {
-  const call = (id: string, title: string, value: string): ModelMessage[] => [
-    { role: "assistant", content: [{ type: "tool-call", toolCallId: id, toolName: "execute_nrql", input: { title, query: id } }] },
-    { role: "tool", content: [{ type: "tool-result", toolCallId: id, toolName: "execute_nrql", output: { type: "text", value } }] },
-  ];
-  const bulk = Array.from({ length: Math.ceil(CONFIG.reviewTranscriptMaxChars / 8000) + 2 }, (_, i) => call(`b${i}`, `Big ${i}`, "x".repeat(8000))).flat();
-  const messages: ModelMessage[] = [
-    { role: "user", content: "Worst service?" },
-    ...call("r", "Ranking of all services", "svc-a,56250"),
-    ...bulk,
-    { role: "assistant", content: [{ type: "tool-call", toolCallId: "l", toolName: "execute_nrql", input: { title: "Last", query: "q3" } }] },
-    { role: "tool", content: [{ type: "tool-result", toolCallId: "l", toolName: "execute_nrql", output: { type: "text", value: "last,1" } }] },
-  ];
-  assert.doesNotMatch(buildTranscript(messages, 0), /56250/);
-  const t = buildTranscript(messages, 0, [], ["ranking of all services "]);
-  assert.match(t, /^Question: Worst service\?\n\(\d+ earlier lines omitted\)\nTool call execute_nrql: .*Ranking of all services.*\nResult execute_nrql: svc-a,56250\n/);
-  assert.match(t, /last,1$/);
-  assert.ok(t.length <= CONFIG.reviewTranscriptMaxChars + 100);
-});
-
 test("an alert summary review reply is parsed like a card review, and the summary is not evidence", () => {
   assert.equal(cardProblems("CLAIMS\n- issues[0].errors: 76 × Auth0Exception | 76,Auth0Exception\nPROBLEMS\nOK"), null);
   assert.equal(cardProblems("CLAIMS\n- issues[0].errors: 318 × Auth0Exception | NONE\nPROBLEMS\n- issues[0].errors: 318 is the endpoint total, not the Auth0Exception count."), "- issues[0].errors: 318 is the endpoint total, not the Auth0Exception count.");

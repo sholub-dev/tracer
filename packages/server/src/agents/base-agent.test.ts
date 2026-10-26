@@ -24,7 +24,7 @@ import { pendingResume } from "../lib/pending-resume.js";
 import { latestSessionRunning } from "../monitors/scheduler.js";
 import { ProviderRegistry as Registry } from "../providers/registry.js";
 import { encodeMessages } from "../lib/messages-codec.js";
-import { UNIFIED_SCOPE } from "@tracer-sh/shared";
+import { UNIFIED_SCOPE, cardRejected } from "@tracer-sh/shared";
 import { reportFindingTool } from "../tools/finding-tool.js";
 import { askUserTool } from "../tools/ask-tool.js";
 import { CONFIG } from "../config.js";
@@ -68,7 +68,7 @@ const SSE = sse([
 const TOOL_CALL_SSE = sse([
   MESSAGE_START,
   ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_1", name: "lookup", input: {} } }],
-  ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "{}" } }],
+  ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "{\"title\":\"Lookup\"}" } }],
   ...end("tool_use"),
 ]);
 const TWO_TOOL_CALLS_SSE = sse([
@@ -366,14 +366,14 @@ const EMPTY_TEXT_SSE = sse([
 const FINDING_CALL_SSE = sse([
   MESSAGE_START,
   ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_f", name: "report_finding", input: {} } }],
-  ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ kind: "summary", headline: "Checkout is slow", details: "One query ran.", points: [] }) } }],
+  ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ kind: "summary", title: "", answer: "Checkout is slow", explanation: [{ statement: "One query ran.", source: "Lookup" }] }) } }],
   ...end("tool_use"),
 ]);
-const findingTools = { lookup: tool({ inputSchema: z.object({}), execute: async () => "ok" }), report_finding: reportFindingTool() };
+const findingTools = { lookup: tool({ inputSchema: z.object({ title: z.string().optional() }), execute: async () => "ok" }), report_finding: reportFindingTool() };
 
 test("a turn that ran a query and stopped without a finding card gets one extra pass limited to report_finding", async () => {
   const r = await retryRun({ script: [TOOL_CALL_SSE, EMPTY_TEXT_SSE, FINDING_CALL_SSE, SSE] }, [], undefined, findingTools);
-  assert.equal(r.bodies.length, 3, "the repair pass is one step, so nothing follows the card");
+  assert.equal(r.bodies.length, 3, "a recorded card ends the repair pass");
   const toolNames = (i: number) => (r.bodies[i].tools as { name: string }[]).map((t) => t.name);
   assert.deepEqual(toolNames(1), ["lookup", "report_finding", "read_result"]);
   assert.deepEqual(toolNames(2), ["report_finding"], "the first repair step offers only the card");
@@ -385,6 +385,20 @@ test("a turn that ran a query and stopped without a finding card gets one extra 
   assert.equal(r.completed, 1, "follow-up work runs once, after the repair pass");
   assert.equal(r.statusAtRequest[2], "streaming", "the row is not done while the repair pass runs");
   assert.equal(r.status, "done");
+});
+
+test("a repair card the check sends back gets one more step to fix it", async () => {
+  const rejected = sse([
+    MESSAGE_START,
+    ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_r", name: "report_finding", input: {} } }],
+    ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ kind: "summary", title: "", answer: "Incident d9e0fc2e-414c-4b8d-872d-1ad2b89d7dad closed", explanation: [{ statement: "One query ran.", source: "Lookup" }] }) } }],
+    ...end("tool_use"),
+  ]);
+  const r = await retryRun({ script: [TOOL_CALL_SSE, EMPTY_TEXT_SSE, rejected, FINDING_CALL_SSE, SSE] }, [], undefined, findingTools);
+  assert.equal(r.bodies.length, 4);
+  assert.deepEqual((r.bodies[3].tools as { name: string }[]).map((t) => t.name), ["report_finding"]);
+  const cards = r.saved[1].parts.filter((p) => p.type === "tool-report_finding") as { output?: unknown }[];
+  assert.deepEqual(cards.map((c) => cardRejected(c.output)), [true, false]);
 });
 
 const ASK_CALL_SSE = sse([
@@ -421,8 +435,7 @@ test("a failed repair pass still runs the follow-up work of the complete reply a
 
 test("a turn that already has a finding card or ran no query gets no repair pass", async () => {
   const carded = await retryRun({ script: [TOOL_CALL_SSE, FINDING_CALL_SSE, SSE] }, [], undefined, findingTools);
-  // The card review is one more model call.
-  assert.equal(carded.bodies.length, 4);
+  assert.equal(carded.bodies.length, 3);
   const plain = await retryRun({ script: [SSE] }, [], undefined, findingTools);
   assert.equal(plain.bodies.length, 1);
   assert.equal(plain.completed, 1);
@@ -791,7 +804,7 @@ test("a message seen before the repair pass reaches it once and is saved once", 
       await new Promise((res) => setTimeout(res, 100));
       assert.equal(await steerChat(ctx, "s1", { id: "m1", role: "user", parts: [{ type: "text", text: "focus on the database" }] }), true);
     },
-    { ...findingTools, lookup: tool({ inputSchema: z.object({}), execute: async () => { await new Promise((res) => setTimeout(res, 300)); return "ok"; } }) },
+    { ...findingTools, lookup: tool({ inputSchema: z.object({ title: z.string().optional() }), execute: async () => { await new Promise((res) => setTimeout(res, 300)); return "ok"; } }) },
   );
   const count = (b: unknown) => JSON.stringify(b).split("focus on the database").length - 1;
   assert.equal(r.bodies.length, 3);
@@ -932,7 +945,7 @@ test("a re-run attempt keeps spending the step budget of the reply", async () =>
 });
 
 test("a card that was aborted, sent back or never recorded does not count as the answer", () => {
-  const card = { kind: "summary", headline: "Slow", details: "d", points: [] };
+  const card = { kind: "summary", title: "", answer: "Slow", explanation: [{ statement: "d", source: "q" }] };
   const turn = (finding: object) => sanitizeMessages([
     { id: "u", role: "user", parts: [{ type: "text", text: "why?" }] },
     { id: "a", role: "assistant", parts: [

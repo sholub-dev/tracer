@@ -12,7 +12,7 @@ export function useChatScroll(mountKey?: unknown) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const shouldAutoScroll = useRef(true);
-  // Set when the view stops at an answer card; only the user's own input clears it.
+  // Set when the follow stops at an answer card; only the user's own input clears it.
   const pinned = useRef(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
 
@@ -71,44 +71,33 @@ export function useChatScroll(mountKey?: unknown) {
   useEffect(() => {
     const el = contentRef.current;
     if (!el) return;
-    // A new answer card stops the follow at the card, so the answer stays in view while its charts load below.
-    // Opening a session stops at the last reply's card; older cards, and cards that appear (or remount) while the
-    // follow is paused, never stop it later.
+    // A new answer card stops the follow; its top is brought into view once, and nothing re-anchors afterwards.
     const cardsNow = () => [...el.querySelectorAll("[data-answer-card]")];
-    const lastCard = (row: Element | undefined) => (row ? [...row.querySelectorAll("[data-answer-card]")].at(-1) : undefined);
-    // A card is identified by its position, not its element: when a run ends the card remounts, and that must not
-    // count as a new answer or the view would jump back up to it.
+    // A card is identified by its position, not its element, so a remount does not count as a new answer.
     const keyOf = (card: Element) => {
       const row = card.closest("[data-role]");
       const rows = [...el.querySelectorAll("[data-role]")];
       return `${row ? rows.indexOf(row) : -1}:${row ? [...row.querySelectorAll("[data-answer-card]")].indexOf(card) : 0}`;
     };
     const lastRow = [...el.querySelectorAll("[data-role]")].at(-1);
-    const openCard = lastRow?.getAttribute("data-role") === "assistant" ? lastCard(lastRow) : undefined;
+    const openCard = lastRow?.getAttribute("data-role") === "assistant" ? [...lastRow.querySelectorAll("[data-answer-card]")].at(-1) : undefined;
     const seen = new Set<string>(cardsNow().filter((c) => c !== openCard).map(keyOf));
-    let pinnedCard: Element | undefined;
-    const anchor = (scroller: HTMLElement, card: Element) => {
+    const reveal = (scroller: HTMLElement, card: Element) => {
       const header = scroller.querySelector("[data-page-header]")?.getBoundingClientRect().height ?? 0;
-      scroller.scrollTo({ top: scroller.scrollTop + card.getBoundingClientRect().top - scroller.getBoundingClientRect().top - header - 16 });
+      const top = card.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      if (top >= header && top <= scroller.clientHeight - 80) return;
+      scroller.scrollTo({ top: scroller.scrollTop + top - header - 16 });
     };
     const ro = new ResizeObserver(() => {
       const cards = cardsNow();
       const freshKeys = new Set(takeFreshKeys(seen, cards.map(keyOf)));
-      const fresh = cards.filter((c) => freshKeys.has(keyOf(c)));
+      const card = cards.filter((c) => freshKeys.has(keyOf(c))).at(-1);
       const scroller = scrollRef.current;
-      if (pinned.current && scroller) {
-        // Content above the card keeps growing; the card may also remount or swap to the saved view.
-        if (!pinnedCard?.isConnected) pinnedCard = lastCard([...el.querySelectorAll('[data-role="assistant"]')].at(-1));
-        if (pinnedCard) anchor(scroller, pinnedCard);
-        return;
-      }
       if (!shouldAutoScroll.current) return;
-      const card = fresh.at(-1);
       if (!card || !scroller) return scrollToBottom();
       shouldAutoScroll.current = false;
       pinned.current = true;
-      pinnedCard = card;
-      anchor(scroller, card);
+      reveal(scroller, card);
     });
     ro.observe(el);
     return () => ro.disconnect();

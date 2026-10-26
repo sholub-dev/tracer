@@ -8,13 +8,13 @@ export const SLACK_RULE = "This text is posted to Slack as written: state facts 
 export const SEVERITIES = ["high", "medium", "low"] as const;
 export const ALERT_STATES = ["ongoing", "resolved", "unclear"] as const;
 
-export const MONITOR_ROLE = "You own this alert until it needs no more attention. In every run, investigate the cause as in any session: follow the chain into each service, database or host that the connected sources cover, also outside what this alert covers, until a result shows the mechanism or the data stops. On each re-check, look at the whole episode up to now and compare it with your earlier reports, not only the time since the last check. Check that your earlier cause still explains every symptom, and go deeper where it stopped short. Then decide whether to watch it longer. Resolved: the value is back to its normal level (the level before the spike) and stays there; say what ended it when the data shows it. Report resolved, and close the issues when your close tools are listed. Handed to a person: the problem is still present and later data cannot add evidence (it is stable, not worsening), or the next link of the cause is outside every connected source. Report ongoing, set no timer, and say why in the headline. Still changing: only then call set_timer, and choose the interval from how fast the value changes and the impact.";
+export const MONITOR_ROLE = "You own this alert until it needs no more attention. In every run, investigate the cause as in any session: follow the chain into each service, database or host that the connected sources cover, also outside what this alert covers, until a result shows the mechanism or the data stops. On each re-check, look at the whole episode up to now and compare it with your earlier reports, not only the time since the last check. Check that your earlier cause still explains every symptom, and go deeper where it stopped short. Measure each value against its normal level in one query with the same window length (COMPARE WITH where the query language has it), so the two windows always match. Then decide whether to watch it longer. Resolved: the value is back to its normal level (the level before the spike) and stays there while requests keep arriving; no requests is not resolved; say what ended it when the data shows it. Report resolved, and close the issues when your close tools are listed. Handed to a person: the problem is still present and later data cannot add evidence (it is stable, not worsening), or the next link of the cause is outside every connected source. Report ongoing, set no timer, and say why in the answer. Still changing: only then call set_timer, and choose the interval from how fast the value changes and the impact.";
 
 /** The step that reports the alert; Slack posts the details only when Slack is connected. */
 export function summaryInstruction(slack: boolean): string {
   return slack
-    ? " Right after it, before any visual, call report_alert_summary once with the alert details (after report_issue_status when that tool is listed). Slack posts the card and the details together. Do not repeat the card or the details as text. " + SLACK_RULE
-    : " Right after it, before any visual, call report_alert_summary once with the severity and the state of the alert (after report_issue_status when that tool is listed).";
+    ? " Right after it, call report_alert_summary once with the alert details (after report_issue_status when that tool is listed). Slack posts the card and the details together. Do not repeat the card or the details as text. " + SLACK_RULE
+    : " Right after it, call report_alert_summary once with the severity and the state of the alert (after report_issue_status when that tool is listed).";
 }
 
 const baseFields = {
@@ -31,8 +31,8 @@ const slackFields = {
   issues: z.array(z.object({
     service: z.string(),
     endpoint: z.string().describe("Route pattern such as /loans/{id} or a GraphQL operation name, read from a result: the path without the transaction prefix and method. Empty for a service-wide value or when no result names one."),
-    errors: z.string().describe("For errors: <count> × <error class or code> from the first bad minute to the status time, both from one result that counts this endpoint's errors by class, the class without its package (DataAccessResourceFailureException); when it shows several classes, name the largest with its own count. For latency or traffic: the value next to its normal level, e.g. 7.3s avg vs 0.08s normal."),
-    userImpact: z.string().describe("For an error line: the failure status code or error message from the same result as the count, or exactly \"none\". For a latency or traffic line: exactly \"none\"."),
+    errors: z.string().describe("For errors: <count> × <error class or code> from the first bad minute to the status time, both from one result that counts this endpoint's errors by class, the class without its package (DataAccessResourceFailureException); when it shows several classes, name the largest with its own count. For latency or traffic: the value next to its normal level, e.g. 7.3s avg vs 0.08s normal; the same normal level the card states."),
+    userImpact: z.string().describe("For an error line: the failure status code (4xx or 5xx) or error message from the same result as the count, or exactly \"none\". For a latency or traffic line: exactly \"none\"."),
   })).max(5).describe("Up to 3, one per endpoint, largest first"),
   notify: z.boolean().describe("Ping the people tagged in Slack: true when the impact needs a person now, including a hand-over to a person; false on a re-check that found nothing new"),
 };
@@ -66,8 +66,23 @@ function wasSentBack(messages: ModelMessage[], turnFrom: number): boolean {
     p.type === "tool-result" && p.toolName === "report_alert_summary" && cardRejected((p.output as { value?: unknown }).value)));
 }
 
+// A value may carry thousands separators ("1,234ms"), so the comma belongs to the number, not the clause.
+const SLOWER = /(?<![\d.,])(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s?(ms|s)\b[^,;]*?\bvs\.?\s+(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s?(ms|s)\b/i;
+const seconds = (v: string, unit: string) => Number(v.replaceAll(",", "")) / (unit.toLowerCase() === "ms" ? 1000 : 1);
+
+/** Issue lines whose latency sits below its own normal level, so the line shows no slowdown. */
+export function fasterThanNormal(summary: Pick<AlertSummary, "issues">): string[] {
+  return (summary.issues ?? []).flatMap((i) => {
+    const m = SLOWER.exec(i.errors ?? "");
+    return m && seconds(m[1], m[2]) < seconds(m[3], m[4])
+      ? [`issues: "${i.errors}" shows ${i.service} faster than its normal level. Give the measure that is worse than normal, from a result that compares the same window length, or write "unknown".`]
+      : [];
+  });
+}
+
 // Read back from the saved tool call: failed attempts are never saved, and it goes with the session.
-export function reportAlertSummaryTool({ slack }: { slack: boolean }, review?: SummaryReview, turnFrom: () => number = () => 0): Tool<AlertSummary, SummaryOutput> {
+// `final` is true when no step is left to fix a sent-back summary.
+export function reportAlertSummaryTool({ slack }: { slack: boolean }, review?: SummaryReview, turnFrom: () => number = () => 0, final: () => boolean = () => false): Tool<AlertSummary, SummaryOutput> {
   const t = tool({
     description: "Report the state of this alert. Call it once, alone in its step, after report_finding (and after report_issue_status when that tool is present); a later call replaces it. "
       + "Check the data up to now for the state. "
@@ -80,9 +95,10 @@ export function reportAlertSummaryTool({ slack }: { slack: boolean }, review?: S
         : ""),
     inputSchema: z.object(slack ? { ...baseFields, ...slackFields } : baseFields) as unknown as z.ZodType<AlertSummary>,
     execute: async (summary, options): Promise<SummaryOutput> => {
-      if (!slack || !review || wasSentBack(options.messages, turnFrom())) return { recorded: true };
-      const problems = (await review(summary, options.messages, options.abortSignal))?.trim();
-      return problems && !/^\W*OK\W*$/i.test(problems) ? { recorded: false, problems, next: NEXT } : { recorded: true };
+      if (!slack || !review || final() || wasSentBack(options.messages, turnFrom())) return { recorded: true };
+      const reviewed = (await review(summary, options.messages, options.abortSignal))?.trim();
+      const problems = [...fasterThanNormal(summary), ...(reviewed && !/^\W*OK\W*$/i.test(reviewed) ? [reviewed] : [])].join("\n");
+      return problems ? { recorded: false, problems, next: NEXT } : { recorded: true };
     },
   });
   if (slack) slackSummaryTools.add(t);
@@ -92,7 +108,7 @@ export function reportAlertSummaryTool({ slack }: { slack: boolean }, review?: S
 export function dismissAlertTool(): Tool<{ reason: string }, { recorded: true }> {
   return tool({
     description: "End a firing whose New Relic incidents are all closed already. Nothing more is posted and no issue is acked or closed. "
-      + "Call it only when a query result shows that every incident of this firing is closed.",
+      + "Call it only when a query result shows that every incident of this firing is closed and no result shows the alerted value back over its limit since.",
     inputSchema: z.object({
       reason: z.string().describe("The result that shows it, e.g. \"Every incident closed at 13:58\""),
     }),

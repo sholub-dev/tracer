@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { findingSchema, normalizeFinding } from "./finding.js";
+import { normalizeFinding, savedFindingSchema } from "./finding.js";
 
 /** Progress part types streamed from sub-agents to the client */
 export type ProgressPart =
@@ -177,7 +177,7 @@ const importedFile = z.object({
   url: z.string().startsWith("data:"),
   filename: z.string().optional(),
 });
-const importedFinding = z.object({ type: z.literal("tool-report_finding"), input: z.preprocess(normalizeFinding, findingSchema) });
+const importedFinding = z.object({ type: z.literal("tool-report_finding"), input: z.preprocess(normalizeFinding, savedFindingSchema) });
 
 /**
  * Keeps only inert parts of an imported message: text, reasoning, files and the report_finding card.

@@ -66,6 +66,9 @@ export function redact(text: string): string {
     // A bare host needs a slash after the TLD, so "app.ts", "v1.2" and "end.Next" stay.
     .replace(/(?<![\w/@.-])(?:[a-z0-9-]+\.)+[a-z]{2,}\/\S*/gi, "")
     .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, "[email]")
+    .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, "[ip]")
+    // A hex letter is required so times like 15:41:47 stay.
+    .replace(/\b(?=[\d:]*[a-f])(?:[0-9a-f]{1,4}:){3,7}[0-9a-f]{1,4}\b/gi, "[ip]")
     .replace(/\s*\(?\bsession:?\s+[0-9a-f]{8}-[0-9a-f-]{27}\)?/gi, "")
     .replace(/\s*\[steps? [^\]]*\]/gi, "")
     .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "")
@@ -118,6 +121,8 @@ export const known = (s: string) => (/^(none|unknown|n\/a)(?![a-z0-9])/i.test(s)
 export interface Verdict {
   severity: string;
   summary: string;
+  /** The card's short title, "" for cards saved before titles. */
+  title: string;
   /** "problem", "no problem", "unclear" or "" (summary cards and cards saved before verdicts). */
   verdict: string;
   /** Only for a root-cause card that has a verdict ("" otherwise). */
@@ -135,14 +140,17 @@ export function verdictOf(summary: AlertSummary | null, finding: Finding | null)
   const field = (s: string, max?: number) => known(tidy(s, max));
   const card = finding?.kind === "root_cause" ? finding : null;
   const head = {
-    summary: finding ? tidy(finding.headline, SUMMARY_MAX_CHARS) : "",
+    summary: finding ? tidy(finding.answer, SUMMARY_MAX_CHARS) : "",
+    title: finding ? tidy(finding.title, SUMMARY_MAX_CHARS) : "",
     verdict: card?.verdict?.replace("_", " ") ?? "",
     confidence: card?.verdict ? card.confidence ?? "unverified" : "",
   };
-  const cardFacts = finding?.kind === "summary" ? finding.points ?? [] : card?.chain?.map((e) => e.fact) ?? [];
+  const cardFacts = finding?.explanation.map((e) => e.statement) ?? [];
   const evidenceFrom = (issues: string[][]) => (issues.length > 0 ? [] : cardFacts.map((f) => field(f)).filter(Boolean).slice(0, MAX_ISSUES));
   if (!summary) return { severity: "unknown", ...head, facts: { policy: "", started: "", status: "" }, issues: [], evidence: evidenceFrom([]) };
-  const issues = (summary.issues ?? []).map((i) => [i.service, i.endpoint, i.errors, i.userImpact].map((v) => field(v)))
+  // A success code is not an impact.
+  const impact = (s: string) => (/^\s*[123]\d\d\s*$/.test(s) ? "" : s);
+  const issues = (summary.issues ?? []).map((i) => [i.service, i.endpoint, i.errors, impact(i.userImpact)].map((v) => field(v)))
     .filter((parts) => parts.some(Boolean));
   return {
     severity: summary.severity,
@@ -172,7 +180,13 @@ function mentionsFor(raw: string | undefined, ping: boolean | undefined): string
   return "mentions" in parsed ? mentionPrefix(parsed.mentions) : "";
 }
 
-function issueLine([service = "", endpoint = "", error = "", experience = ""]: string[]): string {
+// Transaction names carry a framework and method prefix and often repeat the operation: keep the route.
+export const routeOf = (endpoint: string) => endpoint
+  .replace(/^(?:WebTransaction\/)?(?:[A-Za-z]+\/)?(?:GET|POST|PUT|PATCH|DELETE)\/+/i, "/")
+  .replace(/\/([^/]+)\/\1$/, "/$1");
+
+function issueLine([service = "", rawEndpoint = "", error = "", experience = ""]: string[]): string {
+  const endpoint = routeOf(rawEndpoint);
   // A bare "/" or the service name again stands for the whole service and tells the reader nothing.
   const where = [service && `*${escape(service)}*`, endpoint && endpoint !== "/" && endpoint !== service && `\`${escape(endpoint)}\``].filter(Boolean).join(" ");
   const what = [error, experience].filter(Boolean).map(escape);
@@ -181,12 +195,12 @@ function issueLine([service = "", endpoint = "", error = "", experience = ""]: s
 
 export function monitorAlert(a: MonitorAlert): Required<SlackPayload> {
   const time = formatLocalTime(a.triggeredAt, a.timeZone);
-  const { severity, summary, verdict, confidence, facts, issues, evidence } = verdictOf(a.summary, a.finding);
+  const { severity, summary, title, verdict, confidence, facts, issues, evidence } = verdictOf(a.summary, a.finding);
   const mentions = mentionsFor(a.mentions, a.ping);
   const name = redact(a.name);
   const tags = [severity.toUpperCase(), SEVERITY_DOTS[severity], verdict && `· ${verdict}`, verdict && confidence && `· ${confidence}`].filter(Boolean).join(" ");
-  const text = `${mentions}*[${tags}] ${escape(summary || `Monitor "${name}" fired; no root cause found`)}*`;
-  const lines = [text];
+  const text = `${mentions}*[${tags}] ${escape(title || summary || `Monitor "${name}" fired; no root cause found`)}*`;
+  const lines = [text, ...(title && summary ? [escape(summary)] : [])];
   lines.push(...issues.slice(0, MAX_ISSUES).map(issueLine));
   if (issues.length > MAX_ISSUES) lines.push(`+${issues.length - MAX_ISSUES} more`);
   lines.push(...evidence.map((f) => `• ${escape(f)}`));

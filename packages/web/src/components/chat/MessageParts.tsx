@@ -1,7 +1,7 @@
 import React from "react";
 import type { UIMessage } from "ai";
 import { Download, FileText, Loader2 } from "lucide-react";
-import { ANALYSIS_MARKER, findAnalysisMarker, findingFromMessages } from "@tracer-sh/shared";
+import { ANALYSIS_MARKER, findAnalysisMarker, findingSources } from "@tracer-sh/shared";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -13,6 +13,7 @@ import { FindingCard } from "./FindingCard";
 import { ReasoningBlock } from "./ReasoningBlock";
 import { Narration, OtherToolPart, ProviderStep, isAskPart, isHiddenPart, isMonitorTool, isProviderTool, providerOf, stepQueryCount, type ToolPart } from "./ToolParts";
 import { providerLabel } from "../../lib/providers";
+import { latestCard, matchSources } from "../../lib/finding-card";
 import { ANSWER_PROSE, ANSWER_PROSE_COMPACT } from "./prose";
 
 type Part = UIMessage["parts"][number];
@@ -89,10 +90,13 @@ export const MessageParts = React.memo(
       return <p className="text-sm text-muted-foreground">Interrupted before a reply.</p>;
     }
 
-    // The analysis marker splits work from answer; without one, the answer is everything after the last query.
+    // The analysis marker splits work from answer; without one, the answer starts at the finding card, else after the last query.
     const marker = findAnalysisMarker(parts);
+    const findingIdx = parts.findIndex((p) => p.type === "tool-report_finding");
+    const lastCardIdx = parts.findLastIndex((p) => p.type === "tool-report_finding");
     let workEnd = 0;
     if (marker) workEnd = marker.partIdx;
+    else if (findingIdx !== -1) workEnd = findingIdx;
     else parts.forEach((p, i) => { if (isProviderTool(p.type)) workEnd = i + 1; });
 
     const work: Array<{ part: Part; key: string; text?: string }> = [];
@@ -107,8 +111,10 @@ export const MessageParts = React.memo(
         }
         return;
       }
+      // The card is the answer; text after it would repeat it.
+      if (lastCardIdx !== -1 && i > lastCardIdx && part.type === "text") work.push({ part, key: `${i}` });
       // Reasoning is work, never part of the Analysis box.
-      if (i >= workEnd && part.type === "reasoning") {
+      else if (i >= workEnd && part.type === "reasoning") {
         if (!marker) work.push({ part, key: `${i}` });
       } else if (i >= workEnd) answer.push({ part, key: `${i}` });
       else if (part.type === "file" || isMonitorTool(part.type)) aside.push({ part, key: `${i}` });
@@ -140,14 +146,26 @@ export const MessageParts = React.memo(
     };
 
     const asked = parts.findLast((p) => isAskPart(p.type)) as ToolPart | undefined;
-    const finding = findingFromMessages([{ parts }]);
-    // Settling queries run after the analysis marker, so evidence can cite them too.
-    const queries = parts.filter((p) => isProviderTool(p.type)).flatMap((part) => {
-      const { input, toolCallId } = part as ToolPart;
-      const title = input?.title;
-      return typeof title === "string" && title.trim() && toolCallId ? [{ title: title.trim(), toolCallId }] : [];
-    });
-    const card = finding && <FindingCard key="finding" finding={finding} compact={compact} queries={queries} />;
+    const live = latestCard(parts, isAnimating);
+    const card = live && <FindingCard key="finding" card={live.card} revising={live.revising} compact={compact} />;
+    const streamingCard = parts.some((p) => p.type === "tool-report_finding" && (p as ToolPart).state === "input-streaming");
+    const sources = live && !streamingCard ? findingSources(live.card) : [];
+    const stepParts = parts.filter((p) => isProviderTool(p.type)) as ToolPart[];
+    const matched = matchSources(sources, stepParts);
+    const evidence = sources.length > 0 && (
+      <section key="evidence" aria-label="Evidence" className="space-y-3">
+        <p className="text-[11px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">Evidence</p>
+        <ol className="space-y-3">
+          {sources.map((title, i) => (matched[i] ? (
+            <ProviderStep key={title.toLowerCase()} part={{ ...matched[i]! }} progressStore={progressStore} isAnimating={isAnimating} evidence />
+          ) : (
+            <li key={title.toLowerCase()} className="rounded-xl border bg-card p-4 text-sm font-medium text-foreground shadow-sm [overflow-wrap:anywhere]">
+              {title}
+            </li>
+          )))}
+        </ol>
+      </section>
+    );
 
     let investigation: React.ReactNode = null;
     if (steps.length > 0) {
@@ -183,11 +201,13 @@ export const MessageParts = React.memo(
             )}
           >
             {card}
+            {evidence}
             {answer.map(renderAnswer)}
           </section>
         ) : (
           <>
             {card}
+            {evidence}
             {answer.map(renderAnswer)}
           </>
         )}

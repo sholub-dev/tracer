@@ -102,13 +102,13 @@ Judge health per entity type from its signals against a normal window. Find whic
 - If you cannot evaluate a signal, mark it N/A and give the reason.
 
 ### Reporting Format
-Do not write a results table or a verdict line. Put the result in the finding card: the headline gives the overall verdict, and the details give each signal's current value against its baseline. Show the signals that matter most with queries (for example \`COMPARE WITH 1 week ago\` for current against baseline).`;
+Do not write a results table or a verdict line. Put the result in the finding card: the answer gives the overall verdict, and each explanation statement gives one signal's current value against its baseline. Show the signals that matter most with queries (for example \`COMPARE WITH 1 week ago\` for current against baseline).`;
 
 const NR_QUERY_DEFAULTS = `## Query Defaults
 - Always include \`SINCE\`. Match the window to the question. Look wider than the incident, to find its onset and a normal baseline.
 - Use a \`LIMIT\` that shows the whole distribution you reason about. Raise it when a facet may hide the cause.
 - A FACET result keeps the facets with the highest value of the first function. For the lowest values (the worst Apdex) or the biggest change (\`COMPARE WITH\`), use \`LIMIT MAX\`, so that every candidate is in the result. You see every row the query returns, up to a text budget per result. A note tells you when rows are cut.
-- To rank all candidates by a spike or a drop, take each one's worst interval against its own normal level, counted in requests. Put a TIMESERIES per candidate in a subquery and aggregate it outside, for example \`SELECT max(n) - average(n), max(n), average(n) FROM (SELECT filter(count(*), WHERE error IS TRUE) AS n FROM Transaction WHERE appName LIKE 'PROD-%' FACET appName TIMESERIES 5 minutes LIMIT MAX) FACET appName SINCE 1 day ago LIMIT 10\`. For latency or Apdex, count slow requests instead: \`WHERE apdexPerfZone = 'F'\`. SINCE goes on the outer query only.`;
+- To rank all candidates by a spike or a drop, take each one's worst interval against its own normal level, counted in requests. Put a TIMESERIES per candidate in a subquery and aggregate it outside, for example \`SELECT max(n) - average(n), max(n), average(n) FROM (SELECT filter(count(*), WHERE error IS TRUE) AS n FROM Transaction FACET appName TIMESERIES 5 minutes LIMIT MAX) FACET appName SINCE 1 day ago LIMIT 10\`. For latency or Apdex, count slow requests instead: \`WHERE apdexPerfZone = 'F'\`. SINCE goes on the outer query only.`;
 
 const NR_EVENT_TYPES = `## Event Types & Field Reference
 

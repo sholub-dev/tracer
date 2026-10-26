@@ -110,12 +110,12 @@ export async function alertBrief(db: Db, sessionId: string): Promise<AlertBrief 
     ...trigger,
     severity: report?.severity ?? "unknown",
     verdict: finding?.kind === "root_cause" ? finding.verdict?.replace("_", " ") ?? "" : "",
-    headline: (finding?.headline ?? "").replace(/\*\*|`/g, "").trim(),
+    headline: (finding?.answer ?? "").replace(/\*\*|`/g, "").trim(),
     dismissed: dismissed !== null,
   };
 }
 
-export const outcomeSummary = (o: { analysis: string; finding: Finding | null }) => o.finding?.headline ?? firstSentence(o.analysis);
+export const outcomeSummary = (o: { analysis: string; finding: Finding | null }) => o.finding?.answer || firstSentence(o.analysis);
 /** The one-line summary of a past run, for the prompt. */
 export const pastSummary = (p: PastSession) => redact(outcomeSummary(p));
 

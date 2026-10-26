@@ -89,8 +89,8 @@ function buildExecuteNrqlTool(
   return tool({
     description: "Execute a NRQL query against New Relic.",
     inputSchema: z.object({
-      query: z.string().describe("The NRQL query to execute"),
-      title: z.string().optional().describe("Short chart title in plain words, e.g. \"Checkout p95 latency\""),
+      query: z.string().describe("The NRQL query to execute. Alias every selected value and facet with AS '<plain name>' (a person reads the column names)."),
+      title: z.string().optional().describe("Plain title of what this query measures, read by a person and cited by the answer card."),
     }),
     execute: async ({ query }) => {
       try {
@@ -116,6 +116,7 @@ function buildExecuteNrqlTool(
           window ? `Window: ${localTime(window.begin, timezone)} to ${localTime(window.end, timezone)}` : lacksSince(query) ? "No SINCE: NRQL used the last 60 minutes." : "",
           ...messages.map((m) => `New Relic: ${m}`),
           cleaned.length === 0 && !emptyByFuture ? await emptyFacetNote(provider, sent) : "",
+          aliasNote(query),
           repeated ? "You ran this exact query earlier in this reply; the result is above." : "",
         ].filter(Boolean);
         return { parts: [capQuery({ type: "query" as const, query, results: cleaned })], analysis: [csv, ...notes].join("\n") };
@@ -127,6 +128,14 @@ function buildExecuteNrqlTool(
     },
     toModelOutput: ({ output }) => toolModelOutput(output),
   });
+}
+
+const AGGREGATE = /\b[a-z]+\s*\(/i;
+
+/** A note for a query whose aggregates carry no AS alias, since a person reads the column names. */
+export function aliasNote(query: string): string {
+  const select = query.match(/\bSELECT\b([\s\S]*?)\bFROM\b/i)?.[1] ?? "";
+  return AGGREGATE.test(select) && !/\bAS\s+\S/i.test(select) ? "Note: no AS aliases. A person reads these column names; alias every value in the next queries." : "";
 }
 
 const ISSUE_LOOKBACK_HOURS = 6;

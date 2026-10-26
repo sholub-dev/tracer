@@ -332,8 +332,8 @@ test("summaryFromMessages takes the last successful report_alert_summary call", 
   assert.equal(summaryFromMessages([]), null);
 });
 
-test("outcomeSummary prefers the finding headline over the first analysis sentence", () => {
-  const finding = { kind: "summary" as const, headline: "Checkout is healthy.", details: "", points: [] };
+test("outcomeSummary prefers the finding answer over the first analysis sentence", () => {
+  const finding = { kind: "summary" as const, title: "", answer: "Checkout is healthy.", explanation: [{ statement: "x", source: "q" }] };
   assert.equal(outcomeSummary({ analysis: "Errors rose. Then fell.", finding }), "Checkout is healthy.");
   assert.equal(outcomeSummary({ analysis: "Errors rose. Then fell.", finding: null }), "Errors rose.");
 });

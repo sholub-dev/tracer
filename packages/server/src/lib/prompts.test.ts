@@ -63,7 +63,7 @@ test("prompts allow batching only independent reads and keep writes alone", () =
 test("prompts require competing explanations and a challenge check, and never forbid a disproving query", () => {
   for (const [name, prompt] of allPrompts) {
     assert.equal(prompt.split("### Challenge check").length - 1, 1, `${name}: expected one Challenge check`);
-    for (const phrase of ["Hold at least two explanations", "Check the base rate", "Compare with healthy peers, and account for the whole symptom", "Count before you generalize", "Never drop a result that does not fit", "Treat every prior as a hypothesis", "Economy limits breadth, never verification"]) {
+    for (const phrase of ["Hold at least two explanations", "Check the base rate", "Compare each slice with its own normal level and with its healthy peers", "Count before you generalize", "Never drop a result that does not fit", "Treat every prior as a hypothesis", "Economy limits breadth, never verification"]) {
       assert.ok(prompt.includes(phrase), `${name}: missing "${phrase}"`);
     }
     for (const stale of ["never run extra investigation queries for it", "they cost thought, not extra steps", "or \"to confirm\""]) {
@@ -75,7 +75,7 @@ test("prompts require competing explanations and a challenge check, and never fo
 test("prompts follow a change in client activity to who drove it, and only where it applies", () => {
   for (const [name, prompt] of allPrompts) {
     assert.equal(prompt.split("### Actor check").length - 1, 1, `${name}: expected one Actor check`);
-    for (const phrase of ["rejected requests): run the Actor check", "Run it only when the chain reaches a change in client or user activity", "state the result that rules it out", "legitimate or abuse, and which result decides it"]) {
+    for (const phrase of ["Find who or what sent the extra load (the Actor check)", "Run it when the chain reaches a change in client or user activity", "state the result that rules it out", "legitimate or abuse, and which result decides it"]) {
       assert.ok(prompt.includes(phrase), `${name}: missing "${phrase}"`);
     }
   }
@@ -83,10 +83,10 @@ test("prompts follow a change in client activity to who drove it, and only where
 
 test("prompts follow the causal chain into each dependency until it ends, and never offer the next link as a follow-up", () => {
   for (const [name, prompt] of allPrompts) {
-    for (const phrase of ["**Follow the chain to its end.**", "**A dependency is a new symptom.**", "is never the end of the chain while X's own data is in a connected source", "**A repeated \"why\" means go deeper.**", "Economy limits breadth, never verification or depth", "**→ Next link:**"]) {
+    for (const phrase of ["**Ask why that slice changed, and repeat.**", "**A dependency is a new symptom.**", "is a link, never the end, while its own data is in a connected source", "**A repeated \"why\" means go deeper.**", "Economy limits breadth, never verification or depth", "**→ Next link:**"]) {
       assert.ok(prompt.includes(phrase), `${name}: missing "${phrase}"`);
     }
-    for (const phrase of ["**Attribute the time or the errors.**", "**The chain ends at a mechanism or at a data boundary.**", "**Name the parts.**", "**Go to the end of the chain:**"]) {
+    for (const phrase of ["**Attribute the time or the errors.**", "**The chain ends at one of three points, and only there:**", "**Split volume from rate.**", "**Find where the change sits.**", "the traffic ended, not the problem", "**Go to the end of the chain:**"]) {
       assert.ok(prompt.includes(phrase), `${name}: missing "${phrase}"`);
     }
     for (const stale of ["Most investigations need 3-8 investigation steps", "Expand ONLY if needed", "stop investigating", "NEVER start with", "run the one query that settles it"]) {
@@ -105,16 +105,21 @@ test("prompts never let the agent claim an action or owner that no result shows"
 test("prompts tell the agent to report a finding in every turn that ran at least one query", () => {
   for (const [name, prompt] of allPrompts) {
     assert.ok(prompt.includes("call `report_finding` once, alone in its step, in every turn that ran at least one query"), `${name}: missing report_finding rule`);
-    assert.ok(prompt.includes("`kind: \"root_cause\"`") && prompt.includes("`kind: \"summary\"`"), `${name}: missing finding kinds`);
-    assert.ok(prompt.includes("Never put a query you can run yourself in `gap`") && !prompt.includes("only place you may name an action"), `${name}: finding card must not allow an action`);
+    assert.ok(prompt.includes("`root_cause` when the question asks why") && prompt.includes("`summary` for status"), `${name}: missing finding kinds`);
     assert.ok(prompt.includes("Skip it only when no query ran"), `${name}: missing skip rule`);
-    assert.ok(prompt.includes("`chain`: the proof of the headline") && prompt.includes("a link no result shows is not in the chain") && prompt.includes("No ids (incident, issue, session, UUIDs)") && prompt.includes("The card is the whole written answer"), `${name}: missing details rule`);
-    assert.ok(prompt.includes("in one plain sentence of at most 25 words: the deepest cause the data shows, with the key number"), `${name}: missing headline rule`);
-    assert.ok(prompt.includes("Each number appears once in the card") && !prompt.includes("Nothing repeated across fields"), `${name}: missing no-repeat rule`);
-    assert.ok(prompt.includes("at most 3 tool calls") && prompt.includes("Nothing after the last visual"), `${name}: missing visuals rule`);
-    for (const stale of ["Visual-first narrative", "End with a concise conclusion", "It does not replace the written answer"]) {
+    assert.ok(prompt.includes("The card is the whole written answer") && prompt.includes("A statement no result shows is not in the explanation"), `${name}: missing explanation rule`);
+    assert.ok(prompt.includes("never a query you can run yourself: run it before the card") || prompt.includes("or a query you can run yourself: run it before the card"), `${name}: unknown must not hold a runnable query`);
+    assert.ok(prompt.includes("Each number appears once in the whole card"), `${name}: missing no-repeat rule`);
+    assert.ok(prompt.includes("Do not run queries after the card"), `${name}: missing card-last rule`);
+    for (const stale of ["Supporting visuals", "Nothing after the last visual", "Re-run queries here even if you already ran them", "`headline`", "`chain`"]) {
       assert.ok(!prompt.includes(stale), `${name}: stale rule "${stale}"`);
     }
+  }
+});
+
+test("prompts ask for plain titles and aliases on every query", () => {
+  for (const [name, prompt] of allPrompts) {
+    assert.ok(prompt.includes("**A person reads every query.**"), `${name}: missing plain query rule`);
   }
 });
 
@@ -126,11 +131,10 @@ test("the evidence rule and the no-fixes principle each appear once in the assem
   }
 });
 
-test("supporting visuals name no provider query keyword, and the stale skip example is gone", () => {
+test("the answer format names no provider query keyword, and the stale skip example is gone", () => {
   for (const [name, prompt] of allPrompts) {
-    assert.ok(prompt.includes("a single value for a key number, a grouped table for a comparison"), `${name}: missing neutral visuals`);
     assert.ok(!/FACET|COMPARE WITH|TIMESERIES/.test(prompt.slice(prompt.indexOf("## Response Format"))), `${name}: provider keyword in the answer format`);
-    assert.ok(prompt.includes("a greeting or a question answered from the conversation") && !prompt.includes("list my monitors"), `${name}: stale skip example`);
+    assert.ok(prompt.includes("a greeting, or a question answered from the conversation") && !prompt.includes("list my monitors"), `${name}: stale skip example`);
   }
 });
 

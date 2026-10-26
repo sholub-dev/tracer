@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { UIMessage } from "ai";
-import { alertFindingFromMessages, latestRunSummary, dismissalFromMessages, reportAlertSummaryTool, summaryFromMessages } from "./alert-summary.js";
+import { alertFindingFromMessages, fasterThanNormal, latestRunSummary, dismissalFromMessages, reportAlertSummaryTool, summaryFromMessages } from "./alert-summary.js";
 
 const valid = {
   severity: "low", policy: "p", started: "s", status: "stopped",
@@ -30,12 +30,12 @@ test("dismissalFromMessages returns the reason of a successful call and null wit
 });
 
 test("alertFindingFromMessages keeps the finding of the alert run, not of a later follow-up", () => {
-  const finding = (headline: string) => ({ type: "tool-report_finding", toolCallId: "f", state: "output-available", input: { kind: "summary", headline, details: "", points: [] } });
+  const finding = (headline: string) => ({ type: "tool-report_finding", toolCallId: "f", state: "output-available", input: { kind: "summary", title: "", answer: headline, explanation: [{ statement: "x", source: "q" }] } });
   const msg = (...parts: unknown[]) => ({ id: "", role: "assistant", parts });
   const run = [msg(finding("Pool exhausted."), call(valid))];
   const followUp = [...run, { id: "", role: "user", parts: [] }, msg(finding("Errors stopped."))] as unknown as UIMessage[];
-  assert.equal(alertFindingFromMessages(followUp)?.headline, "Pool exhausted.");
-  assert.equal(alertFindingFromMessages([msg(finding("Only card."))] as unknown as UIMessage[])?.headline, "Only card.");
+  assert.equal(alertFindingFromMessages(followUp)?.answer, "Pool exhausted.");
+  assert.equal(alertFindingFromMessages([msg(finding("Only card."))] as unknown as UIMessage[])?.answer, "Only card.");
 });
 
 test("latestRunSummary reads the run a steered message trails", () => {
@@ -84,4 +84,21 @@ test("a summary the review sent back is never read as the report", () => {
   assert.deepEqual(summaryFromMessages(messages), valid);
   assert.equal(summaryFromMessages([{ id: "", role: "assistant", parts: [rejected] }] as unknown as UIMessage[]), null);
   assert.equal(alertFindingFromMessages([{ id: "", role: "assistant", parts: [rejected] }] as unknown as UIMessage[]), null);
+});
+
+test("an issue line with latency below its normal level is flagged", () => {
+  const line = (errors: string) => fasterThanNormal({ issues: [{ service: "risk", endpoint: "/score", errors, userImpact: "none" }] } as never);
+  assert.equal(line("0.76s avg vs 0.84s normal").length, 1);
+  assert.equal(line("760ms avg vs 0.68s normal").length, 0);
+  assert.equal(line("42 × TimeoutException").length, 0);
+});
+
+test("a latency with thousands separators is read whole, and the last step records the summary", async () => {
+  const line = (errors: string) => fasterThanNormal({ issues: [{ service: "risk", endpoint: "/score", errors, userImpact: "none" }] } as never).length;
+  assert.equal(line("1,234ms avg vs 800ms normal"), 0);
+  assert.equal(line("800ms avg vs 1,234ms normal"), 1);
+  const faster = { ...valid, issues: [{ service: "risk", endpoint: "/score", errors: "0.76s avg vs 0.84s normal", userImpact: "none" }], notify: false };
+  const t = (final: boolean) => reportAlertSummaryTool({ slack: true }, async () => null, () => 0, () => final) as any;
+  assert.equal((await t(false).execute(faster, { messages: [], toolCallId: "s" })).recorded, false);
+  assert.deepEqual(await t(true).execute(faster, { messages: [], toolCallId: "s" }), { recorded: true });
 });

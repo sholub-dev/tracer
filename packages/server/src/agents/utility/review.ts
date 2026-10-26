@@ -1,5 +1,5 @@
 import { generateText, type ModelMessage, type UIMessage } from "ai";
-import { turnStart, type Finding } from "@tracer-sh/shared";
+import { turnStart } from "@tracer-sh/shared";
 import { CONFIG } from "../../config.js";
 import type { ProviderOptions } from "../../llm/resolve.js";
 import { recordEachCall } from "../../llm/usage.js";
@@ -8,7 +8,6 @@ import type { Ledger } from "../../tools/analysis-tool.js";
 import type { AlertSummary } from "../../monitors/alert-summary.js";
 import { truncate } from "./summary.js";
 
-// Earlier cards are not evidence; the card under review and the earlier problems are given apart.
 const FINDING_TOOL = "report_finding";
 const SUMMARY_TOOL = "report_alert_summary";
 
@@ -18,7 +17,14 @@ const QUESTION_MAX_CHARS = 4000;
 
 const INSTRUCTIONS = `You are a skeptical reviewer of a debugging conclusion. You see the question, the tool calls with their results, the agent's ledger and the names of the tools the agent has. You cannot run queries.
 
-Check each point:
+Depth comes first. A conclusion that names only what failed, where, when and how much, without why, is the most serious problem, also when every fact in it is true. Check these first:
+- The ledger's split shows, from results, whether the request volume, the rate per request (errors or latency) or the mix moved against a normal window, and which slice (endpoint, service, host, version, caller or client) holds most of the change, with its share. A split that is missing or not backed by a result is a problem.
+- Errors that stopped while the requests also stopped are not resolved: the traffic ended. A conclusion that calls it stopped, fixed or resolved is a problem. So is one that calls it ended at a dip when a later point in a result rises again.
+- A result in the run that names a caller, a client, an endpoint, a share or a normal level that changes the picture, and that the conclusion leaves out, is a problem.
+- A status conclusion that calls something healthy, stable or normal while a result shows a measure far from its normal level (a third or more), and the conclusion does not name it, is a problem.
+- A conclusion that calls traffic a bot, automated, scripted or an attack needs two results: one that shows an indicator in that traffic (one source's share, a rate or interval no person keeps, enumerated values, an automation client), and one that shows this traffic holds the change in the symptom. Check actor.indicator the same way: a rise in volume or rate against normal, a common user agent, or a past session's finding is not an indicator, and is a problem.
+
+Then check each point:
 - The ledger says "lookup", but the question or an earlier user message asks why or what is wrong; or it says "status", but a result shows a problem. Then it is a cause and every point below applies.
 - Every number, identifier and time in the conclusion appears in a result.
 - Each link of the chain names a query. Each reason in a link or in the conclusion (because, due to, a state such as expired, blocked or queued, a place such as a queue or a pool) is stated in a result. A reason no result states is a problem, also when it sounds likely.
@@ -47,35 +53,6 @@ Reply "OK" when you find no problem.
 Otherwise list at most 3 problems, most serious first. Write each as one sentence that names the result or the missing check.
 Do not suggest fixes for the system under investigation. Do not write a preamble.`;
 
-const CARD_INSTRUCTIONS = `You are a skeptical reviewer of the answer card a debugging agent wrote. You see the question, the tool calls with their results, including the challenges its analysis step returned, and the card. You cannot run queries.
-
-Check each point:
-- The headline answers the question as asked. For a follow-up question, that is the follow-up, not the earlier question of the session. For a why or root-cause question it names the deepest cause the chain shows, or says that the cause is not found and where the data stops; a symptom alone is a problem. The headline holds the number that sizes the answer. For a worst, biggest or which question it names the winner and its lead over the second, and the ranking result compares all candidates on the measure the question names, each at its worst interval inside the window the question names against its own normal level. A ranking inside the winner's spike window only, or by whole-window averages that hide a short spike, is a problem. A spike, drop or jump is ranked by its change against a normal window, not by totals or open alerts. Two numbers for the same drop or spike, such as a ranking change and the size over the affected window, each name their measure and window. A lead between two ratios is stated as both ratios, not as an "x" difference. When the data does not show the premise of the question (its size, time or service), the headline states the measured value. The size is the average over the affected window against a normal window, not a peak minute against a quiet minute. A word for a ratio (doubled, tripled, halved) matches the measured ratio.
-- Every number, time and identifier in the card appears in a result. When the card uses more than one window, each number names its window. Two numbers for the same measure that disagree without their windows are a problem. A number the card derives (a sum, a share, a ratio, a difference) follows from the numbers it is derived from.
-- Each word that names a mechanism, a state, an order, a class or a causal tie (saturated, queued, sequential, cascading, triggered, drove, due to, batch, uncoordinated, routine, standard, healthy) is shown by a result. Read every such word, not only these examples. A resource is saturated only at its limit. A part whose time or rate did not change against its normal window is not the cause of a change; naming it as the cause is a problem.
-- Each challenge the analysis step returned is settled by a later result, or the card has confidence likely or lower and names in gap the cause it leaves open. A card that a challenge contradicts is a problem.
-- Confirmed needs a result that shows the cause itself and a result that rules out the strongest alternative. A likely or unverified card has a gap. The gap states, in plain words, the unknown that changes what the reader does (who, why, legitimate or abuse, or a cause no result ruled out), then what the results show about it. A gap that asks a question, names a log type, source or window to check, or asks for more telemetry on a cause the chain already shows is a problem.
-- The impact of a problem card says who or what is affected and how much, with a number from a result: requests, users, errors or minutes. An impact without a size is a problem. An average that rose does not mean every request got slower: an impact such as "195,396 requests experienced elevated latency", where the count is the total requests in the window, is a problem.
-- In a status answer, each service value stands next to its baseline from a result. A state word (healthy, normal, stable, no degradation) that covers a value without a baseline is a problem.
-- The verdict fits the results: problem when a result shows a degradation such as a rise in latency or errors, no_problem only when the results show none. Traffic that looks legitimate does not make a degradation no_problem.
-- The kind fits: root_cause for a why question or a check that found a problem, summary for a status, count, trend or lookup.
-- The action field names only a change to a system that a tool call in this reply made and that succeeded. A query or a review is not an action.
-- No field states the same fact twice. A small count or a label that names a list item is not a repeat.
-- The headline has at most 25 words, and each chain link at most 20.
-- A number that may sit in a cut part of a result (it ends with "cut for the review") or in a step the transcript omits is not absent. Flag it only when a visible result contradicts it.
-
-Write the reply in two sections, in this order.
-
-CLAIMS
-One line per number, time, identifier, ranking, word that names a mechanism, a state, an order, a class or a causal tie, and the confidence label in the card. Skip pure labels. Write each line as:
-- <card field>: <the claim, short> | <exact text copied from one result line that shows it, or NONE>
-Copy the text from a result. Do not retype it from memory. Write NONE when no visible result shows the claim.
-
-PROBLEMS
-List every problem, at most 6, most serious first, each as a line "- <one sentence that names the card field and the result or the missing check>". Write the single word OK when you find no problem.
-A claim marked NONE is a problem, unless the card puts it in gap or labels it as not verified.
-Do not suggest fixes for the system under investigation. Do not write a preamble.`;
-
 const SUMMARY_INSTRUCTIONS = `You check the alert details that a debugging agent posts to Slack. You see the tool calls with their results and the details. You cannot run queries.
 
 Check only these fields against the results:
@@ -83,7 +60,7 @@ Check only these fields against the results:
 - On a latency or traffic alert, each line shows the value next to its normal level, both from results. An error count on such a line is a problem.
 - userImpact: for an error line, the failure status code or message from the same result as the count, or exactly "none". For a latency or traffic line it is exactly "none": the value already says it. A success code (200, 204) is not an impact.
 - endpoint is a route or an operation that a result names. The service name and "/" are not endpoints.
-- started and status agree with the times in the results.
+- started and status agree with the times in the results. "back to normal" is a problem when any later point in a result is back over the alert's limit or far above the normal level: the status is the latest point, not the first dip.
 - A number that may sit in a cut part of a result (it ends with "cut for the review") is not absent. Flag it only when a visible result contradicts it.
 
 Write the reply in two sections, in this order.
@@ -196,26 +173,10 @@ function shownCards(messages: ModelMessage[]): Set<string> {
     p.type === "tool-result" && p.toolName === FINDING_TOOL && (p.output as { value?: { recorded?: unknown } }).value?.recorded === true ? [p.toolCallId] : [])));
 }
 
-/** The ids of the tool calls whose title is one of `titles`. */
-function callsTitled(messages: ModelMessage[], titles: string[]): Set<string> {
-  const wanted = new Set(titles.map((t) => t.trim().toLowerCase()).filter(Boolean));
-  const ids = new Set<string>();
-  for (const m of messages) {
-    if (m.role !== "assistant" || typeof m.content === "string") continue;
-    for (const p of m.content) {
-      if (p.type !== "tool-call") continue;
-      const title = (p.input as { title?: unknown } | null)?.title;
-      if (typeof title === "string" && wanted.has(title.trim().toLowerCase())) ids.add(p.toolCallId);
-    }
-  }
-  return ids;
-}
-
 /**
- * The run as text for a reviewer. Over the size cap it drops the oldest lines, but keeps the question and
- * the calls titled in `keepTitles`: a card cites its evidence by query title, and that query often ran first.
+ * The run as text for a reviewer. Over the size cap it drops the oldest lines, but keeps the question and the shown cards.
  */
-export function buildTranscript(messages: ModelMessage[], start: number, stepResults: StepResult[] = [], keepTitles: string[] = []): string {
+export function buildTranscript(messages: ModelMessage[], start: number, stepResults: StepResult[] = []): string {
   const question = start >= 0 ? `Question: ${truncate(userText(messages[start]), QUESTION_MAX_CHARS)}\n` : "";
   // A follow-up question can rest on results of earlier questions in the session.
   const shown = start > 0 ? shownCards(messages.slice(0, start)) : new Set<string>();
@@ -230,9 +191,8 @@ export function buildTranscript(messages: ModelMessage[], start: number, stepRes
       lines.push({ text: `Tool call ${r.toolName}: ${truncate(r.input, TOOL_INPUT_MAX_CHARS)}` }, { text: `Result ${r.toolName}: ${cut(resultText(r.text), TOOL_RESULT_MAX_CHARS)}` });
     }
   }
-  const pinned = new Set([...callsTitled(messages, keepTitles), ...shown]);
   // The headers stay, so a kept line of an earlier question never reads as part of this reply.
-  const keep = lines.map((l) => l.header === true || (l.callId !== undefined && pinned.has(l.callId)));
+  const keep = lines.map((l) => l.header === true || (l.callId !== undefined && shown.has(l.callId)));
   let used = question.length + lines.reduce((n, l, i) => n + (keep[i] ? l.text.length + 1 : 0), 0);
   for (let i = lines.length - 1; i >= 0; i--) {
     if (keep[i]) continue;
@@ -261,27 +221,6 @@ export function reviewConclusion(
 ): Promise<string | null> {
   const content = `<tools>\n${toolNames.join(", ")}\n</tools>\n\n<run>\n${buildTranscript(messages, questionStart, stepResults)}\n</run>\n\n<ledger>\n${JSON.stringify(ledger, null, 2)}\n</ledger>`;
   return review(db, sessionId, model, modelId, INSTRUCTIONS, content, abortSignal, providerOptions, reviewProblems);
-}
-
-/** Independent check of the answer card against the run's tool results. Fails open: any error returns null. */
-export function reviewCard(
-  db: Db,
-  sessionId: string,
-  model: Parameters<typeof generateText>[0]["model"],
-  modelId: string,
-  card: Finding,
-  messages: ModelMessage[],
-  abortSignal: AbortSignal | undefined,
-  providerOptions: ProviderOptions | undefined,
-  questionStart: number,
-  earlierProblems: string[],
-  stepResults: StepResult[] = [],
-): Promise<string | null> {
-  const earlier = earlierProblems.length
-    ? `\n\n<earlier_review>\nThe first review listed these problems: ${earlierProblems.join(" ")}\nThis card is the rewritten version. Also check that each listed problem is fixed: by a later result, a reworded claim, a lower confidence label or a claim moved to gap.\n</earlier_review>`
-    : "";
-  const content = `<run>\n${buildTranscript(messages, questionStart, stepResults, card.chain?.map((l) => l.query ?? "") ?? [])}\n</run>\n\n<card>\n${JSON.stringify(card, null, 2)}\n</card>${earlier}`;
-  return review(db, sessionId, model, modelId, CARD_INSTRUCTIONS, content, abortSignal, providerOptions, cardProblems);
 }
 
 /** The review reads only the text, so the run's thinking budget stays and the streamed thoughts go. */

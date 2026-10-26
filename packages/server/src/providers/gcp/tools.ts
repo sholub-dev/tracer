@@ -34,7 +34,7 @@ function withTitleField(schema: any) {
   if (!base?.properties || "title" in base.properties) return schema ?? z.object({});
   return jsonSchema({
     ...base,
-    properties: { ...base.properties, title: { type: "string", description: 'Short chart title in plain words, e.g. "Checkout p95 latency"' } },
+    properties: { ...base.properties, title: { type: "string", description: "Plain title of what this query measures, read by a person and cited by the answer card." } },
   });
 }
 

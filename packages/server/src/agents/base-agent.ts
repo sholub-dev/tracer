@@ -14,11 +14,12 @@ import { stampSentTime, withPromptCaching, withSentTimes } from "../llm/prompt-c
 import { ASK_USER_PROMPT, BASE_PROMPT, buildNoProviderPrompt, EVIDENCE_GROUNDING, PLAIN_LANGUAGE } from "../lib/shared-prompts.js";
 import { CONFIG, DEFAULTS } from "../config.js";
 import { isTransientError } from "../lib/transient.js";
-import { createToolGate, WRITE_TOOLS } from "../tools/tool-gate.js";
+import { createToolGate } from "../tools/tool-gate.js";
+import { NON_QUERY_TOOLS } from "../tools/grounding.js";
 import { ANALYSIS_TOOL_NAME, createBeginAnalysisTool } from "../tools/analysis-tool.js";
 import { drainSteer, newSteerState } from "./steer.js";
-import { harnessNote, questionIndex, reviewCard, reviewConclusion, reviewSummary } from "./utility/review.js";
-import { reportFindingTool } from "../tools/finding-tool.js";
+import { harnessNote, questionIndex, reviewConclusion, reviewSummary } from "./utility/review.js";
+import { MAX_SEND_BACKS, reportFindingTool } from "../tools/finding-tool.js";
 import { isSlackSummaryTool, reportAlertSummaryTool } from "../monitors/alert-summary.js";
 import { readResultTool } from "../tools/read-result-tool.js";
 import { citedOriginals, maskContext, restoreContext } from "./context-mask.js";
@@ -180,8 +181,6 @@ function endsWithToolStep(msg: UIMessage | undefined): boolean {
 const FINDING_TOOL = "report_finding";
 const READ_RESULT_TOOL = "read_result";
 const SUMMARY_TOOL = "report_alert_summary";
-// Every tool call is a query unless it writes state or only reads another session; provider data tools differ per provider, so they are not listed.
-const NON_QUERY_TOOLS: ReadonlySet<string> = new Set([...WRITE_TOOLS, "read_past_session", READ_RESULT_TOOL]);
 
 /** True for a card that was shown: recorded, or saved before the output said so (a valid card and no error). An aborted or sent-back card is not. */
 function cardRecorded(input: unknown, output: unknown): boolean {
@@ -202,6 +201,8 @@ export function turnToolNames(messages: UIMessage[]): string[] {
 
 type StepCalls = { toolResults: { toolName: string; input?: unknown; output: unknown }[] }[];
 
+const cardShown = ({ steps }: { steps: StepCalls }) => stepToolNames(steps).includes(FINDING_TOOL);
+
 /** Names of the tool calls in this attempt's finished steps; a card that was not recorded does not count. */
 function stepToolNames(steps: StepCalls): string[] {
   return steps.flatMap((s) => s.toolResults.flatMap((r) => (r.toolName === FINDING_TOOL && !cardRecorded(r.input, r.output) ? [] : [r.toolName])));
@@ -219,11 +220,11 @@ export function budgetNote(stepNumber: number, maxSteps: number, toolNames: stri
   if (!owesFinding(toolNames)) return undefined;
   const reserve = Math.ceil(maxSteps / 10);
   if (stepNumber === maxSteps - 1) {
-    return "This is the last step. Call report_finding now from the results you have. State only what the results show, set the confidence label to match, and name in gap the open why you did not reach.";
+    return "This is the last step. Call report_finding now from the results you have. State only what the results show, set the confidence label to match, and state in unknown the open why you did not reach.";
   }
   if (reserve > 1 && stepNumber === maxSteps - reserve) {
     const analyzed = toolNames.includes(TOOL_NAMES.BEGIN_ANALYSIS);
-    return `At this point ${reserve} steps remained in this reply. Finish the link you are on, ${analyzed ? "settle the challenges" : "call begin_analysis"}, then write the card. Name the next open link in gap.`;
+    return `At this point ${reserve} steps remained in this reply. Finish the link you are on, ${analyzed ? "settle the challenges" : "call begin_analysis"}, then write the card. State the next open link in unknown.`;
   }
   return undefined;
 }
@@ -290,7 +291,7 @@ async function processLLMStream(
   const collected = await collectTools(writer);
   // One gate per attempt: it holds the tool calls of a step to the read limit and runs writes alone.
   // The run's own model reviews the conclusion; swap the tool before gating so it stays a gated write.
-  // The card is not reviewed in the repair pass or the last step: those have no step left to fix it.
+  // The repair pass and the last step have no step left to fix a sent-back summary or to write a ledger for the card.
   let lastStep: boolean = !!repair;
   const gate = createToolGate();
   const collectedTools = collected.tools;
@@ -299,9 +300,9 @@ async function processLLMStream(
   const reviewed = collectedTools && {
     ...collectedTools,
     [READ_RESULT_TOOL]: readResultTool(originals),
-    ...(ANALYSIS_TOOL_NAME in collectedTools && { [ANALYSIS_TOOL_NAME]: createBeginAnalysisTool((ledger, msgs, signal) => reviewConclusion(context.db, sessionId, model, modelId, ledger, restoreContext(msgs, originals), signal, providerOptions, questionStart, Object.keys(collectedTools), gate.stepReads()), (ledger, msgs) => citedOriginals(`${ledger.chain ?? ""} ${ledger.causeEvidence ?? ""}`, msgs, originals, CONFIG.citedResultsMaxChars)) }),
-    ...(FINDING_TOOL in collectedTools && { [FINDING_TOOL]: reportFindingTool((card, msgs, signal, earlier) => (lastStep ? Promise.resolve(null) : reviewCard(context.db, sessionId, model, modelId, card, restoreContext(msgs, originals), signal, providerOptions, questionStart, earlier, gate.stepReads())), () => questionStart) }),
-    ...(isSlackSummaryTool(collectedTools[SUMMARY_TOOL]) && { [SUMMARY_TOOL]: reportAlertSummaryTool({ slack: true }, (summary, msgs, signal) => (lastStep ? Promise.resolve(null) : reviewSummary(context.db, sessionId, model, modelId, summary, restoreContext(msgs, originals), signal, providerOptions, questionStart, gate.stepReads())), () => questionStart) }),
+    ...(ANALYSIS_TOOL_NAME in collectedTools && { [ANALYSIS_TOOL_NAME]: createBeginAnalysisTool((ledger, msgs, signal) => reviewConclusion(context.db, sessionId, model, modelId, ledger, restoreContext(msgs, originals), signal, providerOptions, questionStart, Object.keys(collectedTools), gate.stepReads()), (ledger, msgs) => citedOriginals(`${ledger.chain ?? ""} ${ledger.causeEvidence ?? ""}`, msgs, originals, CONFIG.citedResultsMaxChars), originals, () => questionStart, gate.stepReads) }),
+    ...(FINDING_TOOL in collectedTools && { [FINDING_TOOL]: reportFindingTool(originals, () => questionStart, () => ANALYSIS_TOOL_NAME in collectedTools, () => lastStep, gate.stepReads) }),
+    ...(isSlackSummaryTool(collectedTools[SUMMARY_TOOL]) && { [SUMMARY_TOOL]: reportAlertSummaryTool({ slack: true }, (summary, msgs, signal) => reviewSummary(context.db, sessionId, model, modelId, summary, restoreContext(msgs, originals), signal, providerOptions, questionStart, gate.stepReads()), () => questionStart, () => lastStep) }),
   };
   const tools = reviewed && gate(reviewed);
 
@@ -384,14 +385,15 @@ async function processLLMStream(
   const lastMessage = messages.at(-1);
   const replySteps = lastMessage?.role === "assistant" ? lastMessage.parts.filter((p) => p.type === "step-start").length : 0;
   const spent = repair ? 0 : Math.max(0, replySteps - budgetFrom);
-  const stepLimit = repair ? 1 : Math.max(1, maxSteps - spent);
+  // The repair pass gets more steps only to fix cards the check sent back.
+  const stepLimit = repair ? 1 + MAX_SEND_BACKS : Math.max(1, maxSteps - spent);
   const canReport = tools !== undefined && FINDING_TOOL in tools;
   // Anthropic extended thinking rejects a forced tool choice; activeTools alone still works.
   const mayForceTool = provider !== "anthropic" || !providerOptions?.anthropic?.thinking;
   const forceCard = { activeTools: [FINDING_TOOL], ...(mayForceTool ? { toolChoice: { type: "tool" as const, toolName: FINDING_TOOL } } : {}) };
   // `step` counts the steps of the reply since the run began, across re-run attempts.
-  const toolsForStep = (stepNumber: number, step: number, steps: StepCalls) => {
-    if (repair && stepNumber === 0) return forceCard;
+  const toolsForStep = (step: number, steps: StepCalls) => {
+    if (repair) return forceCard;
     // The last step must carry the card, or a turn that spent its budget on queries ends without an answer.
     if (step !== maxSteps - 1) return undefined;
     const names = [...turnToolNames(messages), ...stepToolNames(steps)];
@@ -410,7 +412,7 @@ async function processLLMStream(
     messages: modelMessages,
     tools: tools as Parameters<typeof streamText>[0]["tools"],
     // A question to the person ends the reply; their answer starts the next turn.
-    stopWhen: tools ? [isStepCount(stepLimit), hasToolCall(TOOL_NAMES.ASK_USER)] : undefined,
+    stopWhen: tools ? [isStepCount(stepLimit), hasToolCall(TOOL_NAMES.ASK_USER), ...(repair ? [cardShown] : [])] : undefined,
     prepareStep: async ({ stepNumber, steps, messages: carried }) => {
       gate.startStep();
       // Masking is idempotent and the returned messages carry forward, so each step masks only what the watermark newly passed.
@@ -426,7 +428,7 @@ async function processLLMStream(
         ? { messages: [...stepMessages, ...await convertToModelMessages(withSentTimes(arrived), { convertDataPart: () => undefined })] }
         : undefined;
       lastStep = !!repair || step >= maxSteps - 1;
-      const forTools = canReport ? toolsForStep(stepNumber, step, steps) : undefined;
+      const forTools = canReport ? toolsForStep(step, steps) : undefined;
       const note = canReport && !repair ? budgetNote(step, maxSteps, [...turnToolNames(messages), ...stepToolNames(steps)]) : undefined;
       const withNote = note ? { messages: [...(added?.messages ?? stepMessages), harnessNote(note)] } : added;
       return { messages: stepMessages, ...withNote, ...forTools };

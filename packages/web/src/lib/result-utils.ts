@@ -106,7 +106,7 @@ export function buildColumns(rows: Record<string, unknown>[]): Column[] {
         if (namedKey) dupeKeys.add(namedKey);
         columns.push({
           key: `facet-${idx}`,
-          label: namedKey ?? `Group ${idx + 1}`,
+          label: namedKey ? readableKey(namedKey) : `Group ${idx + 1}`,
           get: (row) => (row.facet as unknown[])[idx],
         });
       });
@@ -117,7 +117,7 @@ export function buildColumns(rows: Record<string, unknown>[]): Column[] {
       if (namedKey) dupeKeys.add(namedKey);
       columns.push({
         key: "facet",
-        label: namedKey ?? "Name",
+        label: namedKey ? readableKey(namedKey) : "Name",
         get: (row) => row.facet,
       });
     }
@@ -138,10 +138,25 @@ export function buildColumns(rows: Record<string, unknown>[]): Column[] {
   // Add remaining columns, skipping facet duplicates
   for (const key of allKeys) {
     if (key === "facet" || HIDDEN_KEYS.has(key) || dupeKeys.has(key)) continue;
-    columns.push({ key, label: key, get: (row) => row[key] });
+    columns.push({ key, label: readableKey(key), get: (row) => row[key] });
   }
 
   return columns;
+}
+
+/** A snake_case column name as words ("users_current" to "Users current"); any other name stays as written. */
+export const readableKey = (key: string) => (/^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/.test(key) ? key[0].toUpperCase() + key.slice(1).replaceAll("_", " ") : key);
+
+export const periodLabel = (period: string) => period.charAt(0).toUpperCase() + period.slice(1);
+
+/** The relative change from the second period to the first, e.g. "+12%"; empty when either is not a number or the base is 0. */
+export function relativeChange(current: unknown, previous: unknown): string {
+  const now = coerceNumeric(current);
+  const before = coerceNumeric(previous);
+  if (now === null || before === null || before === 0) return "";
+  const pct = ((now - before) / Math.abs(before)) * 100;
+  const shown = Math.abs(pct) >= 10 ? Math.round(pct) : Math.round(pct * 10) / 10;
+  return shown === 0 ? "0%" : `${shown > 0 ? "+" : "\u2212"}${Math.abs(shown)}%`;
 }
 
 /** Pivot COMPARE WITH rows: group by facet, show current/previous as side-by-side columns */
@@ -172,6 +187,8 @@ export function pivotCompareWith(rows: Record<string, unknown>[]) {
     const p = String(r.comparison);
     if (!periods.includes(p)) periods.push(p);
   }
+  // Row order does not fix the period order; "current" leads so a change reads from the previous period to it.
+  periods.sort((a, b) => Number(b === "current") - Number(a === "current"));
 
   // Group rows by facet key (stringified for arrays)
   const grouped = new Map<
@@ -195,4 +212,28 @@ export function pivotCompareWith(rows: Record<string, unknown>[]) {
 export function dropFlattenedRowCopies(data: unknown, provider?: string): unknown {
   if (provider !== "newrelic" || !Array.isArray(data)) return data;
   return data.every(isPlainObject) ? normalizeNewRelicRows(data) : data;
+}
+
+const DATE_TIME_RE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?)?(Z|[+-]\d{2}:?\d{2})?$/;
+
+function dateToUnixSeconds(v: unknown): number | null {
+  if (typeof v !== "string" || !DATE_TIME_RE.test(v.trim())) return null;
+  const t = v.trim();
+  const iso = /[TZ]|[+-]\d{2}:?\d{2}$/.test(t) ? t : `${t.includes(" ") ? t.replace(" ", "T") : `${t}T00:00:00`}Z`;
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
+}
+
+/** Rows whose first column is a date/time and every other column numeric, reshaped to chart rows; null when they are not a timeline. */
+export function timelineRows(rows: Record<string, unknown>[]): Record<string, unknown>[] | null {
+  if (rows.length < 2 || "beginTimeSeconds" in rows[0] || "facet" in rows[0] || "comparison" in rows[0]) return null;
+  const [timeKey, ...metrics] = Object.keys(rows[0]);
+  if (!timeKey || metrics.length === 0) return null;
+  if (!rows.every((r) => dateToUnixSeconds(r[timeKey]) !== null)) return null;
+  const num = (v: unknown) => (typeof v === "string" && /^-?\d+(\.\d+)?$/.test(v.trim()) ? Number(v) : coerceNumeric(v));
+  const isMetric = (m: string) => rows.some((r) => num(r[m]) !== null) && rows.every((r) => r[m] == null || num(r[m]) !== null);
+  if (!metrics.every(isMetric)) return null;
+  return rows
+    .map((r) => ({ beginTimeSeconds: dateToUnixSeconds(r[timeKey]) as number, ...Object.fromEntries(metrics.map((m) => [m, r[m] == null ? null : num(r[m])])) }))
+    .sort((a, b) => a.beginTimeSeconds - b.beginTimeSeconds);
 }

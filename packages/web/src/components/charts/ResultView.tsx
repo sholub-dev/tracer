@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { Markdown } from "../../lib/markdown";
 import { hasErrorOutput } from "../../lib/chat-utils";
 import type { Threshold } from "./ChartView";
-import { HIDDEN_KEYS, dropFlattenedRowCopies, formatValue, isNumericGroup, isPercentileResult, buildColumns, pivotCompareWith, coerceNumeric, type Column } from "../../lib/result-utils";
+import { HIDDEN_KEYS, dropFlattenedRowCopies, formatValue, isNumericGroup, isPercentileResult, buildColumns, pivotCompareWith, timelineRows, coerceNumeric, periodLabel, relativeChange, type Column } from "../../lib/result-utils";
 import { KeyFigures } from "./KeyFigures";
 
 // Lazy so recharts and react-json-view-lite stay out of the chat entry chunk.
@@ -130,6 +130,14 @@ function Td({ children, numeric }: { children: ReactNode; numeric?: boolean }) {
   return <TableCell className={cn("max-w-[300px] px-3 py-1.5 whitespace-normal text-foreground", numeric && "text-right")}>{children}</TableCell>;
 }
 
+// A change of a third or more is the kind a reader should notice first.
+const LARGE_CHANGE = 33;
+
+function ChangeCell({ change }: { change: string }) {
+  const large = Math.abs(parseFloat(change.replace("\u2212", "-"))) >= LARGE_CHANGE;
+  return <Td numeric><span className={cn("text-muted-foreground", large && "font-semibold text-foreground")}>{change || "\u2014"}</span></Td>;
+}
+
 const isNumeric = (value: unknown) => coerceNumeric(value) !== null;
 const isFigure = (value: unknown) => isNumeric(value) || isNumericGroup(value);
 
@@ -229,6 +237,8 @@ export default memo(function ResultView({ data, containerSize, threshold, chartT
   const hasHistogram = rows.length === 1 && Object.keys(rows[0]).some((k) => k.startsWith("histogram."));
 
   if (hasTimeKeys) return <TimeseriesChart rows={rows} containerSize={containerSize} threshold={threshold} />;
+  const timeline = timelineRows(rows);
+  if (timeline) return <TimeseriesChart rows={timeline} containerSize={containerSize} threshold={threshold} />;
   if (hasHistogram) return <HistogramChart row={rows[0]} containerSize={containerSize} />;
 
   // Single-row, single-key array value (e.g. uniques() result)
@@ -245,18 +255,20 @@ export default memo(function ResultView({ data, containerSize, threshold, chartT
   // COMPARE WITH pivot view
   if ("comparison" in rows[0]) {
     const { facetLabel, valueKeys, periods, grouped } = pivotCompareWith(rows);
+    const paired = periods.length === 2;
 
     // Scalar comparison (no facet): one row per metric
     if (!("facet" in rows[0])) {
       const single = [...grouped.values()][0];
       return (
-        <ResultTable head={<><Th>Metric</Th>{periods.map((p) => <Th key={p} numeric>{p}</Th>)}</>}>
+        <ResultTable head={<><Th>Metric</Th>{periods.map((p) => <Th key={p} numeric>{periodLabel(p)}</Th>)}{paired && <Th numeric>Change</Th>}</>}>
           {valueKeys.map((k) => (
             <TableRow key={k} className="hover:bg-muted/40">
               <Td><CellText value={k} /></Td>
               {periods.map((p) => (
                 <Td key={p} numeric><CellValue value={single?.byPeriod.get(p)?.[k]} colKey={k} /></Td>
               ))}
+              {paired && <ChangeCell change={relativeChange(single?.byPeriod.get(periods[0])?.[k], single?.byPeriod.get(periods[1])?.[k])} />}
             </TableRow>
           ))}
         </ResultTable>
@@ -269,21 +281,25 @@ export default memo(function ResultView({ data, containerSize, threshold, chartT
         head={
           <>
             <Th>{facetLabel}</Th>
-            {valueKeys.map((k) => periods.map((p) => <Th key={`${k}-${p}`} numeric>{valueKeys.length > 1 ? `${k} (${p})` : p}</Th>))}
+            {valueKeys.map((k) => [
+              ...periods.map((p) => <Th key={`${k}-${p}`} numeric>{valueKeys.length > 1 ? `${k} (${periodLabel(p)})` : periodLabel(p)}</Th>),
+              paired && <Th key={`${k}-change`} numeric>{valueKeys.length > 1 ? `${k} (Change)` : "Change"}</Th>,
+            ])}
           </>
         }
       >
         <CappedRows
           items={[...grouped.values()]}
-          colSpan={1 + valueKeys.length * periods.length}
+          colSpan={1 + valueKeys.length * (periods.length + (paired ? 1 : 0))}
           render={(group, i) => (
             <TableRow key={i} className="hover:bg-muted/40">
               <Td><CellValue value={group.label} colKey={facetLabel} /></Td>
-              {valueKeys.map((k) =>
-                periods.map((p) => (
+              {valueKeys.map((k) => [
+                ...periods.map((p) => (
                   <Td key={`${k}-${p}`} numeric><CellValue value={group.byPeriod.get(p)?.[k]} colKey={k} /></Td>
                 )),
-              )}
+                paired && <ChangeCell key={`${k}-change`} change={relativeChange(group.byPeriod.get(periods[0])?.[k], group.byPeriod.get(periods[1])?.[k])} />,
+              ])}
             </TableRow>
           )}
         />

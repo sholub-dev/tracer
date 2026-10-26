@@ -83,13 +83,13 @@ const runNrql = async (provider: NewRelicProvider, query: string) => {
 };
 
 test("execute_nrql appends the window and New Relic messages", async () => {
-  const text = await runNrql(nrql({ window: { begin: 1_700_000_000_000, end: 1_700_003_600_000 }, messages: ["Results are sampled"] }), "SELECT count(*) FROM Log SINCE 1 hour ago");
+  const text = await runNrql(nrql({ window: { begin: 1_700_000_000_000, end: 1_700_003_600_000 }, messages: ["Results are sampled"] }), "SELECT count(*) AS 'n' FROM Log SINCE 1 hour ago");
   assert.match(text, /\nWindow: .+ to .+/);
   assert.match(text, /\nNew Relic: Results are sampled$/);
 });
 
 test("execute_nrql notes a missing SINCE when no window is known", async () => {
-  assert.match(await runNrql(nrql({}), "SELECT count(*) FROM Log"), /No SINCE: NRQL used the last 60 minutes\.$/);
+  assert.match(await runNrql(nrql({}), "SELECT count(*) AS 'n' FROM Log"), /No SINCE: NRQL used the last 60 minutes\.$/);
   assert.doesNotMatch(await runNrql(nrql({}), "SELECT count(*) FROM Log SINCE 1 day ago"), /No SINCE/);
 });
 
@@ -217,7 +217,7 @@ test("execute_nrql explains an empty FACET result when rows match without the at
 });
 
 test("execute_nrql says when no row matches an empty FACET query", async () => {
-  assert.match(await probing(countRows(0)).run(REAL), /\nNo row matches the FROM and WHERE clauses in this window\.$/);
+  assert.match(await probing(countRows(0)).run(REAL.replace("count(*)", "count(*) AS 'n'")), /\nNo row matches the FROM and WHERE clauses in this window\.$/);
 });
 
 test("execute_nrql probe drops TIMESERIES, ORDER BY and COMPARE WITH and keeps the rest", async () => {
@@ -253,4 +253,13 @@ test("execute_nrql keeps the probe out of the query parts", async () => {
   assert.equal(sent.length, 2);
   const tool = nrqlTool(async () => ({ rows: [], futureRemoved: 0, window: null, messages: [] }));
   assert.equal((await tool.execute({ query: "SELECT count(*) FROM Log SINCE 1 hour ago" }, { toolCallId: "c" })).parts.length, 1);
+});
+
+test("execute_nrql notes aggregates without an AS alias and stays quiet when aliased", async () => {
+  const note = /Note: no AS aliases\. A person reads these column names; alias every value in the next queries\./;
+  assert.match(await runNrql(nrql({}), "SELECT count(*) FROM Log SINCE 1 day ago"), note);
+  assert.match(await runNrql(nrql({}), "SELECT average(duration), percentile(duration, 95) FROM Transaction SINCE 1 day ago FACET appName"), note);
+  assert.doesNotMatch(await runNrql(nrql({}), "SELECT count(*) AS 'Requests' FROM Log SINCE 1 day ago"), note);
+  assert.doesNotMatch(await runNrql(nrql({}), "SELECT * FROM Log SINCE 1 day ago"), note);
+  assert.doesNotMatch(await runNrql(nrql({}), "SHOW EVENT TYPES"), note);
 });

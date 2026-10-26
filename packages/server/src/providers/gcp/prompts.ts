@@ -28,7 +28,7 @@ export const GCP_CONFIG: ProviderPromptConfig = {
 export const gcpDirectModeSystemPrompt = buildDirectModePrompt(GCP_CONFIG);
 
 export function buildProjectConstraint(projectId: string | undefined): string {
-  if (!projectId) return "";
+  if (!projectId) return "\n## Configured GCP Project\nNo GCP project is set. Never guess a project ID. If a call fails for a missing or invalid project, stop calling GCP tools and say that a project must be set in Settings.\n";
   return `\n## Configured GCP Project\nYou MUST use ONLY project ID \`${projectId}\` for ALL tool calls.\nNEVER guess, infer, or try alternative project IDs. If a tool call fails for this project, report the error — do NOT retry with a different project name.\n`;
 }
 

@@ -31,8 +31,8 @@ function buildExecuteHogqlTool(
   return tool({
     description: "Execute a HogQL query against PostHog.",
     inputSchema: z.object({
-      query: z.string().describe("The HogQL query to execute"),
-      title: z.string().optional().describe("Short chart title in plain words, e.g. \"Checkout p95 latency\""),
+      query: z.string().describe("The HogQL query to execute. Alias every selected value and facet with AS '<plain name>' (a person reads the column names)."),
+      title: z.string().optional().describe("Plain title of what this query measures, read by a person and cited by the answer card."),
     }),
     execute: async ({ query }, { abortSignal }) => {
       try {

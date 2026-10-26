@@ -6,90 +6,106 @@ export const FINDING_KIND = ["root_cause", "summary"] as const;
 
 export const VERDICT = ["problem", "no_problem", "unclear"] as const;
 
-const INLINE = "Inline markdown only: **bold** for the one or two key facts (a number, a time window, the failing component), `code` for identifiers (exception classes, endpoints, error messages, query fragments). Sparing; no headings, lists, links or HTML.";
+const INLINE = "Inline markdown only: **bold** for at most one key fact, `code` only for a name the reader must search for verbatim. No headings, lists, links or HTML.";
 
-const NO_IDS = "No ids (incident, issue, session, UUIDs) anywhere in the card: name the service, endpoint or condition instead. Each field adds facts no other field states: when a field would only repeat, omit it (optional fields) or keep it to the new facts. Fewer words beat more.";
+const PLAIN = "Write for a person who did not see the investigation: plain words, the name a person uses for each thing (\"error rate\", \"login endpoint\"), never a raw field name, query fragment or id.";
+
+const statementSchema = z.object({
+  statement: z.string().describe(`One fact of at most 25 words that a cited result shows, with its number and window. ${PLAIN} ${INLINE}`),
+  source: z.string().describe("The exact title of the query in this turn whose result shows the statement."),
+});
 
 export const findingSchema = z.object({
-  kind: z.enum(FINDING_KIND).describe("root_cause when the turn explains why something happened; summary for status, counts, trends and lookups"),
+  kind: z.enum(FINDING_KIND).describe("root_cause when the turn explains why something happened or found a problem; summary for status, counts, trends and lookups"),
   verdict: z.enum(VERDICT).optional().describe("root_cause only, required for it: problem when something is broken or degraded; no_problem when the signal is expected, normal or noise; unclear when the data stops short."),
-  headline: z.string().describe(`The answer to the question as asked, in one plain sentence of at most 25 words, with its key number. root_cause: the deepest cause the data shows, never the symptom alone; a comparison question (worst, biggest, which) names the winner and the margin over the next one. summary: the main takeaway. ${NO_IDS} No "Root cause:" or "Summary:" prefix.`),
-  chain: z.array(z.object({
-    fact: z.string().describe("At most 20 words, one number or time from the query result. " + INLINE),
-    query: z.string().optional().describe("The exact title you gave the query whose result shows this fact"),
-  })).min(1).max(6).optional().describe("root_cause only, required for it: the causal chain, one link per item: the first link is the symptom (for a worst, biggest or which question, the ranking with the first and second), each next link answers why the one before it happened, and the last link is the deepest cause the data shows. Each fact is at most 20 words and states only what its query result shows, with its number or time. A mechanism no result measures is not a fact: put it in gap. Each number appears once in the card, as the result shows it. " + INLINE + " " + NO_IDS),
-  gap: z.string().optional().describe("root_cause only: the one thing the card does not show that changes what the reader does next: who sent the traffic, why, whether it was legitimate, or a cause no result ruled out. State what is unknown, then what the results show about it, so a person who knows the system can close it, for example \"The client that sent the AHC/2.1 burst is unknown. The requests to `/events/submit` carry no caller service name and peaked at 8,893 per minute at 05:55 PDT.\" Statements only: never a question, a log type, a data source or a time window to check, a query or a fix. Required when the cause is not confirmed. " + INLINE),
-  impact: z.string().optional().describe("root_cause only: one short phrase on who or what is affected and how much, only as a result measures it. \"none\" is allowed for no_problem. " + INLINE + " " + NO_IDS),
-  action: z.string().optional().describe("root_cause only: an action you took on a system in this turn, for example closing an issue or posting a message. Queries and the investigation are not actions. Omit it otherwise. " + INLINE),
-  confidence: z.enum(CONFIDENCE).optional().describe("root_cause only: confirmed only when a query result shows the cause itself, not only the symptom, and rules out the strongest alternative. Ignored for summary."),
-  details: z.string().optional().describe("summary only: omit it unless the answer is a list of parallel items; then a short intro line and a \"- \" list, one item per line with its number. **bold** for key facts and `code` for identifiers allowed; no headings, links, tables or HTML. " + NO_IDS),
-  points: z.array(z.string()).max(4).optional().describe("summary only: 0 to 3 facts with a number or time from a query result that the headline and details do not state. " + INLINE),
+  confidence: z.enum(CONFIDENCE).optional().describe("root_cause only: confirmed only when a cited result shows the cause itself and another rules out the strongest alternative; likely when an alternative is still open; unverified otherwise."),
+  title: z.string().describe(`A short title of at most 10 words that names what happened and why, or what was found. Sentence case, no number, no trailing period. ${PLAIN}`),
+  answer: z.string().describe(`The direct answer to the question as asked, in one or two sentences of at most 45 words together. It holds the number that sizes the answer next to its normal level, and for a why question the deepest cause the data shows. ${PLAIN} ${INLINE}`),
+  explanation: z.array(statementSchema).min(1).max(6).describe("The evidence that proves the answer, in reading order. root_cause: each statement answers why the one before it happened, from the symptom down to the deepest cause, and one statement shows the result that rules out the strongest alternative. summary: the facts behind the answer, one per item. Each statement adds a fact the answer and the other statements do not state: never repeat a number."),
+  unknown: z.string().optional().describe(`What no connected source can show and that changes what the reader does next, then what the results show about it. A statement, never a question, a check to run or a fix. Required when confidence is not confirmed, and in a summary when the question names a change (a release, a deploy) whose time or effect no result shows. ${PLAIN} ${INLINE}`),
+  action: z.string().optional().describe(`An action on a system that a tool call in this turn performed and that succeeded, such as closing an issue. Queries are not actions. Omit it otherwise. ${PLAIN}`),
 });
 
 export type Finding = z.infer<typeof findingSchema>;
 
+/** A saved card: cards from before the explanation field may have none. */
+export const savedFindingSchema = findingSchema.extend({ explanation: z.array(statementSchema).max(6) }).refine((f) => f.title.trim() || f.answer.trim());
+
 type PartLike = { type: string; state?: string; input?: unknown; output?: unknown };
 
-/** A card the review sent back for fixes: saved in the reply, never shown. */
+/** A card the check sent back for fixes: saved in the reply, never shown. */
 export const cardRejected = (output: unknown) => (output as { recorded?: unknown } | null | undefined)?.recorded === false;
 
-type Link = { fact: string; query?: string };
+/** A card recorded after its last send-back while some checks still failed. */
+export const cardUnchecked = (output: unknown) => typeof (output as { unchecked?: unknown } | null | undefined)?.unchecked === "string";
+
+export const UNCHECKED_NOTE = "Some claims in this card did not pass the evidence checks; treat them as unverified.";
+
+export const asUnverified = <T extends { unknown?: string }>(card: T) => ({ ...card, confidence: "unverified" as const, unknown: card.unknown ? `${card.unknown} ${UNCHECKED_NOTE}` : UNCHECKED_NOTE });
 
 const text = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 
-// Older calls saved rootCause and evidence instead of kind, headline and points. Older root_cause cards saved details and points, then happened, cause, evidence and toConfirm: they show as a chain and a gap.
+const lines = (v: unknown) => text(v).split("\n").map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, "").trim()).filter(Boolean);
+
+// Cards saved before the title/answer/explanation shape: headline, chain, impact, gap, details and points (and the older rootCause/evidence).
 export function normalizeFinding(input: unknown): unknown {
   if (!input || typeof input !== "object") return input;
   const r = input as Record<string, unknown>;
-  if (!("kind" in r)) {
-    const { rootCause, evidence, ...rest } = r;
-    return normalizeFinding({ ...rest, kind: "root_cause", headline: rootCause, points: evidence });
-  }
-  if (r.kind !== "root_cause" || r.chain !== undefined) return r;
-  const { details, points, happened, cause, evidence, toConfirm, ...rest } = r;
-  const legacy = [details, points, happened, cause, evidence, toConfirm].some((v) => v !== undefined);
-  if (!legacy) return r;
-  const items = (v: unknown): Link[] => (Array.isArray(v) ? v : []).flatMap((e) => {
-    const link = typeof e === "string" ? { fact: e } : (e as Link | null);
-    return text(link?.fact) ? [{ ...link, fact: link!.fact }] : [];
-  });
-  const chain: Link[] = [text(happened) || text(details), text(cause)].filter(Boolean).map((fact) => ({ fact }));
-  chain.push(...items(evidence), ...items(points));
-  return { ...rest, ...(chain.length > 0 && { chain: chain.slice(0, 6) }), ...(text(toConfirm) && { gap: text(toConfirm) }) };
+  if ("answer" in r || "explanation" in r || !("headline" in r || "rootCause" in r)) return r;
+  const { headline, rootCause, chain, impact, gap, details, points, evidence, happened, cause, toConfirm, ...rest } = r;
+  const statements: { statement: string; source: string }[] = [];
+  const push = (statement: unknown, source?: unknown) => { if (text(statement)) statements.push({ statement: text(statement), source: text(source) }); };
+  for (const l of Array.isArray(chain) ? chain : []) push((l as { fact?: unknown })?.fact, (l as { query?: unknown })?.query);
+  push(happened);
+  push(cause);
+  for (const d of lines(details)) push(d);
+  for (const p of [...(Array.isArray(points) ? points : []), ...(Array.isArray(evidence) ? evidence : [])]) push(typeof p === "string" ? p : (p as { fact?: unknown })?.fact);
+  push(impact);
+  return {
+    ...rest,
+    kind: r.kind ?? "root_cause",
+    title: "",
+    answer: text(headline) || text(rootCause),
+    explanation: statements.slice(0, 6),
+    ...((text(gap) || text(toConfirm)) && { unknown: text(gap) || text(toConfirm) }),
+  };
 }
 
-/** The input of the last successful report_finding call whose input is valid. */
+/** The input of the last recorded report_finding call whose input is valid. */
 export function findingFromMessages(messages: ReadonlyArray<{ parts: ReadonlyArray<PartLike> }>): Finding | null {
   for (const m of [...messages].reverse()) {
     for (const p of [...m.parts].reverse()) {
       if (p.type !== "tool-report_finding" || p.state !== "output-available" || cardRejected(p.output)) continue;
-      const parsed = findingSchema.safeParse(normalizeFinding(p.input));
+      const parsed = savedFindingSchema.safeParse(normalizeFinding(p.input));
       if (!parsed.success) continue;
-      const f = parsed.data;
-      if (f.kind === "summary") return { kind: "summary", headline: f.headline, details: f.details ?? "", points: f.points ?? [] };
-      const { details: _d, points: _p, ...card } = f;
-      return { ...card, confidence: f.confidence ?? "unverified" };
+      const f = cardUnchecked(p.output) ? asUnverified(parsed.data) : parsed.data;
+      return f.kind === "summary" ? { kind: "summary", title: f.title, answer: f.answer, explanation: f.explanation, ...(f.unknown && { unknown: f.unknown }), ...(f.action && { action: f.action }) } : { ...f, confidence: f.confidence ?? "unverified" };
     }
   }
   return null;
 }
 
+/** The distinct sources of a card, in first-cited order; a statement's number is its source's index + 1. */
+export function findingSources(f: Pick<Finding, "explanation">): string[] {
+  const seen = new Map<string, string>();
+  for (const e of f.explanation) {
+    const key = e.source.trim().toLowerCase();
+    if (key && !seen.has(key)) seen.set(key, e.source.trim());
+  }
+  return [...seen.values()];
+}
+
 const VERDICT_LABEL: Record<NonNullable<Finding["verdict"]>, string> = { problem: "Problem", no_problem: "No problem", unclear: "Unclear" };
 
 export function findingMarkdown(f: Finding): string {
-  if (f.kind === "summary") {
-    const details = f.details ? `${f.details}\n\n` : "";
-    return `**Summary:** ${f.headline}\n\n${details}${(f.points ?? []).map((e) => `- ${e}`).join("\n")}`.trimEnd();
-  }
-  const label = f.verdict ? VERDICT_LABEL[f.verdict] : "Finding";
-  const section = (title: string, body?: string) => (body ? `**${title}:** ${body}` : "");
-  const chain = f.chain?.length ? `**Chain:**\n${f.chain.map((e, i) => `${i + 1}. ${e.fact}${e.query ? ` (query: ${e.query})` : ""}`).join("\n")}` : "";
+  const sources = findingSources(f);
+  const label = f.kind === "summary" ? "Summary" : `${f.verdict ? VERDICT_LABEL[f.verdict] : "Finding"} (${f.confidence ?? "unverified"})`;
   const parts = [
-    `**${label}** (${f.confidence ?? "unverified"}): ${f.headline}`,
-    chain,
-    section("Impact", f.impact),
-    section("Action taken", f.action),
-    section("Unknown", f.gap),
+    `**${label}:** ${f.title ? `${f.title}\n\n` : ""}${f.answer}`,
+    f.explanation.length ? `**${f.kind === "summary" ? "Details" : "Why"}:**\n${f.explanation.map((e, i) => `${i + 1}. ${e.statement}`).join("\n")}` : "",
+    f.action ? `**Action taken:** ${f.action}` : "",
+    f.unknown ? `**Unknown:** ${f.unknown}` : "",
+    sources.length ? `**Sources:**\n${sources.map((s) => `- ${s}`).join("\n")}` : "",
   ];
   return parts.filter(Boolean).join("\n\n");
 }

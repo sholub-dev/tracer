@@ -126,7 +126,7 @@ const issueList = (issues: ListedIssue[], closes: Map<string, number> = new Map(
 
 // In the tool result too, so later chat turns can explain what the report did in New Relic.
 export const TRIAGE_EFFECT = "Alert triage is on: you act on these issues yourself. close_nr_issue acks and closes a stopped issue in New Relic, which closes its JSM alert. Tracer records what happened and reports it after the run. Ongoing or recurring: leave the issue open; set a timer only while the value is still changing, otherwise it is handed to a person and people are pinged. Unknown: leave it open; people are pinged.";
-const REPORT_INSTRUCTION = "for each issue id above that a query result up to now shows stopped (no error, or the value back to its normal level, since a time you name in reason), call close_nr_issue alone in its own step: it acks first, then closes. Then call report_issue_status once with the severity and, for each issue id above, its status: stopped, ongoing, recurring or unknown. Without that result, use unknown and close nothing. An issue that keeps coming back after closes is usually recurring: decide from the data whether closing it again helps, and say why in the reason.";
+const REPORT_INSTRUCTION = "for each issue id above that a query result up to now shows stopped (requests keep arriving and succeed, or the value is back to its normal level, since a time you name in reason; no requests at all is unknown, not stopped), call close_nr_issue alone in its own step: it acks first, then closes. Then call report_issue_status once with the severity and, for each issue id above, its status: stopped, ongoing, recurring or unknown. Without that result, use unknown and close nothing. An issue that keeps coming back after closes is usually recurring: decide from the data whether closing it again helps, and say why in the reason.";
 
 export function issuesPrompt(open: AiIssue[], closes: Map<string, number>): string[] {
   if (open.length === 0) return [];
@@ -134,7 +134,7 @@ export function issuesPrompt(open: AiIssue[], closes: Map<string, number>): stri
     "",
     "New Relic issues of this firing that are still open:",
     ...issueList(open.map((i) => ({ issueId: i.issueId, conditionName: conditionOf(i), title: titleOf(i) })), closes),
-    `After report_finding, ${REPORT_INSTRUCTION} Base it on the data up to now. Make the calls in this order: report_finding, then the close calls, then report_issue_status alone in its own step, then report_alert_summary alone in its own step, all before any visual.`,
+    `After report_finding, ${REPORT_INSTRUCTION} Base it on the data up to now. Make the calls in this order: report_finding, then the close calls, then report_issue_status alone in its own step, then report_alert_summary alone in its own step. Close nothing before report_finding.`,
   ];
 }
 
@@ -150,7 +150,7 @@ export function closedCheckPrompt(found: FoundIssues | null, slack: boolean): st
     "",
     "First check that this alert is still open. Query NrAiIncident for this firing's incidents up to now, with latest(event) FACET incidentId and the monitor query's filters. An incident whose latest event is 'close' is closed: a person resolved it, or another Tracer device handled it.",
     ...known,
-    `If every incident of this firing is closed, call dismiss_alert alone with the result that shows it, then report_finding with that result, then stop: no investigation, no report_alert_summary${slack ? ", nothing goes to Slack" : ""}. If any incident is still open, or the data does not show its state, investigate.`,
+    `If every incident of this firing is closed, call dismiss_alert alone with the result that shows it, then report_finding with that result, then stop: no investigation, no report_alert_summary${slack ? ", nothing goes to Slack" : ""}. If any incident is still open, or the data does not show its state, investigate. A closed incident is not the end of the problem: when a result in this turn shows the alerted value back over its limit after the close, do not dismiss; investigate it as an open firing.`,
   ];
 }
 

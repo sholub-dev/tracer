@@ -1,7 +1,7 @@
 import { memo, useRef, useState } from "react";
 import { AlertCircle, ClipboardCheck, Copy, History, Loader2, Send, Timer, type LucideIcon } from "lucide-react";
 import { CLIENT_TOOL_NAMES, isPlainObject, type ProgressPart } from "@tracer-sh/shared";
-import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { Markdown } from "../../lib/markdown";
 import ResultView, { JsonTree } from "../charts/ResultView";
@@ -36,7 +36,6 @@ interface SubAgentOutput {
 
 const SMALL_TOOLS: Record<string, { done: string; loading: string; errorLabel: string; icon: LucideIcon }> = {
   "tool-read_past_session": { done: "Read a past investigation", loading: "Reading a past investigation", errorLabel: "Past investigation not available", icon: History },
-  "tool-report_finding": { done: "Finding reported", loading: "Reporting finding", errorLabel: "Finding not recorded", icon: ClipboardCheck },
   "tool-report_issue_status": { done: "Reported alert status", loading: "Reporting alert status", errorLabel: "Alert status not recorded", icon: ClipboardCheck },
   "tool-report_alert_summary": { done: "Reported alert summary", loading: "Reporting alert summary", errorLabel: "Alert summary not recorded", icon: ClipboardCheck },
   "tool-dismiss_alert": { done: "Alert already closed, not posted", loading: "Dismissing alert", errorLabel: "Alert not dismissed", icon: ClipboardCheck },
@@ -65,14 +64,14 @@ export const isMonitorTool = (type: string) => MONITOR_TOOLS.has(type);
 
 export const providerOf = (type: string) => PROVIDER_BY_TOOL[type] ?? "gcp";
 
-/** Parts that never render: the analysis marker, removed propose_monitor drafts, read_result, and a recorded finding (shown as a card). */
-export function isHiddenPart(part: { type: string; state?: string }) {
+/** Parts that never render: the analysis marker, removed propose_monitor drafts, read_result, and report_finding (shown as a card). */
+export function isHiddenPart(part: { type: string }) {
   return (
     part.type === CLIENT_TOOL_NAMES.BEGIN_ANALYSIS ||
     part.type === "tool-propose_monitor" ||
     part.type === "tool-read_result" ||
     part.type === "step-start" ||
-    (part.type === "tool-report_finding" && part.state === "output-available")
+    part.type === "tool-report_finding"
   );
 }
 
@@ -103,15 +102,6 @@ function stepParts(part: ToolPart, progress: ProgressPart[] | undefined): Progre
 
 export function stepQueryCount(part: ToolPart, store: ProgressStore): number {
   return stepParts(part, store.getSnapshot(part.toolCallId ?? "")?.parts).filter((p) => p.type === "query").length;
-}
-
-/** Scrolls to the tool row of a query and highlights it for a moment. */
-export function flashStep(toolCallId: string): void {
-  const el = document.querySelector<HTMLElement>(`[data-tool-call="${CSS.escape(toolCallId)}"]`);
-  if (!el) return;
-  el.scrollIntoView({ behavior: "smooth", block: "center" });
-  el.setAttribute("data-flash", "");
-  setTimeout(() => el.removeAttribute("data-flash"), 1600);
 }
 
 function stepTitle(part: ToolPart, provider: string): string {
@@ -352,11 +342,11 @@ function StepBody({ part, progressStore, isAnimating, resultsOnly = false }: { p
 }
 
 // A folded step keeps its charts and tables visible; only the query hides.
-type StepProps = { part: ToolPart; progressStore: ProgressStore; isAnimating: boolean };
+type StepProps = { part: ToolPart; progressStore: ProgressStore; isAnimating: boolean; evidence?: boolean };
 
 // The AI SDK clones the streaming message per chunk, so part identity changes even when nothing read here did.
 function stepPropsEqual(prev: StepProps, next: StepProps): boolean {
-  if (prev.progressStore !== next.progressStore || prev.isAnimating !== next.isAnimating) return false;
+  if (prev.progressStore !== next.progressStore || prev.isAnimating !== next.isAnimating || prev.evidence !== next.evidence) return false;
   const a = prev.part;
   const b = next.part;
   if (a === b) return true;
@@ -366,10 +356,42 @@ function stepPropsEqual(prev: StepProps, next: StepProps): boolean {
 }
 
 // A finished step with one chart or table result sits in a card, with its query behind the chevron.
-function ChartStep({ part, query, results, totalRows }: { part: ToolPart; query: string | null; results: unknown; totalRows?: number }) {
+/** One cited result under the card: a flat numbered row, so the list reads (and copies) as "[1] Title". */
+function EvidenceStep({ part, query, results, totalRows }: { part: ToolPart; query: string | null; results: unknown; totalRows?: number }) {
+  const [open, setOpen] = useState(false);
+  const provider = providerOf(part.type);
+  return (
+    <li data-tool-call={part.toolCallId} className="rounded-xl border bg-card p-4 shadow-sm max-sm:px-3">
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <div className="flex items-baseline gap-3">
+          <p className="min-w-0 flex-1 text-sm font-medium break-words text-foreground">
+            {stepTitle(part, provider)}
+          </p>
+          <span className="shrink-0 text-xs text-muted-foreground">{providerLabel(provider)}</span>
+          {query && (
+            <CollapsibleTrigger className="shrink-0 rounded text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
+              {open ? "Hide query" : "Query"}
+            </CollapsibleTrigger>
+          )}
+        </div>
+        {query && (
+          <CollapsibleContent className="mt-2">
+            <QueryBlock query={query} />
+          </CollapsibleContent>
+        )}
+      </Collapsible>
+      <div className="mt-2">
+        <ResultView data={results} totalRows={totalRows} provider={provider} />
+      </div>
+    </li>
+  );
+}
+
+function ChartStep({ part, query, results, totalRows, evidence }: { part: ToolPart; query: string | null; results: unknown; totalRows?: number; evidence?: boolean }) {
   const [open, setOpen] = useState(false);
   const provider = providerOf(part.type);
   const title = stepTitle(part, provider);
+  if (evidence) return <EvidenceStep part={part} query={query} results={results} totalRows={totalRows} />;
   return (
     <li data-tool-call={part.toolCallId} className="animate-in fade-in duration-200 data-[flash]:rounded-xl data-[flash]:ring-2 data-[flash]:ring-primary/50">
       <Collapsible open={open} onOpenChange={setOpen} className="rounded-xl border bg-card p-4 shadow-sm max-sm:px-3">
@@ -399,7 +421,7 @@ function ChartStep({ part, query, results, totalRows }: { part: ToolPart; query:
   );
 }
 
-export const ProviderStep = memo(function ProviderStep({ part, progressStore, isAnimating }: StepProps) {
+export const ProviderStep = memo(function ProviderStep({ part, progressStore, isAnimating, evidence }: StepProps) {
   const [open, setOpen] = useState(false);
   const progress = useProgress(progressStore, part.toolCallId);
   const provider = providerOf(part.type);
@@ -407,9 +429,9 @@ export const ProviderStep = memo(function ProviderStep({ part, progressStore, is
   const running = !settled && isAnimating;
   const queries = !settled || stepError(part) ? [] : stepParts(part, progress?.parts).filter((p) => p.type === "query");
   const only = queries.length === 1 && queries[0].type === "query" && queries[0].query && isRowResult(queries[0].results) ? queries[0] : null;
-  if (only) return <ChartStep part={part} query={only.query} results={only.results} totalRows={only.totalRows} />;
+  if (only) return <ChartStep part={part} query={only.query} results={only.results} totalRows={only.totalRows} evidence={evidence} />;
   const rows = !settled || stepError(part) ? null : rowsOf(part.output);
-  if (rows) return <ChartStep part={part} query={inputText(part)} results={rows} />;
+  if (rows) return <ChartStep part={part} query={inputText(part)} results={rows} evidence={evidence} />;
   const error = open ? null : stepError(part);
   return (
     <li data-tool-call={part.toolCallId} className="animate-in fade-in duration-200 data-[flash]:rounded-xl data-[flash]:ring-2 data-[flash]:ring-primary/50">
@@ -419,8 +441,8 @@ export const ProviderStep = memo(function ProviderStep({ part, progressStore, is
           chevronClassName="text-muted-foreground"
           className="-ml-1.5 flex max-w-full items-center gap-2 rounded-md px-1.5 py-1 text-left hover:text-foreground"
         >
-          <ProviderDot provider={provider} />
-          <span className="sr-only">{providerLabel(provider)}:</span>
+          {!evidence && <ProviderDot provider={provider} />}
+          {!evidence && <span className="sr-only">{providerLabel(provider)}:</span>}
           <span className="min-w-0 truncate text-sm font-medium">{stepTitle(part, provider)}</span>
           {running && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-label="Running" />}
           {!settled && !isAnimating && <span className="shrink-0 text-xs text-muted-foreground">Stopped</span>}

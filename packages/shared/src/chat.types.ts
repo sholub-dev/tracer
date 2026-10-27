@@ -1,0 +1,217 @@
+import { z } from "zod";
+import { normalizeFinding, savedFindingSchema } from "./finding.js";
+
+/** Progress part types streamed from sub-agents to the client */
+export type ProgressPart =
+  // totalRows: the original row count, set when the saved copy keeps only the first rows.
+  | { type: "query"; query: string; results: unknown; totalRows?: number }
+  | { type: "text"; content: string }
+  | { type: "tool-call"; toolName: string }
+  | { type: "reasoning"; content: string }
+  // Marks where the sub-agent's `begin_analysis` tool fired — everything after it
+  // is the final Analysis (rendered in the distinct Analysis box, like direct mode).
+  | { type: "analysis-start" }
+  // Legacy: older persisted sessions styled the last text part as a summary block.
+  | { type: "summary"; content: string };
+
+/** Folds one streamed sub-agent chunk into the parts received so far. */
+export function mergeProgressPart(
+  prev: readonly ProgressPart[],
+  part: { type: string; [key: string]: unknown },
+): ProgressPart[] {
+  // A retry clears the failed attempt's streamed parts before re-streaming.
+  if (part.type === "reset") return [];
+  const parts = [...prev];
+  if (part.type === "tool-call") {
+    parts.push({ type: "tool-call", toolName: part.toolName as string });
+  } else if (part.type === "text-delta") {
+    const last = parts[parts.length - 1];
+    if (last?.type === "text") {
+      parts[parts.length - 1] = { ...last, content: last.content + (part.delta as string) };
+    } else {
+      parts.push({ type: "text", content: part.delta as string });
+    }
+  } else if (part.type === "reasoning-delta") {
+    const last = parts[parts.length - 1];
+    if (last?.type === "reasoning") {
+      parts[parts.length - 1] = { ...last, content: last.content + (part.delta as string) };
+    } else {
+      parts.push({ type: "reasoning", content: part.delta as string });
+    }
+  } else if (part.type === "query") {
+    let tcIdx = -1;
+    for (let i = parts.length - 1; i >= 0; i--) {
+      if (parts[i].type === "tool-call") { tcIdx = i; break; }
+    }
+    if (tcIdx !== -1) parts.splice(tcIdx, 1);
+    parts.push({ type: "query", query: part.query as string, results: part.results });
+  } else if (part.type === "begin-analysis") {
+    // After begin_analysis, everything the sub-agent writes is its final Analysis.
+    parts.push({ type: "analysis-start" });
+  } else if (part.type === "mark-summary") {
+    // Legacy: older sub-agents marked the last text part as a summary block.
+    for (let i = parts.length - 1; i >= 0; i--) {
+      if (parts[i].type === "text") {
+        parts[i] = { ...parts[i], type: "summary" } as ProgressPart;
+        break;
+      }
+    }
+  }
+  return parts;
+}
+
+/** Tool names as registered on the server */
+export const TOOL_NAMES = {
+  SAVE_MONITOR: "save_monitor",
+  DELETE_MONITOR: "delete_monitor",
+  BEGIN_ANALYSIS: "begin_analysis",
+  ASK_USER: "ask_user",
+} as const;
+
+/** AI SDK prefixes tool names with "tool-" on the client */
+export const CLIENT_TOOL_NAMES = Object.fromEntries(
+  Object.entries(TOOL_NAMES).map(([k, v]) => [k, `tool-${v}`]),
+) as { [K in keyof typeof TOOL_NAMES]: `tool-${(typeof TOOL_NAMES)[K]}` };
+
+/** Marker the agent writes in a text part to signal "analysis starts here". */
+export const ANALYSIS_MARKER = "<analysis>";
+
+/** Structural UIMessage shape so this module stays free of the `ai` dependency. */
+type MessageLike = { role: string; parts?: ReadonlyArray<{ type: string }> };
+
+/**
+ * An analysis (post-mortem) assistant message: contains the begin_analysis
+ * tool call, or the legacy text marker.
+ */
+export function isAnalysisMessage(msg: MessageLike): boolean {
+  if (msg.role !== "assistant" || !msg.parts) return false;
+  return msg.parts.some((p) => {
+    if (p.type === CLIENT_TOOL_NAMES.BEGIN_ANALYSIS) return true;
+    if (p.type !== "text") return false;
+    const text = (p as { text?: unknown }).text;
+    return typeof text === "string" && text.includes(ANALYSIS_MARKER);
+  });
+}
+
+/**
+ * Resolve "summarize up to message `boundaryIdx`" to the number of leading
+ * messages the summary hides (the session's summaryUpTo). Analysis messages
+ * are too informative to dismiss: when the boundary is one, it stays visible —
+ * the compact mutation still folds its pre-analysis tool work into the
+ * summary, but the message itself is not hidden. Returns null when the
+ * boundary is not an assistant message or nothing would be left to summarize.
+ */
+export function compactionUpTo(messages: ReadonlyArray<MessageLike>, boundaryIdx: number): number | null {
+  const boundary = messages[boundaryIdx];
+  if (boundary?.role !== "assistant") return null;
+  if (!isAnalysisMessage(boundary)) return boundaryIdx + 1;
+  return boundaryIdx >= 1 ? boundaryIdx : null;
+}
+
+/**
+ * Where the analysis section begins in a message's parts: the begin_analysis
+ * tool part if present, else the legacy `<analysis>` text marker (with the
+ * char offset inside that text part). Single source of truth for analysis-
+ * boundary detection — splitAtAnalysis, analysisSectionParts, and the web
+ * MessageParts renderer all build on it. Returns null when there is none.
+ */
+export type AnalysisMarkerPos =
+  | { kind: "tool"; partIdx: number }
+  | { kind: "text"; partIdx: number; charIdx: number };
+
+export function findAnalysisMarker(parts: ReadonlyArray<{ type: string }>): AnalysisMarkerPos | null {
+  const toolIdx = parts.findIndex((p) => p.type === CLIENT_TOOL_NAMES.BEGIN_ANALYSIS);
+  if (toolIdx !== -1) return { kind: "tool", partIdx: toolIdx };
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    if (p.type !== "text") continue;
+    const text = (p as { text?: unknown }).text;
+    if (typeof text !== "string") continue;
+    const idx = text.indexOf(ANALYSIS_MARKER);
+    if (idx !== -1) return { kind: "text", partIdx: i, charIdx: idx };
+  }
+  return null;
+}
+
+/**
+ * Split a message's parts at the analysis marker: `before` is the working
+ * section (reasoning, tool calls, intermediate text), `analysis` everything
+ * after the marker. Returns null when the message has no analysis section.
+ */
+export function splitAtAnalysis<P extends { type: string }>(
+  parts: ReadonlyArray<P>,
+): { before: P[]; analysis: P[] } | null {
+  const marker = findAnalysisMarker(parts);
+  if (!marker) return null;
+  if (marker.kind === "tool") {
+    return { before: parts.slice(0, marker.partIdx), analysis: parts.slice(marker.partIdx + 1) };
+  }
+  const p = parts[marker.partIdx] as P & { text: string };
+  const beforeText = p.text.slice(0, marker.charIdx);
+  const afterText = p.text.slice(marker.charIdx + ANALYSIS_MARKER.length);
+  return {
+    before: [...parts.slice(0, marker.partIdx), ...(beforeText.trim() ? [{ ...p, text: beforeText }] : [])],
+    analysis: [...(afterText.trim() ? [{ ...p, text: afterText }] : []), ...parts.slice(marker.partIdx + 1)],
+  };
+}
+
+/**
+ * The message's parts from the analysis marker onward, marker included — a
+ * render-only view of a kept compaction boundary that shows just the analysis
+ * section. Unlike splitAtAnalysis, the marker stays so renderers that key the
+ * analysis box off it still work. Returns null when there is no analysis
+ * section.
+ */
+export function analysisSectionParts<P extends { type: string }>(parts: ReadonlyArray<P>): P[] | null {
+  const marker = findAnalysisMarker(parts);
+  if (!marker) return null;
+  if (marker.kind === "tool") return parts.slice(marker.partIdx);
+  const p = parts[marker.partIdx] as P & { text: string };
+  return [{ ...p, text: p.text.slice(marker.charIdx) }, ...parts.slice(marker.partIdx + 1)];
+}
+
+const importedText = z.object({ type: z.enum(["text", "reasoning"]), text: z.string() });
+const importedFile = z.object({
+  type: z.literal("file"),
+  mediaType: z.string(),
+  url: z.string().startsWith("data:"),
+  filename: z.string().optional(),
+});
+const importedFinding = z.object({ type: z.literal("tool-report_finding"), input: z.preprocess(normalizeFinding, savedFindingSchema) });
+
+/**
+ * Keeps only inert parts of an imported message: text, reasoning, files and the report_finding card.
+ * Other tool parts and data parts are dropped, so an imported file cannot carry tool calls or results.
+ */
+export function sanitizeImportedParts(parts: ReadonlyArray<{ type: string }>): Array<{ type: string } & Record<string, unknown>> {
+  const out: Array<{ type: string } & Record<string, unknown>> = [];
+  for (const part of parts) {
+    const text = importedText.safeParse(part);
+    if (text.success) { out.push(text.data); continue; }
+    const file = importedFile.safeParse(part);
+    if (file.success) { out.push(file.data); continue; }
+    const finding = importedFinding.safeParse(part);
+    if (finding.success) {
+      out.push({ type: finding.data.type, toolCallId: crypto.randomUUID(), state: "output-available", input: finding.data.input, output: { recorded: true } });
+    }
+  }
+  return out;
+}
+
+/**
+ * Schema for the JSON blob embedded in an analysis PNG. Lives in shared so
+ * both the server (`importAnalysis` mutation input) and the web client (drop
+ * handler validation) can use the same definition.
+ *
+ * Parts are filtered by `sanitizeImportedParts` while parsing. Size is bounded
+ * by the export-time guard in the web client and the request body limit on the server.
+ */
+export const ImportedAnalysisSchema = z.object({
+  v: z.literal(1),
+  kind: z.literal("analysis"),
+  sourceTitle: z.string().max(400),
+  sourceCreatedAt: z.number().int().nonnegative(),
+  parts: z.array(z.looseObject({ type: z.string() })).max(200).transform(sanitizeImportedParts),
+});
+
+export type ImportedAnalysis = z.infer<typeof ImportedAnalysisSchema>;

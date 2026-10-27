@@ -1,0 +1,646 @@
+import {
+  useState,
+  useRef,
+  useEffect,
+  useMemo,
+  useCallback,
+  useImperativeHandle,
+  forwardRef,
+  memo,
+  startTransition,
+  type ReactNode,
+} from "react";
+import { useChat, Chat } from "@ai-sdk/react";
+import { DefaultChatTransport, type FileUIPart, type UIMessage } from "ai";
+import { CLIENT_TOOL_NAMES, findingFromMessages, readAskUser } from "@tracer-sh/shared";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import { ProgressStore } from "../../lib/progress-store";
+import { openSettings, useChatScroll, useEscapeToStop, useFileDrop } from "../../lib/hooks";
+import { handleProgressData, parseMessages, steerChat, stopChat, useCompactedMessages } from "../../lib/chat-utils";
+import { isSteered } from "@tracer-sh/shared";
+import { appendKept, canSendQueued, lastTurnMessage, splitSteered } from "../../lib/message-queue";
+import { anchorOf, placeSteered, withAnchor } from "../../lib/steer-thread";
+import { askState, type AskState } from "../../lib/ask-card";
+import { trpc } from "../../lib/trpc";
+import { WEB_CONFIG } from "../../lib/config";
+import { serverFetch } from "../../lib/server-fetch";
+import { IS_IOS } from "../../lib/platform";
+import { preloadResultChunks } from "../charts/ResultView";
+import { WorkingIndicator } from "./ChatIndicators";
+import { ErrorBoundary } from "../ErrorBoundary";
+import { Composer, STEER_PLACEHOLDER, type Attachment } from "./Composer";
+import { QueuedMessages, type QueuedMessage } from "./QueuedMessages";
+import { FollowUpTimerBar } from "./FollowUpTimerBar";
+import { MessageView, textOf, type MessageViewOptions } from "./MessageView";
+import { Transcript } from "./Transcript";
+import type { SourceMeta } from "./MessageActions";
+
+const INITIAL_ROWS = 2;
+const MAX_ATTACH_BYTES = 10 * 1024 * 1024;
+
+// Empty type allowed: many text files report no MIME type.
+const isAttachable = (type: string) =>
+  type === "" || type.startsWith("image/") || type.startsWith("text/") || type === "application/pdf" || type === "application/json";
+
+export type RenderView = (options?: MessageViewOptions) => ReactNode;
+
+interface ChatCoreProps {
+  chatId: string;
+  apiEndpoint: string;
+  placeholder?: string;
+  extraBody?: Record<string, unknown>;
+  onData?: (part: { type: string; data: unknown }) => void;
+  initialMessages?: UIMessage[];
+  onStatusChange?: (status: string, messages: UIMessage[]) => void;
+  initialInput?: string;
+  variant?: "full" | "panel";
+
+  header?: ReactNode;
+  /** Rendered first inside the scroll container (e.g. the sticky session header). */
+  scrollHeader?: ReactNode;
+  /** Rendered above the message list (e.g. the compaction summary). */
+  beforeMessages?: ReactNode;
+  /** Hide the first N messages (render-only: state and requests keep the full list). */
+  collapseCount?: number;
+  /** Render only the analysis section of this message: a kept compaction boundary the summary already covers. */
+  analysisOnlyIndex?: number;
+  /** Replaces the whole chat while there are no messages; receives the composer to place. */
+  emptyState?: (composer: ReactNode) => ReactNode;
+  /** Shown in the message list while it is empty; defaults to the placeholder. */
+  emptyHint?: ReactNode;
+  /** Composer toolbar slots. */
+  sources?: ReactNode;
+  cost?: ReactNode;
+  renderMessage?: (msg: UIMessage, index: number, view: RenderView) => ReactNode;
+
+  /** When true, hide the composer, Continue button, and Retry. */
+  readOnly?: boolean;
+  /** Replaces the composer when read-only. */
+  readOnlyNotice?: ReactNode;
+  /** When true, keep the composer visible but block all sending (e.g. while compacting). */
+  inputDisabled?: boolean;
+  /** Truncates the persisted copy to the kept count before Retry re-sends; without it the no-reply Retry is hidden. */
+  onRetryTruncate?: (keepCount: number) => Promise<unknown>;
+
+  /** Embedded in downloaded reply images so they re-import with their origin. */
+  sourceTitle?: string;
+  sourceCreatedAt?: number;
+  resolveSourceTitle?: () => Promise<string | undefined>;
+
+  className?: string;
+}
+
+export interface ChatCoreRef {
+  readonly messages: UIMessage[];
+  setMessages: (msgs: UIMessage[]) => void;
+  sendMessage: (msg: { text: string; files?: FileUIPart[] }) => void;
+  /** Replaces the messages with the saved ones when a streaming response was lost; ignored unless the chat is streaming. */
+  adoptSaved: (msgs: UIMessage[]) => void;
+  scrollToBottom: (opts?: { animation?: "instant" | "smooth" }) => void;
+  scrollToTop: (opts?: { animation?: "instant" | "smooth" }) => void;
+  readonly streaming: boolean;
+  stop: () => void;
+}
+
+// Memoized so a streaming chunk only re-renders the row whose message object changed.
+const MessageRow = memo(function MessageRow({
+  msg,
+  msgIndex,
+  isAnimating,
+  progressStore,
+  compact,
+  meta,
+  renderMessage,
+  piece,
+  ask,
+  onAsk,
+}: {
+  msg: UIMessage;
+  msgIndex: number;
+  isAnimating: boolean;
+  progressStore: ProgressStore;
+  compact: boolean;
+  meta: SourceMeta;
+  renderMessage?: ChatCoreProps["renderMessage"];
+  /** A piece of a reply that a steered message cut apart, not its last one. */
+  piece?: boolean;
+  ask?: AskState;
+  onAsk?: (label: string) => void;
+}) {
+  const view: RenderView = (options) => (
+    <MessageView msg={msg} isAnimating={isAnimating} progressStore={progressStore} compact={compact} meta={meta} ask={ask} onAsk={onAsk} showActions={piece ? false : undefined} {...options} />
+  );
+  // No content-visibility here: a skipped reply takes its real height only as it scrolls into view, and that moves the view under the reader.
+  return (
+    <div data-role={msg.role}>
+      <ErrorBoundary resetKey={msg}>{renderMessage ? renderMessage(msg, msgIndex, view) : view()}</ErrorBoundary>
+    </div>
+  );
+});
+
+const NETWORK_ERROR = /failed to fetch|load failed|networkerror|network request failed|fetch failed/i;
+const MISSING_KEY = /api key not configured/i;
+
+const errorMessage = (message: string) => (NETWORK_ERROR.test(message) ? "Can't reach the Tracer server" : message);
+
+function NoticeRow({ tone = "default", children, action }: { tone?: "default" | "error"; children: ReactNode; action: ReactNode }) {
+  return (
+    <div
+      role={tone === "error" ? "alert" : "status"}
+      className={cn(
+        "flex items-center gap-3 rounded-lg border px-4 py-2.5 text-sm",
+        tone === "error" ? "border-destructive/25 bg-destructive-tint text-destructive" : "bg-card text-ink-2",
+      )}
+    >
+      <span className="min-w-0 flex-1">{children}</span>
+      {action}
+    </div>
+  );
+}
+
+export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore(
+  {
+    chatId,
+    apiEndpoint,
+    placeholder = "Send a message",
+    extraBody,
+    onData,
+    initialMessages,
+    onStatusChange,
+    initialInput = "",
+    variant = "full",
+    header,
+    scrollHeader,
+    beforeMessages,
+    collapseCount = 0,
+    analysisOnlyIndex,
+    emptyState,
+    emptyHint,
+    sources,
+    cost,
+    renderMessage,
+    readOnly = false,
+    readOnlyNotice,
+    inputDisabled = false,
+    onRetryTruncate,
+    sourceTitle,
+    sourceCreatedAt,
+    resolveSourceTitle,
+    className,
+  },
+  ref,
+) {
+  const [input, setInput] = useState(initialInput);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const progressStore = useRef(new ProgressStore()).current;
+  const compact = variant === "panel";
+  const rootRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const addFiles = useCallback((incoming: FileList | File[]) => {
+    const list = Array.from(incoming);
+    const ok = list.filter((f) => isAttachable(f.type) && f.size <= MAX_ATTACH_BYTES);
+    if (ok.length < list.length) toast.error("Some files were skipped", { description: "Unsupported type or over 10 MB." });
+    if (ok.length) {
+      setAttachments((prev) => [...prev, ...ok.map((f) => ({ file: f, url: f.type.startsWith("image/") ? URL.createObjectURL(f) : null }))]);
+    }
+  }, []);
+
+  const removeAttachment = useCallback((idx: number) => {
+    setAttachments((prev) => {
+      const url = prev[idx]?.url;
+      if (url) URL.revokeObjectURL(url);
+      return prev.filter((_, i) => i !== idx);
+    });
+  }, []);
+
+  // Messages typed during a reply: queued ones go out after it, steered ones are already with the agent.
+  const [queue, setQueue] = useState<QueuedMessage[]>([]);
+  const [steered, setSteered] = useState<UIMessage[]>([]);
+  const nextQueueId = useRef(0);
+  const reconciling = useRef(false);
+  const utils = trpc.useUtils();
+  // Steered messages a step of the agent saw, with the step they landed before, reported by the server during the reply.
+  const seenSteerIds = useRef(new Map<string, number>());
+  // Set by a stop: the queue then waits for the user instead of sending on its own.
+  const queueHeld = useRef(false);
+  // Set while a queued message is on its way: the status stays "ready" while its files are read, and the next one must wait.
+  const queueSending = useRef(false);
+
+  // Revoke any still-pending thumbnail URLs on unmount.
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
+  const queueRef = useRef(queue);
+  queueRef.current = queue;
+  useEffect(() => () => {
+    [...attachmentsRef.current, ...queueRef.current.flatMap((q) => q.attachments)].forEach((a) => a.url && URL.revokeObjectURL(a.url));
+  }, []);
+
+  const { dragActive, dropProps } = useFileDrop(addFiles, !readOnly && !inputDisabled);
+
+  // Long sessions paint the last rows first; older rows follow right after (auto-follow keeps the bottom anchored).
+  const [showAll, setShowAll] = useState(() => (initialMessages?.length ?? 0) <= INITIAL_ROWS);
+  useEffect(() => {
+    preloadResultChunks();
+    if (showAll) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const raf = requestAnimationFrame(() => {
+      timer = setTimeout(() => startTransition(() => setShowAll(true)), 0);
+    });
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(timer);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const onDataRef = useRef(onData);
+  onDataRef.current = onData;
+  const extraBodyRef = useRef(extraBody);
+  extraBodyRef.current = extraBody;
+
+  // Chat instance: stable per mount (the component is keyed externally).
+  const [chat] = useState(
+    () =>
+      new Chat({
+        id: chatId,
+        messages: initialMessages,
+        transport: new DefaultChatTransport({
+          api: apiEndpoint,
+          fetch: serverFetch,
+          prepareSendMessagesRequest: ({ id, messages }) => ({
+            body: { id, message: messages[messages.length - 1], ...extraBodyRef.current },
+          }),
+        }),
+        onData: (part) => {
+          if (part.type === "data-provider-part") {
+            handleProgressData(progressStore, part.data as { toolCallId: string; part: { type: string; [key: string]: unknown } });
+          }
+          if (part.type === "data-steer-seen") {
+            const { ids, anchor } = part.data as { ids: string[]; anchor: number };
+            ids.forEach((id) => seenSteerIds.current.set(id, anchor));
+            setSteered((prev) => prev.map((m) => (ids.includes(m.id) ? withAnchor(m, anchor) : m)));
+          }
+          onDataRef.current?.(part as { type: string; data: unknown });
+        },
+      }),
+  );
+
+  const { messages, setMessages, status, sendMessage, stop, error } = useChat({ chat, throttle: WEB_CONFIG.chatThrottleMs });
+  const sendMessageRef = useRef(sendMessage);
+  sendMessageRef.current = sendMessage;
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const statusRef = useRef(status);
+  statusRef.current = status;
+
+  const isLoading = status === "submitted" || status === "streaming";
+  const showEmptyState = !!emptyState && messages.length === 0 && status !== "submitted";
+  const { scrollRef, contentRef, isAtBottom, scrollToBottom, scrollToTop } = useChatScroll(showEmptyState);
+
+  const { collapse, analysisOnlyMsg } = useCompactedMessages(messages, collapseCount, analysisOnlyIndex);
+  const rows = useMemo(
+    () => placeSteered(messages.map((m, i) => (i === analysisOnlyIndex && analysisOnlyMsg ? analysisOnlyMsg : m)), steered),
+    [messages, steered, analysisOnlyIndex, analysisOnlyMsg],
+  );
+  const askOf = (msg: UIMessage, index: number): AskState | undefined => {
+    const part = msg.role === "assistant" ? msg.parts.findLast((p) => p.type === CLIENT_TOOL_NAMES.ASK_USER) : undefined;
+    return part ? askState(messages, index, readAskUser((part as { input?: unknown }).input), isLoading) : undefined;
+  };
+  const firstRow = showAll ? collapse : Math.max(collapse, messages.length - INITIAL_ROWS);
+
+  const meta = useMemo<SourceMeta>(() => ({ sourceTitle, sourceCreatedAt, resolveSourceTitle }), [sourceTitle, sourceCreatedAt, resolveSourceTitle]);
+
+  const steeredRef = useRef(steered);
+  steeredRef.current = steered;
+  const prevStatus = useRef(status);
+  const onStatusChangeRef = useRef(onStatusChange);
+  onStatusChangeRef.current = onStatusChange;
+  useEffect(() => {
+    if (prevStatus.current !== status) {
+      if (status === "ready") {
+        progressStore.clear();
+        // Don't steal focus from elsewhere on the page (sidebar, settings, another input).
+        const active = document.activeElement;
+        if (!IS_IOS && (!active || active === document.body || rootRef.current?.contains(active))) textareaRef.current?.focus();
+      }
+      if (status === "submitted") queueHeld.current = false;
+      queueSending.current = false;
+      onStatusChangeRef.current?.(status, isLoading ? messagesRef.current : [...messagesRef.current, ...steeredRef.current]);
+    }
+    prevStatus.current = status;
+  }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // `messages.length > collapse` keeps the notice off an interrupted message that is collapsed out of view.
+  const lastMessage = lastTurnMessage(messages);
+  const lastPart = lastMessage?.parts[lastMessage.parts.length - 1];
+  // The server saves the reason a run ended on its last reply; a returning viewer sees it here.
+  const savedError = !isLoading && lastMessage?.role === "assistant" ? (lastMessage.metadata as { error?: unknown } | undefined)?.error : undefined;
+  const savedErrorText = typeof savedError === "string" ? savedError : null;
+  // A reply with a finding card ends on its last supporting visual, so a finished tool part there is a complete answer.
+  const endsOnVisual = !!lastMessage && (lastPart as { state?: string } | undefined)?.state === "output-available" && !!findingFromMessages([lastMessage]);
+  // A question to the person ends the reply on purpose.
+  const endsOnAsk = lastPart?.type === CLIENT_TOOL_NAMES.ASK_USER;
+  const needsContinue = !isLoading && !error && !savedErrorText && messages.length > collapse && lastMessage?.role === "assistant" && lastPart?.type.startsWith("tool-") && !endsOnVisual && !endsOnAsk;
+
+  // A step can run several tools at once, so any unsettled tool part of the reply counts, not only the last part.
+  const isSubAgentRunning = lastMessage?.role === "assistant" && lastMessage.parts.some((p) => {
+    const state = (p as { state?: string }).state;
+    return p.type.startsWith("tool-") && state !== "output-available" && state !== "output-error";
+  });
+  const isContentStreaming = lastPart?.type === "text" || lastPart?.type === "reasoning";
+  const showWorking = status === "submitted" || (status === "streaming" && !isContentStreaming && !isSubAgentRunning);
+
+  // A failed reply keeps its saved tool work, so the run continues from it instead of starting over.
+  const hasPartialReply = lastMessage?.role === "assistant" && lastMessage.parts.some((p) => p.type !== "step-start");
+  const lastId = status === "streaming" ? lastMessage?.id : null;
+  const canRetry = !readOnly && !inputDisabled && !isLoading;
+
+  const handleStop = () => {
+    queueHeld.current = true;
+    void stopChat(chatId);
+    stop();
+  };
+  useEscapeToStop(isLoading, handleStop);
+  const stopRef = useRef({ isLoading, handleStop });
+  stopRef.current = { isLoading, handleStop };
+
+  // Disabling a focused textarea drops focus to <body>; restore it when the lock releases.
+  const prevInputDisabled = useRef(inputDisabled);
+  useEffect(() => {
+    if (!IS_IOS && prevInputDisabled.current && !inputDisabled) textareaRef.current?.focus();
+    prevInputDisabled.current = inputDisabled;
+  }, [inputDisabled]);
+
+  const canSend = !!input.trim() || attachments.length > 0;
+  const canSteer = !!input.trim() && attachments.length === 0;
+
+  const dispatch = (text: string, files: Attachment[]) => {
+    scrollToBottom({ animation: "instant" });
+    if (files.length > 0) {
+      // A file-only turn keeps a default instruction so title generation, which keys on a text part, still fires.
+      const dt = new DataTransfer();
+      files.forEach((a) => dt.items.add(a.file));
+      sendMessage({ text: text || "Please analyze the attached file(s).", files: dt.files });
+      files.forEach((a) => a.url && URL.revokeObjectURL(a.url));
+    } else {
+      sendMessage({ text });
+    }
+  };
+
+  const enqueue = (text: string, files: Attachment[]) => {
+    setQueue((q) => [...q, { id: nextQueueId.current++, text, attachments: files }]);
+  };
+
+  const steer = async (text: string) => {
+    // The message stays where the reply ends now until the server reports the step that saw it.
+    const reply = lastTurnMessage(messagesRef.current);
+    const at = reply?.role === "assistant" ? reply.parts.length : undefined;
+    const message: UIMessage = { id: crypto.randomUUID(), role: "user", metadata: { steered: true, at }, parts: [{ type: "text", text }] };
+    // The reply may have ended on the way; the message then waits like a queued one.
+    // The report of the step can arrive before this answer.
+    if (await steerChat(chatId, message)) setSteered((prev) => [...prev, withAnchor(message, seenSteerIds.current.get(message.id))]);
+    else enqueue(text, []);
+  };
+
+  // While a reply runs, Send queues the message and Steer hands it to the agent.
+  const handleSubmit = () => {
+    const text = input.trim();
+    if (!canSend || inputDisabled) return;
+    setInput("");
+    setAttachments([]);
+    if (isLoading) {
+      enqueue(text, attachments);
+      return;
+    }
+    dispatch(text, attachments);
+    // On iOS the keyboard would cover the reply as it streams.
+    if (IS_IOS) textareaRef.current?.blur();
+    else textareaRef.current?.focus();
+  };
+
+  const handleSteer = () => {
+    const text = input.trim();
+    if (!canSteer || inputDisabled || !isLoading) return;
+    setInput("");
+    void steer(text);
+  };
+
+  const removeQueued = (item: QueuedMessage) => {
+    setQueue((q) => q.filter((x) => x.id !== item.id));
+    item.attachments.forEach((a) => a.url && URL.revokeObjectURL(a.url));
+  };
+
+  const actOnQueued = (item: QueuedMessage) => {
+    setQueue((q) => q.filter((x) => x.id !== item.id));
+    if (isLoading) void steer(item.text);
+    else dispatch(item.text, item.attachments);
+  };
+
+  // The live event can be missed after a reattach, so the saved history decides which steered messages the server kept.
+  const reconcileSteered = async (batch: UIMessage[]) => {
+    const anchors = new Map<string, number | undefined>(seenSteerIds.current);
+    if (batch.some((m) => !anchors.has(m.id))) {
+      try {
+        const saved = await utils.sessions.get.fetch({ id: chatId }, { staleTime: 0 });
+        if (saved) parseMessages(saved.messagesJson).forEach((m) => m.role === "user" && anchors.set(m.id, anchorOf(m)));
+      } catch { /* the live record stays the only source */ }
+    }
+    const { kept, late } = splitSteered(batch, new Set(anchors.keys()));
+    if (kept.length) setMessages(appendKept(messagesRef.current, kept.map((m) => withAnchor(m, anchors.get(m.id)))));
+    // A message the server dropped has no reply yet; it goes first in the queue, which a stop or error holds.
+    if (late.length) setQueue((q) => [...late.map((m) => ({ id: nextQueueId.current++, text: textOf(m), attachments: [] })), ...q]);
+    setSteered((prev) => prev.filter((m) => !batch.includes(m)));
+  };
+
+  // A reply that ended: the steered messages join the thread (the server saved them after the reply), then the next queued message goes out.
+  useEffect(() => {
+    if (isLoading) return;
+    if (steered.length) {
+      if (!reconciling.current) {
+        reconciling.current = true;
+        void reconcileSteered(steered).finally(() => { reconciling.current = false; });
+      }
+      return;
+    }
+    if (queueSending.current || !canSendQueued({ status, held: queueHeld.current, queued: queue.length, locked: inputDisabled })) return;
+    queueSending.current = true;
+    const [next, ...rest] = queue;
+    setQueue(rest);
+    dispatch(next.text, next.attachments);
+  }); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A pressed option goes out as the person's next message, like a typed one.
+  const handleAsk = useCallback((label: string) => {
+    scrollToBottom({ animation: "instant" });
+    sendMessageRef.current({ text: label });
+  }, [scrollToBottom]);
+  // The buttons wait while a typed message is queued or on its way, since that message answers the question.
+  const canAnswer = !readOnly && !inputDisabled && queue.length === 0 && steered.length === 0;
+
+  const handleContinue = useCallback(() => {
+    scrollToBottom({ animation: "instant" });
+    sendMessageRef.current({ text: "Continue" });
+  }, [scrollToBottom]);
+
+  // Retry the last user message: after an error, or when a turn ended with no reply.
+  const onRetryTruncateRef = useRef(onRetryTruncate);
+  onRetryTruncateRef.current = onRetryTruncate;
+  const handleRetry = useCallback(async () => {
+    const msgs = messagesRef.current;
+    const userIdx = msgs.findLastIndex((m) => m.role === "user" && !isSteered(m));
+    const msg = msgs[userIdx];
+    const text = msg ? textOf(msg) : "";
+    if (!text) return;
+    // The failed message may be persisted already; trim it server-side too or the re-send duplicates it.
+    try {
+      await onRetryTruncateRef.current?.(userIdx);
+    } catch {
+      toast.error("Couldn't retry. Try again.");
+      return;
+    }
+    const files = msg.parts.filter((p): p is FileUIPart => p.type === "file");
+    setMessages(msgs.slice(0, userIdx));
+    scrollToBottom({ animation: "instant" });
+    sendMessageRef.current({ text, files });
+  }, [setMessages, scrollToBottom]);
+
+  // Retry stays for an error that Continue cannot get past, such as a prompt that is too long.
+  const recoverAction = hasPartialReply ? (
+    <div className="flex shrink-0 gap-2">
+      <Button variant="outline" size="sm" onClick={handleContinue}>Continue</Button>
+      <Button variant="ghost" size="sm" onClick={handleRetry}>Retry</Button>
+    </div>
+  ) : <Button variant="outline" size="sm" onClick={handleRetry}>Retry</Button>;
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      get messages() { return messagesRef.current; },
+      setMessages,
+      sendMessage: (msg) => sendMessageRef.current(msg),
+      scrollToBottom,
+      scrollToTop,
+      adoptSaved: (msgs) => {
+        // Only a response that is streaming can be lost; a finished or just-sent one keeps its own messages.
+        if (statusRef.current !== "streaming") return;
+        stopRef.current.handleStop();
+        setMessages(msgs);
+      },
+      get streaming() { return stopRef.current.isLoading; },
+      stop: () => stopRef.current.handleStop(),
+    }),
+    [setMessages, scrollToBottom, scrollToTop],
+  );
+
+  const composer = !readOnly ? (
+    <>
+    <QueuedMessages items={queue} running={isLoading} onAct={actOnQueued} onRemove={removeQueued} />
+    <Composer
+      value={input}
+      onChange={setInput}
+      onSubmit={handleSubmit}
+      placeholder={isLoading ? STEER_PLACEHOLDER : placeholder}
+      canSend={canSend}
+      streaming={isLoading}
+      onStop={handleStop}
+      onSteer={handleSteer}
+      canSteer={canSteer}
+      disabled={inputDisabled}
+      attachments={attachments}
+      onAttach={addFiles}
+      onRemoveAttachment={removeAttachment}
+      sources={sources}
+      cost={cost}
+      textareaRef={textareaRef}
+      autoFocus={!IS_IOS}
+      compact={compact}
+    />
+    </>
+  ) : null;
+
+  const dropOverlay = dragActive && (
+    <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center rounded-lg border-2 border-dashed border-primary bg-primary-tint/70">
+      <span className="rounded-md bg-card px-4 py-2 text-sm font-medium text-primary shadow-sm">Drop to attach</span>
+    </div>
+  );
+
+  if (emptyState && showEmptyState) {
+    return (
+      <div ref={rootRef} className={cn("relative h-full overflow-y-auto", className)} {...dropProps}>
+        {dropOverlay}
+        {emptyState(composer)}
+      </div>
+    );
+  }
+
+  return (
+    <div ref={rootRef} className={cn("relative flex h-full flex-col", className)} {...dropProps}>
+      {dropOverlay}
+      {header}
+
+      <Transcript
+        scrollRef={scrollRef}
+        contentRef={contentRef}
+        isAtBottom={isAtBottom}
+        scrollToBottom={scrollToBottom}
+        header={scrollHeader}
+        compact={compact}
+        dock={
+          <>
+            <FollowUpTimerBar sessionId={chatId} />
+            {composer ?? readOnlyNotice}
+          </>
+        }
+      >
+        {beforeMessages}
+        {messages.length === 0 && status !== "submitted" && (
+          emptyHint ?? <p className="py-16 text-center text-sm text-muted-foreground">{placeholder}</p>
+        )}
+        {rows.map(({ msg, index, key, last }) => index < firstRow ? null : (
+          <MessageRow
+            key={key}
+            msg={msg}
+            msgIndex={index}
+            isAnimating={last && msg.id === lastId}
+            progressStore={progressStore}
+            compact={compact}
+            meta={meta}
+            // The pieces before a steered message have no actions of their own; a pending steered message has none yet.
+            renderMessage={last && index < messages.length ? renderMessage : undefined}
+            piece={!last}
+            ask={askOf(msg, index)}
+            onAsk={canAnswer ? handleAsk : undefined}
+          />
+        ))}
+        {showWorking && <WorkingIndicator label="Investigating" />}
+        {!readOnly && !inputDisabled && needsContinue && (
+          <NoticeRow action={<Button variant="outline" size="sm" onClick={handleContinue}>Continue</Button>}>
+            The reply was interrupted.
+          </NoticeRow>
+        )}
+        {canRetry && !error && onRetryTruncate && lastMessage?.role === "user" && (
+          <NoticeRow action={<Button variant="outline" size="sm" onClick={handleRetry}>Retry</Button>}>
+            No reply to this message.
+          </NoticeRow>
+        )}
+        {canRetry && (error || savedErrorText) && (
+          <NoticeRow
+            tone="error"
+            action={
+              MISSING_KEY.test(error?.message ?? "") ? (
+                <div className="flex shrink-0 gap-2">
+                  <Button variant="outline" size="sm" onClick={openSettings}>Open Settings</Button>
+                  {recoverAction}
+                </div>
+              ) : recoverAction
+            }
+          >
+            {error ? errorMessage(error.message) : savedErrorText}
+          </NoticeRow>
+        )}
+      </Transcript>
+    </div>
+  );
+});

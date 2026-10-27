@@ -1,0 +1,13 @@
+.claude/
+CLAUDE.md
+node_modules/
+dist/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.DS_Store
+*.tsbuildinfo
+docs/plans/
+docs/hero-animation/node_modules/
+dist-ios/

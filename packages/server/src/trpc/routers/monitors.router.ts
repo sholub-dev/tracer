@@ -1,0 +1,130 @@
+import { z } from "zod";
+import { TRPCError } from "@trpc/server";
+import { eq, asc, desc, and, gt, like, sql } from "drizzle-orm";
+import { SESSION_KIND, SESSION_PREFIX, unixNow } from "@tracer-sh/shared";
+import { publicProcedure, router } from "../trpc.js";
+import { runInTransaction } from "../../db/driver.js";
+import { chatSessions, monitors, monitorTriggers } from "../../db/schema.js";
+import { alertBrief, parseTriggerGroups } from "../../monitors/repeats.js";
+import { deleteMonitor, setMonitorToggles } from "../../monitors/store.js";
+import { ingestLagSeconds } from "../../monitors/triage.js";
+import { pendingFirings, resolveFiring } from "../../monitors/scheduler.js";
+import { pendingFiringChanges } from "../../lib/firing-events.js";
+
+const unreadSession = and(eq(chatSessions.kind, SESSION_KIND.MONITOR), eq(chatSessions.status, "done"));
+
+export const monitorsRouter = router({
+  list: publicProcedure.query(async ({ ctx }) => {
+    // User's saved order first; monitors created since then go at the end, oldest first.
+    const rows = await ctx.db.select().from(monitors)
+      .orderBy(sql`${monitors.sortOrder} IS NULL`, asc(monitors.sortOrder), asc(monitors.createdAt)).all();
+    const unread = new Map(
+      (await ctx.db
+        .select({ monitorId: monitorTriggers.monitorId, count: sql<number>`COUNT(DISTINCT ${chatSessions.id})` })
+        .from(monitorTriggers)
+        .innerJoin(chatSessions, eq(monitorTriggers.sessionId, chatSessions.id))
+        .where(unreadSession)
+        .groupBy(monitorTriggers.monitorId)
+        .all())
+        .map((r) => [r.monitorId, r.count]),
+    );
+    // lastCheckedAt is the end of the last checked window; checks run `lag` seconds after it.
+    return rows.map((m) => ({
+      ...m,
+      unreadCount: unread.get(m.id) ?? 0,
+      lastRunAt: m.lastCheckedAt === null ? null : m.lastCheckedAt + ingestLagSeconds(m.query),
+    }));
+  }),
+
+  alertBrief: publicProcedure
+    .input(z.object({ sessionId: z.string() }))
+    .query(({ ctx, input }) => alertBrief(ctx.db, input.sessionId)),
+
+  reorder: publicProcedure
+    .input(z.object({ ids: z.array(z.string()) }))
+    .mutation(async ({ ctx, input }) => {
+      await runInTransaction(ctx.db, async (tx) => {
+        for (const [i, id] of input.ids.entries()) await tx.update(monitors).set({ sortOrder: i }).where(eq(monitors.id, id)).run();
+      });
+      return { success: true };
+    }),
+
+  setCardWidth: publicProcedure
+    .input(z.object({ id: z.string(), width: z.union([z.literal(50), z.literal(75), z.literal(100)]) }))
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db.update(monitors).set({ cardWidth: input.width }).where(eq(monitors.id, input.id)).run();
+      return { success: true };
+    }),
+
+  setAlertEnabled: publicProcedure
+    .input(z.object({ id: z.string(), enabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const result = await setMonitorToggles(ctx.db, input.id, { alert: input.enabled });
+      if ("error" in result) throw new TRPCError({ code: result.code, message: result.error });
+      return { success: true };
+    }),
+
+  toggleEnabled: publicProcedure
+    .input(z.object({ id: z.string(), enabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const result = await setMonitorToggles(ctx.db, input.id, { run: input.enabled });
+      if ("error" in result) throw new TRPCError({ code: result.code, message: result.error });
+      return { success: true };
+    }),
+
+  delete: publicProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const result = await deleteMonitor(ctx.db, ctx.activeStreams, input.id);
+      if ("error" in result) throw new TRPCError({ code: result.code, message: result.error });
+      return { success: true };
+    }),
+
+  triggers: publicProcedure
+    .input(z.object({ monitorId: z.string(), sinceSeconds: z.number().positive() }))
+    .query(async ({ ctx, input }) => {
+      return (await ctx.db
+        .select({
+          id: monitorTriggers.id,
+          monitorId: monitorTriggers.monitorId,
+          triggeredAt: monitorTriggers.triggeredAt,
+          value: monitorTriggers.value,
+          windowStart: monitorTriggers.windowStart,
+          windowEnd: monitorTriggers.windowEnd,
+          status: monitorTriggers.status,
+          groups: monitorTriggers.groups,
+          sessionId: monitorTriggers.sessionId,
+          sessionTitle: chatSessions.title,
+          // Aliased: two result columns named "status" collide in drivers that return rows as objects.
+          sessionStatus: sql<string | null>`${chatSessions.status}`.as("session_status"),
+        })
+        .from(monitorTriggers)
+        .leftJoin(chatSessions, eq(monitorTriggers.sessionId, chatSessions.id))
+        .where(and(
+          eq(monitorTriggers.monitorId, input.monitorId),
+          gt(monitorTriggers.triggeredAt, unixNow() - input.sinceSeconds),
+        ))
+        .orderBy(desc(monitorTriggers.triggeredAt))
+        .all())
+        .map((t) => ({ ...t, groups: parseTriggerGroups(t.groups) }));
+    }),
+
+  /** The firings waiting for a Yes or No, now and after each change. */
+  pendingFirings: publicProcedure.subscription(async function* ({ ctx, signal }) {
+    for await (const _ of pendingFiringChanges(signal)) yield await pendingFirings(ctx.db);
+  }),
+
+  decideFiring: publicProcedure
+    .input(z.object({ id: z.string(), start: z.boolean() }))
+    .mutation(({ ctx, input }) => resolveFiring(ctx, input.id, input.start ? "start" : "skip")),
+
+  builderChats: publicProcedure.query(async ({ ctx }) => {
+    return await ctx.db
+      .select({ id: chatSessions.id, title: chatSessions.title, status: chatSessions.status, updatedAt: chatSessions.updatedAt })
+      .from(chatSessions)
+      .where(like(chatSessions.id, `${SESSION_PREFIX.MONITORS}%`))
+      .orderBy(desc(chatSessions.updatedAt))
+      .limit(100)
+      .all();
+  }),
+});

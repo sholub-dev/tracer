@@ -1,0 +1,239 @@
+import { isPlainObject, mainMemberKey, isUnixMs, isUnixSec, normalizeNewRelicRows } from "@tracer-sh/shared";
+
+export const HIDDEN_KEYS = new Set(["beginTimeSeconds", "endTimeSeconds", "inspectedCount"]);
+
+export interface Column {
+  key: string;
+  label: string;
+  get: (row: Record<string, unknown>) => unknown;
+}
+
+function formatTimestamp(ms: number): string {
+  const d = new Date(ms);
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+/** NerdGraph returns percentile() results as single-key objects: {"99": 0.984375} */
+export function isPercentileResult(value: unknown): boolean {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) return false;
+  const keys = Object.keys(value as object);
+  return keys.length === 1 && !isNaN(Number(keys[0]));
+}
+
+/** Coerce a NerdGraph cell to a chartable number. Unwraps percentile objects; returns null otherwise. */
+export function coerceNumeric(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (isPercentileResult(value)) {
+    const inner = Object.values(value as object)[0];
+    return typeof inner === "number" && Number.isFinite(inner) ? inner : null;
+  }
+  return null;
+}
+
+/** A non-empty object whose leaves, at any depth, are all numbers, numeric values or null: it reads as a group of big numbers. */
+export function isNumericGroup(v: unknown): v is Record<string, unknown> {
+  if (!isGroup(v)) return false;
+  const members = Object.values(v);
+  return members.length > 0 && members.every((m) => m == null || coerceNumeric(m) !== null || (isGroup(m) && isNumericGroup(m)));
+}
+
+export const isGroup = (v: unknown): v is Record<string, unknown> => isPlainObject(v) && !isPercentileResult(v);
+
+/** Chart input: replace each object-valued column with one `<column>.<member>` column per member, in returned order. */
+export function expandObjectColumns(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+  if (!rows.some((r) => Object.values(r).some(isGroup))) return rows;
+  const expand = (row: Record<string, unknown>, prefix = ""): [string, unknown][] =>
+    Object.entries(row).flatMap(([k, v]) => (isGroup(v) ? expand(v, `${prefix}${k}.`) : [[`${prefix}${k}`, v] as [string, unknown]]));
+  const expanded = rows.map((r) => expand(r));
+  const keys = [...new Set(expanded.flatMap((e) => e.map(([k]) => k)))];
+  return expanded.map((e) => {
+    const m = new Map(e);
+    return Object.fromEntries(keys.filter((k) => m.has(k)).map((k) => [k, m.get(k)]));
+  });
+}
+
+/** Monitor input: each object column keeps only its main member, the value the monitor compares. */
+export function mainMemberColumns(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+  const main = (v: unknown): unknown => {
+    if (!isPlainObject(v)) return v;
+    const key = mainMemberKey(v);
+    return key === undefined ? null : main(v[key]);
+  };
+  return rows.map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, main(v)])));
+}
+
+export function formatValue(value: unknown, key?: string): string {
+  if (value == null) return "—";
+  if (typeof value === "number") {
+    if (key && isUnixMs(key, value)) return formatTimestamp(value);
+    if (key && isUnixSec(key, value)) return formatTimestamp(value * 1000);
+    if (Number.isInteger(value) || Math.abs(value) > 1000) return value.toLocaleString();
+    const fixed = value.toFixed(2);
+    // Two decimals would turn a small non-zero value into 0.00.
+    return Number(fixed) === 0 && value !== 0 ? value.toLocaleString(undefined, { maximumSignificantDigits: 2 }) : fixed;
+  }
+  if (Array.isArray(value)) {
+    if (value.length <= 5) return value.map((v) => (v != null && typeof v === "object" ? JSON.stringify(v) : v)).join(", ");
+    return `[${value.length} items]`;
+  }
+  if (typeof value === "object") {
+    if (isPercentileResult(value)) return formatValue(Object.values(value as object)[0] as unknown, key);
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+export function buildColumns(rows: Record<string, unknown>[]): Column[] {
+  const columns: Column[] = [];
+  const sample = rows[0];
+  const facet = sample.facet;
+  const dupeKeys = new Set<string>();
+
+  // NerdGraph puts FACET values in `facet`; expand them and skip named keys that duplicate them.
+  if (facet !== undefined) {
+    if (Array.isArray(facet)) {
+      facet.forEach((val, idx) => {
+        // Find a named key whose value matches this facet position
+        const namedKey = Object.keys(sample).find(
+          (k) => k !== "facet" && !HIDDEN_KEYS.has(k) && sample[k] === val,
+        );
+        if (namedKey) dupeKeys.add(namedKey);
+        columns.push({
+          key: `facet-${idx}`,
+          label: namedKey ? readableKey(namedKey) : `Group ${idx + 1}`,
+          get: (row) => (row.facet as unknown[])[idx],
+        });
+      });
+    } else {
+      const namedKey = Object.keys(sample).find(
+        (k) => k !== "facet" && !HIDDEN_KEYS.has(k) && sample[k] === facet,
+      );
+      if (namedKey) dupeKeys.add(namedKey);
+      columns.push({
+        key: "facet",
+        label: namedKey ? readableKey(namedKey) : "Name",
+        get: (row) => row.facet,
+      });
+    }
+  }
+
+  // Collect ALL unique keys across all rows, preserving first-appearance order
+  const allKeys: string[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    for (const key of Object.keys(row)) {
+      if (!seen.has(key)) {
+        seen.add(key);
+        allKeys.push(key);
+      }
+    }
+  }
+
+  // Add remaining columns, skipping facet duplicates
+  for (const key of allKeys) {
+    if (key === "facet" || HIDDEN_KEYS.has(key) || dupeKeys.has(key)) continue;
+    columns.push({ key, label: readableKey(key), get: (row) => row[key] });
+  }
+
+  return columns;
+}
+
+/** A snake_case column name as words ("users_current" to "Users current"); any other name stays as written. */
+export const readableKey = (key: string) => (/^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/.test(key) ? key[0].toUpperCase() + key.slice(1).replaceAll("_", " ") : key);
+
+export const periodLabel = (period: string) => period.charAt(0).toUpperCase() + period.slice(1);
+
+/** The relative change from the second period to the first, e.g. "+12%"; empty when either is not a number or the base is 0. */
+export function relativeChange(current: unknown, previous: unknown): string {
+  const now = coerceNumeric(current);
+  const before = coerceNumeric(previous);
+  if (now === null || before === null || before === 0) return "";
+  const pct = ((now - before) / Math.abs(before)) * 100;
+  const shown = Math.abs(pct) >= 10 ? Math.round(pct) : Math.round(pct * 10) / 10;
+  return shown === 0 ? "0%" : `${shown > 0 ? "+" : "\u2212"}${Math.abs(shown)}%`;
+}
+
+/** Pivot COMPARE WITH rows: group by facet, show current/previous as side-by-side columns */
+export function pivotCompareWith(rows: Record<string, unknown>[]) {
+  const metricKeys = Object.keys(rows[0]).filter(
+    (k) => k !== "facet" && k !== "comparison" && !HIDDEN_KEYS.has(k),
+  );
+  // Find the facet label key (duplicate of facet value)
+  const sample = rows[0];
+  const facetVal = sample.facet;
+  const dupeKeys = new Set<string>();
+  for (const k of metricKeys) {
+    if (
+      Array.isArray(facetVal)
+        ? facetVal.includes(sample[k])
+        : sample[k] === facetVal
+    ) {
+      dupeKeys.add(k);
+    }
+  }
+  const facetLabel =
+    [...dupeKeys][0] ?? (typeof facetVal === "string" ? "Name" : "Group");
+  const valueKeys = metricKeys.filter((k) => !dupeKeys.has(k));
+
+  // Collect unique comparison periods in order of appearance
+  const periods: string[] = [];
+  for (const r of rows) {
+    const p = String(r.comparison);
+    if (!periods.includes(p)) periods.push(p);
+  }
+  // Row order does not fix the period order; "current" leads so a change reads from the previous period to it.
+  periods.sort((a, b) => Number(b === "current") - Number(a === "current"));
+
+  // Group rows by facet key (stringified for arrays)
+  const grouped = new Map<
+    string,
+    { label: unknown; byPeriod: Map<string, Record<string, unknown>> }
+  >();
+  for (const row of rows) {
+    const fKey = Array.isArray(row.facet)
+      ? JSON.stringify(row.facet)
+      : String(row.facet);
+    if (!grouped.has(fKey)) {
+      grouped.set(fKey, { label: row.facet, byPeriod: new Map() });
+    }
+    grouped.get(fKey)!.byPeriod.set(String(row.comparison), row);
+  }
+
+  return { facetLabel, valueKeys, periods, grouped };
+}
+
+/** New Relic chats saved before the server dropped flattened copies still hold them; other providers' rows are kept whole. */
+export function dropFlattenedRowCopies(data: unknown, provider?: string): unknown {
+  if (provider !== "newrelic" || !Array.isArray(data)) return data;
+  return data.every(isPlainObject) ? normalizeNewRelicRows(data) : data;
+}
+
+const DATE_TIME_RE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?)?(Z|[+-]\d{2}:?\d{2})?$/;
+
+function dateToUnixSeconds(v: unknown): number | null {
+  if (typeof v !== "string" || !DATE_TIME_RE.test(v.trim())) return null;
+  const t = v.trim();
+  const iso = /[TZ]|[+-]\d{2}:?\d{2}$/.test(t) ? t : `${t.includes(" ") ? t.replace(" ", "T") : `${t}T00:00:00`}Z`;
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
+}
+
+/** Rows whose first column is a date/time and every other column numeric, reshaped to chart rows; null when they are not a timeline. */
+export function timelineRows(rows: Record<string, unknown>[]): Record<string, unknown>[] | null {
+  if (rows.length < 2 || "beginTimeSeconds" in rows[0] || "facet" in rows[0] || "comparison" in rows[0]) return null;
+  const [timeKey, ...metrics] = Object.keys(rows[0]);
+  if (!timeKey || metrics.length === 0) return null;
+  if (!rows.every((r) => dateToUnixSeconds(r[timeKey]) !== null)) return null;
+  const num = (v: unknown) => (typeof v === "string" && /^-?\d+(\.\d+)?$/.test(v.trim()) ? Number(v) : coerceNumeric(v));
+  const isMetric = (m: string) => rows.some((r) => num(r[m]) !== null) && rows.every((r) => r[m] == null || num(r[m]) !== null);
+  if (!metrics.every(isMetric)) return null;
+  return rows
+    .map((r) => ({ beginTimeSeconds: dateToUnixSeconds(r[timeKey]) as number, ...Object.fromEntries(metrics.map((m) => [m, r[m] == null ? null : num(r[m])])) }))
+    .sort((a, b) => a.beginTimeSeconds - b.beginTimeSeconds);
+}

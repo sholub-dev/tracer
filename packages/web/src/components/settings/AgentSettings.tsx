@@ -1,0 +1,173 @@
+import { useEffect, useRef, useState } from "react";
+import { Check, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { syncEdits } from "../../lib/agent-config";
+import { trpc } from "../../lib/trpc";
+import { Group, Row, Section } from "./parts";
+
+const TIMEZONES = [
+  "Pacific/Auckland",
+  "Australia/Sydney",
+  "Asia/Tokyo",
+  "Asia/Shanghai",
+  "Asia/Kolkata",
+  "Asia/Dubai",
+  "Europe/Moscow",
+  "Europe/Berlin",
+  "UTC",
+  "Europe/London",
+  "America/Sao_Paulo",
+  "America/New_York",
+  "America/Chicago",
+  "America/Denver",
+  "America/Los_Angeles",
+  "Pacific/Honolulu",
+];
+
+function tzLabel(tz: string): string {
+  const part = (style: "short" | "shortOffset") =>
+    new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: style })
+      .formatToParts(new Date())
+      .find((p) => p.type === "timeZoneName")?.value ?? "";
+  try {
+    return `${part("short")} (${part("shortOffset")})`;
+  } catch {
+    return tz;
+  }
+}
+
+const LIMITS = [
+  { key: "directModeMaxSteps", label: "Steps per answer", description: "Most tool calls the agent makes for one answer", min: 1, max: 500 },
+  { key: "thinkingBudgetGoogle", label: "Thinking budget, Google", description: "Tokens the model may spend reasoning before it answers", min: 0, max: 100000 },
+  { key: "thinkingBudgetAnthropic", label: "Thinking budget, Anthropic", description: "Tokens the model may spend reasoning before it answers", min: 0, max: 100000 },
+] as const;
+
+type LimitKey = (typeof LIMITS)[number]["key"];
+// An emptied field stays "" until the user types a number, so it never submits as 0.
+type Values = { timezone: string } & Record<LimitKey, number | "">;
+
+const ANTHROPIC_MIN_BUDGET = 1024;
+
+const limitError = (l: (typeof LIMITS)[number], v: number | "") => {
+  if (v === "" || !Number.isInteger(v) || v < l.min || v > l.max) return `Enter a whole number from ${l.min} to ${l.max}`;
+  // The server rejects a smaller Anthropic budget; 0 turns thinking off.
+  if (l.key === "thinkingBudgetAnthropic" && v > 0 && v < ANTHROPIC_MIN_BUDGET) return `Enter 0 or at least ${ANTHROPIC_MIN_BUDGET}`;
+  return null;
+};
+
+export function AgentSettings() {
+  const utils = trpc.useUtils();
+  const { data: config } = trpc.settings.getAgentConfig.useQuery();
+  const save = trpc.settings.saveAgentConfig.useMutation({
+    onSuccess: () => {
+      utils.settings.getAgentConfig.invalidate();
+      setJustSaved(true);
+      toast.success("Agent settings saved");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const [values, setValues] = useState<Values | null>(null);
+  const [justSaved, setJustSaved] = useState(false);
+
+  const synced = useRef<Values | null>(null);
+  useEffect(() => {
+    if (!config) return;
+    // A refetch after a save must not wipe what the user typed meanwhile.
+    // Read before the ref moves on: React may run the updater after the next line.
+    const lastSynced = synced.current;
+    setValues((v) => (v ? syncEdits(v, lastSynced, config) : { ...config }));
+    synced.current = { ...config };
+  }, [config]);
+
+  const dirty = !!config && !!values && (Object.keys(values) as (keyof Values)[]).some((k) => values[k] !== config[k]);
+  const invalid = !!values && LIMITS.some((l) => limitError(l, values[l.key]));
+  const set = <K extends keyof Values>(key: K, value: Values[K]) => {
+    setValues((v) => v && { ...v, [key]: value });
+    setJustSaved(false);
+  };
+
+  const zones = values && !TIMEZONES.includes(values.timezone) ? [...TIMEZONES, values.timezone] : TIMEZONES;
+
+  return (
+    <Section title="Agent" description="How long the agent may work on a question and how it reads time.">
+      <form
+        className="space-y-6"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (values && dirty && !invalid) save.mutate(values as Parameters<typeof save.mutate>[0]);
+        }}
+      >
+        <Group>
+          <Row
+            label="Time zone"
+            description="Used for dates in answers, query time zones, timers and times in Slack"
+            htmlFor="timezone"
+            control={
+              values ? (
+                <Select value={values.timezone} onValueChange={(v) => set("timezone", v)}>
+                  <SelectTrigger id="timezone" className="w-full bg-card sm:w-48">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent align="end" position="popper">
+                    {zones.map((tz) => (
+                      <SelectItem key={tz} value={tz}>
+                        {tzLabel(tz)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Skeleton className="h-9 w-48" />
+              )
+            }
+          />
+          {LIMITS.map((l) => (
+            <Row
+              key={l.key}
+              label={l.label}
+              description={l.description}
+              htmlFor={l.key}
+              control={
+                values ? (
+                  <div className="flex flex-col items-end gap-1">
+                    <Input
+                      id={l.key}
+                      type="number"
+                      inputMode="numeric"
+                      min={l.min}
+                      max={l.max}
+                      value={values[l.key]}
+                      onChange={(e) => set(l.key, e.target.value === "" ? "" : Number(e.target.value))}
+                      aria-invalid={!!limitError(l, values[l.key]) || undefined}
+                      className="w-28 bg-card text-right tabular-nums"
+                    />
+                    {limitError(l, values[l.key]) && <p role="alert" className="text-xs text-destructive">{limitError(l, values[l.key])}</p>}
+                  </div>
+                ) : (
+                  <Skeleton className="h-9 w-28" />
+                )
+              }
+            />
+          ))}
+        </Group>
+        <div className="flex items-center justify-end gap-3">
+          {justSaved && !dirty && (
+            <span role="status" className="flex items-center gap-1.5 text-[13px]/[18px] text-success animate-in fade-in duration-200">
+              <Check className="size-4" aria-hidden="true" />
+              Saved
+            </span>
+          )}
+          <Button type="submit" disabled={!dirty || invalid || save.isPending}>
+            {save.isPending && <Loader2 className="animate-spin" />}
+            {save.isPending ? "Saving" : "Save changes"}
+          </Button>
+        </div>
+      </form>
+    </Section>
+  );
+}

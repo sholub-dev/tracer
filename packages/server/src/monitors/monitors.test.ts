@@ -1,0 +1,339 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import Database from "better-sqlite3-multiple-ciphers";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import { sql } from "drizzle-orm";
+import { normalizeNewRelicRows, substituteWindow } from "@tracer-sh/shared";
+import * as schema from "../db/schema.js";
+import type { Db } from "../db/driver.js";
+import { evaluateCondition, evaluateGroups, extractGroups, parseCondition, sumGroups } from "./condition.js";
+import { byRelevance, classifyGroups, outcomeSummary, readPastSessionTool } from "./repeats.js";
+import { isFailedWindow, nextWindow, openWindow } from "./scheduler.js";
+import { validateMonitor } from "./validate.js";
+import { summaryFromMessages } from "./alert-summary.js";
+import type { UIMessage } from "ai";
+import { saveMonitor, setMonitorToggles } from "./store.js";
+import type { ProviderRegistry } from "../providers/registry.js";
+
+function memoryDb(): Db {
+  const sqlite = new Database(":memory:");
+  sqlite.exec(`
+    CREATE TABLE monitor_triggers (
+      id TEXT PRIMARY KEY, monitor_id TEXT NOT NULL, triggered_at INTEGER NOT NULL, value REAL NOT NULL,
+      window_start INTEGER NOT NULL, window_end INTEGER NOT NULL, status TEXT NOT NULL, groups TEXT NOT NULL, session_id TEXT, reported TEXT, device_id TEXT, outcome TEXT
+    );
+  `);
+  return drizzle(sqlite, { schema }) as unknown as Db;
+}
+
+async function addTrigger(db: Db, triggeredAt: number, status: "investigating" | "repeat", groups: unknown[], sessionId: string | null) {
+  await db.insert(schema.monitorTriggers).values({
+    id: crypto.randomUUID(), monitorId: "m1", triggeredAt, value: 1, windowStart: 0, windowEnd: 0,
+    status, groups: JSON.stringify(groups), sessionId,
+  }).run();
+}
+
+test("parseCondition accepts operator + number and rejects anything else", () => {
+  assert.deepEqual(parseCondition("> 0"), { op: ">", threshold: 0 });
+  assert.deepEqual(parseCondition(">=5"), { op: ">=", threshold: 5 });
+  assert.deepEqual(parseCondition(" != -1.5 "), { op: "!=", threshold: -1.5 });
+  assert.equal(parseCondition("count > 0"), null);
+  assert.equal(parseCondition("=> 3"), null);
+  assert.equal(parseCondition(""), null);
+});
+
+test("evaluateCondition applies each operator", () => {
+  const ev = (c: string, v: number) => evaluateCondition(parseCondition(c)!, v);
+  assert.equal(ev("> 0", 1), true);
+  assert.equal(ev("> 0", 0), false);
+  assert.equal(ev(">= 2", 2), true);
+  assert.equal(ev("< 2", 2), false);
+  assert.equal(ev("<= 2", 2), true);
+  assert.equal(ev("== 3", 3), true);
+  assert.equal(ev("!= 3", 3), false);
+});
+
+test("extractGroups handles no facet, facet string, facet array and nulls", () => {
+  assert.deepEqual(extractGroups([{ count: 4 }]), [{ key: "", count: 4, additive: true }]);
+  assert.deepEqual(
+    extractGroups([{ facet: "svc-a", "entity.name": "svc-a", count: 2 }, { facet: "svc-b", "entity.name": "svc-b", count: 3 }]),
+    [{ key: "svc-a", count: 2, additive: true }, { key: "svc-b", count: 3, additive: true }],
+  );
+  assert.deepEqual(
+    extractGroups([{ facet: ["svc-a", 500], appName: "svc-a", httpResponseCode: 500, count: 7 }]),
+    [{ key: "svc-a, 500", count: 7, additive: true }],
+  );
+  assert.deepEqual(extractGroups([{ facet: 500, httpResponseCode: 500, count: 500 }]), [{ key: "500", count: 500, additive: true }]);
+  assert.deepEqual(extractGroups([{ "uniqueCount.x": null }]), [{ key: "", count: 0, additive: true }]);
+  assert.deepEqual(extractGroups(null), []);
+  assert.deepEqual(extractGroups([]), []);
+  assert.equal(sumGroups([{ key: "a", count: 2, additive: true }, { key: "b", count: 3, additive: true }]), 5);
+});
+
+test("extractGroups reads the numbers inside object columns", () => {
+  assert.deepEqual(extractGroups([{ "percentile.duration": { "95": 1.5 } }]), [{ key: "", count: 1.5, additive: false }]);
+  assert.deepEqual(extractGroups([{ facet: "a", appName: "a", "apdex.duration": { score: 0.7, count: 9, f: 1, s: 5, t: 3 } }]), [{ key: "a", count: 0.7, additive: false }]);
+  assert.deepEqual(extractGroups([{ "percentile.duration": { "95": 1.5 }, count: 3 }]), [{ key: "", count: 3, additive: true }]);
+});
+
+const apdexRows = (score: number, count = 676) => [{ "apdex.d": { count, f: 2, s: 638, score, t: 36 }, count, f: 2, s: 638, score, t: 36 }];
+
+test("an apdex monitor reads the score, not the transaction count", () => {
+  const condition = parseCondition("< 0.9")!;
+  const fires = (score: number) => evaluateCondition(condition, sumGroups(extractGroups(normalizeNewRelicRows(apdexRows(score)))));
+  assert.equal(fires(0.85), true);
+  assert.equal(fires(0.97), false);
+});
+
+test("a faceted apdex result gives groups keyed by facet with the score as count", () => {
+  const rows = [
+    { facet: "a", "apdex.d": { count: 9, f: 1, s: 5, score: 0.7, t: 3 }, count: 9, f: 1, s: 5, score: 0.7, t: 3 },
+    { facet: "b", "apdex.d": { count: 0, f: 0, s: 0, score: 0, t: 0 }, count: 0, f: 0, s: 0, score: 0, t: 0 },
+  ];
+  assert.deepEqual(extractGroups(normalizeNewRelicRows(rows)), [{ key: "a", count: 0.7, additive: false }]);
+});
+
+const nrFires = (cond: string, rows: Record<string, unknown>[]) => {
+  const groups = extractGroups(normalizeNewRelicRows(rows));
+  return evaluateGroups(parseCondition(cond)!, groups);
+};
+const apdexFacet = (facet: string, score: number) => ({ facet, "apdex.d": { count: 9, f: 1, s: 5, score, t: 3 }, count: 9, f: 1, s: 5, score, t: 3 });
+
+test("a faceted apdex monitor judges each facet on its own", () => {
+  const all = nrFires("< 0.8", [apdexFacet("a", 0.5), apdexFacet("b", 0.5), apdexFacet("c", 0.5)]);
+  assert.equal(all.fires, true);
+  assert.deepEqual(all.groups.map((g) => g.key), ["a", "b", "c"]);
+  const some = nrFires("< 0.8", [apdexFacet("a", 0.5), apdexFacet("b", 0.95)]);
+  assert.deepEqual(some.groups.map((g) => g.key), ["a"]);
+  assert.equal(some.value, 0.5);
+  assert.equal(nrFires("< 0.8", [apdexFacet("a", 0.9), apdexFacet("b", 0.95)]).fires, false);
+});
+
+test("a faceted average is judged per facet and records the worst firing value", () => {
+  const rows = [{ facet: "a", "average.duration": 1 }, { facet: "b", "average.duration": 3 }, { facet: "c", "average.duration": 2.5 }];
+  const e = nrFires("> 2", rows);
+  assert.equal(e.fires, true);
+  assert.deepEqual(e.groups.map((g) => g.key), ["b", "c"]);
+  assert.equal(e.value, 3);
+  assert.equal(nrFires("< 2", rows).value, 1);
+});
+
+test("faceted counts still sum and all groups fire", () => {
+  const rows = ["a", "b", "c", "d", "e"].map((facet) => ({ facet, count: 5 }));
+  const e = nrFires("> 20", rows);
+  assert.equal(e.fires, true);
+  assert.equal(e.value, 25);
+  assert.equal(e.groups.length, 5);
+  assert.equal(nrFires("> 30", rows).fires, false);
+});
+
+test("an aliased column stays additive", () => {
+  const groups = extractGroups([{ facet: "a", errors: 4 }, { facet: "b", errors: 3 }]);
+  assert.deepEqual(groups.map((g) => g.additive), [true, true]);
+  assert.equal(evaluateGroups(parseCondition("> 5")!, groups).value, 7);
+});
+
+test("a percentile object reads its highest key", () => {
+  const e = nrFires("> 2", [{ "percentile.duration": { "50": 0.4, "99": 2.1 } }]);
+  assert.equal(e.fires, true);
+  assert.equal(e.value, 2.1);
+});
+
+test("an apdex window with no traffic is no data, not a score of 0", () => {
+  assert.deepEqual(extractGroups(normalizeNewRelicRows(apdexRows(0, 0))), []);
+});
+
+test("extractGroups for PostHog joins non-numeric columns as the key and uses the first number as count", () => {
+  assert.deepEqual(extractGroups([{ count: 4 }], "posthog"), [{ key: "", count: 4, additive: true }]);
+  assert.deepEqual(
+    extractGroups([{ url: "/a", browser: "Chrome", count: 2 }, { url: "/b", browser: null, count: 3 }], "posthog"),
+    [{ key: "/a, Chrome", count: 2, additive: true }, { key: "/b, (none)", count: 3, additive: true }],
+  );
+  assert.deepEqual(extractGroups([{ url: "/a" }], "posthog"), [{ key: "/a", count: 0, additive: true }]);
+  assert.deepEqual(extractGroups(null, "posthog"), []);
+  assert.deepEqual(extractGroups([{ url: "/a", count: "12" }], "posthog"), [{ key: "/a", count: 12, additive: true }]);
+  // PostHog rows have no facet, so NR parsing would lose the group.
+  assert.deepEqual(extractGroups([{ url: "/a", count: 2 }]), [{ key: "", count: 2, additive: true }]);
+});
+
+test("substituteWindow uses epoch seconds for PostHog and epoch ms for New Relic", () => {
+  const nrql = "SELECT count(*) FROM Log SINCE {{SINCE}} UNTIL {{UNTIL}}";
+  const hogql = "SELECT count() FROM events WHERE timestamp >= toDateTime({{SINCE}}) AND timestamp < toDateTime({{UNTIL}})";
+  assert.equal(substituteWindow("newrelic", nrql, 1000, 1300), "SELECT count(*) FROM Log SINCE 1000000 UNTIL 1300000");
+  assert.equal(
+    substituteWindow("posthog", hogql, 1000, 1300),
+    "SELECT count() FROM events WHERE timestamp >= toDateTime(1000) AND timestamp < toDateTime(1300)",
+  );
+});
+
+test("classifyGroups marks all groups repeat when each was investigated in the window", async () => {
+  const db = memoryDb();
+  const now = 1_000_000;
+  await addTrigger(db, now - 3600, "investigating", [{ key: "a", count: 1, sessionId: "s1", repeat: false }, { key: "b", count: 1, sessionId: "s1", repeat: false }], "s1");
+  const out = await classifyGroups(db, "m1", [{ key: "a", count: 2 }, { key: "b", count: 5 }], now);
+  assert.deepEqual(out, [
+    { key: "a", count: 2, sessionId: "s1", repeat: true },
+    { key: "b", count: 5, sessionId: "s1", repeat: true },
+  ]);
+});
+
+test("classifyGroups splits mixed groups and links repeats to the latest investigating session", async () => {
+  const db = memoryDb();
+  const now = 1_000_000;
+  await addTrigger(db, now - 7200, "investigating", [{ key: "a", count: 1, sessionId: "s1", repeat: false }], "s1");
+  await addTrigger(db, now - 3600, "investigating", [{ key: "a", count: 1, sessionId: "s2", repeat: false }], "s2");
+  await addTrigger(db, now - 60, "repeat", [{ key: "c", count: 1, sessionId: "s9", repeat: true }], null);
+  const out = await classifyGroups(db, "m1", [{ key: "a", count: 1 }, { key: "c", count: 1 }], now);
+  assert.deepEqual(out, [
+    { key: "a", count: 1, sessionId: "s2", repeat: true },
+    { key: "c", count: 1, sessionId: null, repeat: false },
+  ]);
+});
+
+test("classifyGroups treats triggers outside the repeat window as new", async () => {
+  const db = memoryDb();
+  const now = 1_000_000;
+  await addTrigger(db, now - 86_401, "investigating", [{ key: "a", count: 1, sessionId: "s1", repeat: false }], "s1");
+  const out = await classifyGroups(db, "m1", [{ key: "a", count: 1 }], now);
+  assert.deepEqual(out, [{ key: "a", count: 1, sessionId: null, repeat: false }]);
+});
+
+test("classifyGroups never treats an unfaceted group as a repeat", async () => {
+  const db = memoryDb();
+  const now = 1_000_000;
+  await addTrigger(db, now - 60, "investigating", [{ key: "", count: 1, sessionId: "s1", repeat: false }], "s1");
+  const out = await classifyGroups(db, "m1", [{ key: "", count: 1 }], now);
+  assert.deepEqual(out, [{ key: "", count: 1, sessionId: null, repeat: false }]);
+});
+
+test("byRelevance puts sessions sharing a key first, each part newest first", () => {
+  const past = [
+    { id: "a", keys: ["x"] },
+    { id: "b", keys: ["svc"] },
+    { id: "c", keys: [] },
+    { id: "d", keys: ["svc", "x"] },
+  ];
+  assert.deepEqual(byRelevance(past, ["svc"]).map((p) => p.id), ["b", "d", "a", "c"]);
+  assert.deepEqual(byRelevance(past, [""]).map((p) => p.id), ["a", "b", "c", "d"]);
+});
+
+test("nextWindow ends windows on clock boundaries, runs them after the lag, and never overlaps", () => {
+  const lag = 60;
+  const t = (h: number, m: number, sec = 0) => h * 3600 + m * 60 + sec;
+  // 10:47:10 -> the latest boundary at least `lag` ago is 10:45:00.
+  assert.deepEqual(nextWindow(null, 300, t(10, 47, 10), lag), { start: t(10, 40), end: t(10, 45) });
+  assert.equal(nextWindow(t(10, 45), 300, t(10, 50, 59), lag), null);
+  assert.deepEqual(nextWindow(t(10, 45), 300, t(10, 51, 0), lag), { start: t(10, 45), end: t(10, 50) });
+  // An alert at 6:19 is in the window checked right after 6:20 once the lag passes.
+  assert.deepEqual(nextWindow(t(6, 15), 300, t(6, 20, 15), 15), { start: t(6, 15), end: t(6, 20) });
+  // A check at an unaligned time (10:44) leaves the next boundary window a full period long.
+  assert.deepEqual(nextWindow(t(10, 44), 300, t(10, 46, 2), lag), { start: t(10, 40), end: t(10, 45) });
+  assert.equal(nextWindow(t(10, 46), 300, t(10, 46, 2), lag), null);
+  assert.equal(nextWindow(t(10, 45), 300, t(10, 46, 2), lag), null);
+  // After sleep, one window covers the whole gap.
+  // A long sleep is not summed into one check: the window covers at most two periods.
+  assert.deepEqual(nextWindow(t(10, 45), 300, t(12, 1), lag), { start: t(11, 50), end: t(12, 0) });
+  assert.deepEqual(nextWindow(t(11, 55), 300, t(12, 1), lag), { start: t(11, 55), end: t(12, 0) });
+});
+
+test("openWindow spans a full period ending at now minus the lag and skips a monitor checked in the last minute", () => {
+  const now = 100_000;
+  assert.deepEqual(openWindow(null, 300, now, 60), { start: now - 360, end: now - 60 });
+  assert.deepEqual(openWindow(now - 200, 300, now, 60), { start: now - 360, end: now - 60 });
+  assert.deepEqual(openWindow(now - 1000, 300, now, 60), { start: now - 360, end: now - 60 });
+  assert.equal(openWindow(now - 100, 300, now, 60), null);
+  assert.equal(openWindow(now - 60, 300, now, 60), null);
+});
+
+test("a catch-up window of a monitor slower than the catch-up limit still spans its full period", () => {
+  const period = 6 * 3600;
+  const end = 100 * period;
+  assert.deepEqual(nextWindow(end - period, period, end + 60, 60, true), { start: end - period, end });
+  const now = end + 3600;
+  assert.deepEqual(openWindow(now - 60 - 2 * period, period, now, 60, true), { start: now - 60 - period, end: now - 60 });
+});
+
+test("isFailedWindow skips only the window end that failed", () => {
+  const failed = new Map([["m1", 1000]]);
+  assert.equal(isFailedWindow(failed, "m1", 1000), true);
+  assert.equal(isFailedWindow(failed, "m1", 1300), false);
+  assert.equal(isFailedWindow(failed, "m2", 1000), false);
+});
+
+test("validateMonitor checks provider-specific rules", async () => {
+  const registry = {} as ProviderRegistry;
+  const hog = "SELECT count() AS count FROM events WHERE timestamp >= toDateTime({{SINCE}}) AND timestamp < toDateTime({{UNTIL}})";
+  const base = { query: hog, condition: "> 0", frequencySeconds: 300 };
+  const err = async (d: Parameters<typeof validateMonitor>[1]) => {
+    const r = await validateMonitor(registry, d);
+    return "error" in r ? r.error : null;
+  };
+  assert.match((await err({ ...base, provider: "gcp" }))!, /Unsupported monitor provider/);
+  assert.match((await err({ ...base, provider: "posthog" }))!, /chartQuery/);
+  assert.match((await err({ ...base, provider: "posthog", chartQuery: "SELECT 1" }))!, /\{\{SINCE\}\}/);
+  assert.equal(await err({ ...base, provider: "posthog", chartQuery: hog }), null);
+  assert.match((await err({ ...base, provider: "newrelic", query: "SELECT count(*) FROM Log SINCE {{SINCE}} UNTIL {{UNTIL}} TIMESERIES" }))!, /TIMESERIES/);
+});
+
+test("validateMonitor preview follows the scheduler rule", async () => {
+  const rows = normalizeNewRelicRows([apdexFacet("a", 0.5), apdexFacet("b", 0.95)]);
+  const registry = {
+    whenLoaded: async () => {},
+    getProvider: () => ({ connected: true, executeRawQuery: async () => rows }),
+  } as unknown as ProviderRegistry;
+  const r = await validateMonitor(registry, {
+    provider: "newrelic", query: "SELECT apdex(duration) FROM Transaction FACET appName SINCE {{SINCE}} UNTIL {{UNTIL}}",
+    condition: "< 0.8", frequencySeconds: 300,
+  }, { runQuery: true });
+  assert.ok(!("error" in r));
+  assert.equal(r.wouldTrigger, true);
+  assert.equal(r.sampleValue, 0.5);
+  assert.deepEqual(r.groups?.map((g) => g.key), ["a"]);
+});
+
+test("setMonitorToggles changes only the given toggles and resets the window when Run turns on", async () => {
+  const db = memoryDb();
+  await db.run(sql.raw(`CREATE TABLE monitors (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, provider TEXT NOT NULL, query TEXT NOT NULL, chart_query TEXT, condition TEXT NOT NULL,
+    frequency_seconds INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, alert_enabled INTEGER NOT NULL DEFAULT 1,
+    last_status TEXT, last_error TEXT, last_checked_at INTEGER, sort_order INTEGER, card_width INTEGER,
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+  )`));
+  await saveMonitor(db, "m1", { name: "A", provider: "newrelic", query: "q", chartQuery: null, condition: "> 0", frequencySeconds: 300 });
+  assert.deepEqual(await setMonitorToggles(db, "m1", { alert: false }), { name: "A", run: true, alert: false });
+  await db.update(schema.monitors).set({ lastCheckedAt: 123 }).run();
+  assert.deepEqual(await setMonitorToggles(db, "m1", { run: false }), { name: "A", run: false, alert: false });
+  assert.deepEqual(await setMonitorToggles(db, "m1", { run: true }), { name: "A", run: true, alert: false });
+  assert.equal((await db.select().from(schema.monitors).get())?.lastCheckedAt, null);
+  assert.deepEqual(await setMonitorToggles(db, "nope", { run: true }), { error: "Monitor not found", code: "NOT_FOUND" });
+});
+
+test("readPastSessionTool loads the past-session list lazily, once, and only allows listed ids", async () => {
+  let loads = 0;
+  const t = readPastSessionTool(() => {
+    loads++;
+    return [{ sessionId: "s1", triggeredAt: 0, keys: ["a"], analysis: "x", report: null, finding: null }];
+  });
+  assert.equal(loads, 0);
+  const run = (sessionId: string) => t.execute!({ sessionId }, { toolCallId: "c", messages: [] } as never);
+  assert.equal(((await run("s1")) as { analysis: string }).analysis, "x");
+  assert.ok("error" in ((await run("s2")) as object));
+  assert.equal(loads, 1);
+});
+
+test("summaryFromMessages takes the last successful report_alert_summary call", () => {
+  const base = { severity: "low", policy: "", started: "", status: "", issues: [] };
+  const call = (input: object, state = "output-available") => ({ type: "tool-report_alert_summary", toolCallId: "c", state, input, output: {} });
+  const messages = [
+    { id: "1", role: "assistant", parts: [call(base), call({ ...base, policy: "latest" }), { type: "text", text: "done" }] },
+    { id: "2", role: "assistant", parts: [call({ ...base, policy: "failed" }, "output-error")] },
+  ] as unknown as UIMessage[];
+  assert.deepEqual(summaryFromMessages(messages), { ...base, policy: "latest" });
+  assert.equal(summaryFromMessages([]), null);
+});
+
+test("outcomeSummary prefers the finding answer over the first analysis sentence", () => {
+  const finding = { kind: "summary" as const, title: "", answer: "Checkout is healthy.", explanation: [{ statement: "x", source: "q" }] };
+  assert.equal(outcomeSummary({ analysis: "Errors rose. Then fell.", finding }), "Checkout is healthy.");
+  assert.equal(outcomeSummary({ analysis: "Errors rose. Then fell.", finding: null }), "Errors rose.");
+});

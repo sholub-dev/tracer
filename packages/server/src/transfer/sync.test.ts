@@ -1,0 +1,359 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { eq } from "drizzle-orm";
+import Database from "better-sqlite3-multiple-ciphers";
+import { createNodeDb } from "../db/node-db.js";
+import { runSetup } from "../db/setup.js";
+import type { Db } from "../db/driver.js";
+import { appSettings, chatSessions, providerConfigs, memoryOperations, monitors, monitorTriggers, syncRows, toolMemories } from "../db/schema.js";
+import { exportSnapshot, FORMAT, importSnapshot } from "./snapshot.js";
+import { exportSyncPayload, LOCAL_SETTING_KEYS, mergeSyncPayload } from "./sync.js";
+
+async function freshDb() {
+  const sqlite = new Database(":memory:");
+  sqlite.pragma("foreign_keys = ON");
+  const { db, setupDriver } = createNodeDb(sqlite);
+  await runSetup(setupDriver);
+  return { db, sqlite, setupDriver };
+}
+
+const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
+const wire = async (from: Db) => clone(await exportSyncPayload(from));
+const sync = async (a: Db, b: Db) => {
+  const toB = await mergeSyncPayload(b, await wire(a));
+  const toA = await mergeSyncPayload(a, await wire(b));
+  return { toA, toB };
+};
+const total = (counts: Record<string, number>) => Object.values(counts).reduce((a, b) => a + b, 0);
+const logOf = async (db: Db, tbl: string, key: string) =>
+  (await db.select().from(syncRows).all()).find((r) => r.tbl === tbl && r.rowKey === key);
+
+const T0 = Date.now() + 1_000_000;
+
+// Sets a log entry time, so tests need no sleeps.
+async function stamp(db: Db, tbl: string, key: string, changedAt: number) {
+  await db.update(syncRows).set({ changedAt }).where(eq(syncRows.rowKey, key)).run();
+  assert.equal((await logOf(db, tbl, key))?.changedAt, changedAt);
+}
+
+async function pair() {
+  const a = await freshDb();
+  const b = await freshDb();
+  await a.db.insert(chatSessions).values({ id: "s1", title: "One", messages: "[]" }).run();
+  await a.db.insert(monitors).values({ id: "m1", name: "Errors", query: "q", condition: "{}" }).run();
+  await a.db.insert(appSettings).values({ key: "chat_model", value: "claude" }).run();
+  await importSnapshot(b.db, clone(await exportSnapshot(a.db)));
+  return { a, b };
+}
+
+test("a full copy then a merge both ways changes nothing", async () => {
+  const { a, b } = await pair();
+  assert.deepEqual((await exportSyncPayload(b.db)).rows, (await exportSyncPayload(a.db)).rows);
+  const { toA, toB } = await sync(a.db, b.db);
+  for (const counts of [toA.applied, toA.deleted, toB.applied, toB.deleted]) assert.equal(total(counts), 0);
+});
+
+test("a new row travels; the later edit wins; an older edit loses", async () => {
+  const { a, b } = await pair();
+  await a.db.insert(chatSessions).values({ id: "s2", title: "Two", messages: "[]" }).run();
+  const { toB } = await sync(a.db, b.db);
+  assert.equal(toB.applied.chat_sessions, 1);
+  assert.equal((await b.db.select().from(chatSessions).where(eq(chatSessions.id, "s2")).get())?.title, "Two");
+
+  await b.db.update(chatSessions).set({ title: "B edit" }).where(eq(chatSessions.id, "s1")).run();
+  await stamp(a.db, "chat_sessions", "s1", T0 + 1000);
+  await stamp(b.db, "chat_sessions", "s1", T0 + 2000);
+  await sync(a.db, b.db);
+  assert.equal((await a.db.select().from(chatSessions).where(eq(chatSessions.id, "s1")).get())?.title, "B edit");
+
+  await a.db.update(chatSessions).set({ title: "Old A edit" }).where(eq(chatSessions.id, "s1")).run();
+  await stamp(a.db, "chat_sessions", "s1", T0 + 1500);
+  await sync(a.db, b.db);
+  assert.equal((await a.db.select().from(chatSessions).where(eq(chatSessions.id, "s1")).get())?.title, "B edit");
+  assert.equal((await b.db.select().from(chatSessions).where(eq(chatSessions.id, "s1")).get())?.title, "B edit");
+});
+
+test("a delete travels with its cascaded children", async () => {
+  const { a, b } = await pair();
+  await a.db.insert(monitorTriggers).values({ id: "t1", monitorId: "m1", triggeredAt: 1, value: 1, windowStart: 1, windowEnd: 2, status: "muted", groups: "[]" }).run();
+  await sync(a.db, b.db);
+  assert.equal((await b.db.select().from(monitorTriggers).all()).length, 1);
+
+  await a.db.delete(monitors).where(eq(monitors.id, "m1")).run();
+  assert.equal((await logOf(a.db, "monitor_triggers", "t1"))?.deleted, 1);
+  const { toB } = await sync(a.db, b.db);
+  assert.equal(toB.deleted.monitors, 1);
+  assert.equal((await b.db.select().from(monitors).all()).length, 0);
+  assert.equal((await b.db.select().from(monitorTriggers).all()).length, 0);
+});
+
+test("memories with the same id on both sides both survive; operations follow the uid", async () => {
+  const { a, b } = await pair();
+  await a.db.insert(toolMemories).values({ toolName: "t", note: "from A" }).run();
+  await b.db.insert(toolMemories).values({ toolName: "t", note: "from B" }).run();
+  const memoryA = (await a.db.select().from(toolMemories).get())!;
+  assert.equal(memoryA.id, 1);
+  assert.equal((await b.db.select().from(toolMemories).get())!.id, 1);
+  // Gives B's operation a memory id that differs from the local one after the merge.
+  await b.db.insert(toolMemories).values({ toolName: "t", note: "second B" }).run();
+  const second = (await b.db.select().from(toolMemories).where(eq(toolMemories.note, "second B")).get())!;
+  await b.db.insert(memoryOperations).values({ sessionId: "s1", operation: "create", memoryId: second.id, note: "n" }).run();
+  await a.db.insert(memoryOperations).values({ sessionId: "s1", operation: "create", memoryId: 999 }).run();
+
+  await sync(a.db, b.db);
+  for (const { db } of [a, b]) {
+    assert.deepEqual((await db.select().from(toolMemories).all()).map((m) => m.note).sort(), ["from A", "from B", "second B"]);
+  }
+  const onA = await a.db.select().from(memoryOperations).all();
+  const translated = onA.find((o) => o.note === "n")!;
+  assert.equal(translated.memoryId, (await a.db.select().from(toolMemories).where(eq(toolMemories.note, "second B")).get())!.id);
+  assert.equal(onA.length, 2);
+  const dangling = (await b.db.select().from(memoryOperations).all()).find((o) => o.note === null)!;
+  assert.equal(dangling.memoryId, null);
+  assert.equal(memoryA.uid?.length, 32);
+});
+
+test("monitor toggles sync newest wins, both ways; check state stays per device", async () => {
+  const { a, b } = await pair();
+  await b.db.update(monitors).set({ enabled: 0, lastCheckedAt: 7 }).where(eq(monitors.id, "m1")).run();
+  await stamp(b.db, "monitors", "m1", T0 + 1000);
+  await sync(a.db, b.db);
+  assert.equal((await a.db.select().from(monitors).get())!.enabled, 0, "a toggle made on B reaches A");
+  assert.equal((await a.db.select().from(monitors).get())!.lastCheckedAt, null);
+
+  await a.db.update(monitors).set({ alertEnabled: 0, enabled: 1, name: "Renamed" }).where(eq(monitors.id, "m1")).run();
+  await stamp(a.db, "monitors", "m1", T0 + 2000);
+  await sync(a.db, b.db);
+  const onB = (await b.db.select().from(monitors).get())!;
+  assert.equal(onB.name, "Renamed");
+  assert.equal(onB.enabled, 1, "the newer toggle on A wins");
+  assert.equal(onB.alertEnabled, 0);
+  assert.equal(onB.lastCheckedAt, 7, "check state is not overwritten");
+
+  await a.db.insert(monitors).values({ id: "m2", name: "New", query: "q", condition: "{}", lastStatus: "alerting", lastCheckedAt: 5 }).run();
+  await sync(a.db, b.db);
+  const arrived = (await b.db.select().from(monitors).where(eq(monitors.id, "m2")).get())!;
+  assert.equal(arrived.enabled, 1, "a new monitor arrives with its own toggle");
+  assert.equal(arrived.lastStatus, "ok");
+
+  const before = await logOf(a.db, "monitors", "m1");
+  await a.db.update(monitors).set({ lastCheckedAt: 9, lastStatus: "alerting", lastError: "x", updatedAt: 99 }).where(eq(monitors.id, "m1")).run();
+  assert.deepEqual(await logOf(a.db, "monitors", "m1"), before);
+});
+
+test("opening an unread session does not make a stale copy win", async () => {
+  const { a, b } = await pair();
+  await a.db.update(chatSessions).set({ messages: '["newer"]' }).where(eq(chatSessions.id, "s1")).run();
+  await stamp(a.db, "chat_sessions", "s1", T0 + 5000);
+  const before = await logOf(b.db, "chat_sessions", "s1");
+  await b.db.update(chatSessions).set({ status: "idle" }).where(eq(chatSessions.id, "s1")).run();
+  assert.deepEqual(await logOf(b.db, "chat_sessions", "s1"), before);
+  await sync(a.db, b.db);
+  assert.equal((await a.db.select().from(chatSessions).get())!.messages, '["newer"]');
+  assert.equal((await b.db.select().from(chatSessions).get())!.messages, '["newer"]');
+});
+
+test("device settings never travel", async () => {
+  const { a, b } = await pair();
+  for (const key of LOCAL_SETTING_KEYS) await a.db.insert(appSettings).values({ key, value: `a-${key}` }).onConflictDoUpdate({ target: appSettings.key, set: { value: `a-${key}` } }).run();
+  await b.db.insert(appSettings).values({ key: "sync_peer_id", value: "b-peer" }).run();
+  const bId = (await b.db.select().from(appSettings).where(eq(appSettings.key, "device_id")).get())!.value;
+  assert.notEqual(bId, "a-device_id");
+
+  const snapshot = clone(await exportSnapshot(a.db));
+  const payload = await wire(a.db);
+  for (const text of [JSON.stringify(snapshot), JSON.stringify(payload)]) {
+    for (const key of LOCAL_SETTING_KEYS) assert.ok(!text.includes(`a-${key}`) && !text.includes(`"${key}"`));
+  }
+  await mergeSyncPayload(b.db, payload);
+  await importSnapshot(b.db, snapshot);
+  const kept = Object.fromEntries((await b.db.select().from(appSettings).all()).filter((s) => LOCAL_SETTING_KEYS.includes(s.key)).map((s) => [s.key, s.value]));
+  assert.equal(kept.device_id, bId);
+  assert.equal(kept.sync_peer_id, "b-peer");
+  assert.equal(await logOf(b.db, "app_settings", "device_id"), undefined);
+});
+
+test("a child whose parent was deleted on the receiver is skipped", async () => {
+  const { a, b } = await pair();
+  await b.db.delete(chatSessions).where(eq(chatSessions.id, "s1")).run();
+  await a.db.insert(memoryOperations).values({ sessionId: "s1", operation: "create" }).run();
+  const { toB } = await sync(a.db, b.db);
+  assert.equal(toB.applied.memory_operations, 0);
+  assert.equal((await b.db.select().from(memoryOperations).all()).length, 0);
+});
+
+test("setup twice keeps one trigger set and no duplicate entries", async () => {
+  const { db, sqlite, setupDriver } = await freshDb();
+  await db.insert(chatSessions).values({ id: "s1", title: "One", messages: "[]" }).run();
+  const count = (sql: string) => (sqlite.prepare(sql).get() as { n: number }).n;
+  const triggers = count("SELECT count(*) AS n FROM sqlite_master WHERE type = 'trigger'");
+  const entries = count("SELECT count(*) AS n FROM sync_rows");
+  const device = sqlite.prepare("SELECT value FROM app_settings WHERE key = 'device_id'").get();
+  await runSetup(setupDriver);
+  assert.equal(count("SELECT count(*) AS n FROM sqlite_master WHERE type = 'trigger'"), triggers);
+  assert.equal(count("SELECT count(*) AS n FROM sync_rows"), entries);
+  assert.deepEqual(sqlite.prepare("SELECT value FROM app_settings WHERE key = 'device_id'").get(), device);
+});
+
+test("setup backfills rows that exist before the log and gives them uids", async () => {
+  const sqlite = new Database(":memory:");
+  sqlite.exec(`
+    CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, messages TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'idle', created_at INTEGER NOT NULL DEFAULT 5, updated_at INTEGER NOT NULL DEFAULT 7);
+    INSERT INTO chat_sessions (id, title, messages) VALUES ('old', 'Old', '[]');
+    CREATE TABLE tool_memories (id INTEGER PRIMARY KEY AUTOINCREMENT, tool_name TEXT NOT NULL, note TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 3);
+    INSERT INTO tool_memories (tool_name, note) VALUES ('t', 'n'), ('t', 'm');
+  `);
+  const { setupDriver } = createNodeDb(sqlite);
+  await runSetup(setupDriver);
+  const rows = sqlite.prepare("SELECT tbl, changed_at FROM sync_rows WHERE tbl != 'app_settings' ORDER BY tbl, row_key").all();
+  assert.deepEqual(rows, [
+    { tbl: "chat_sessions", changed_at: 7000 },
+    { tbl: "tool_memories", changed_at: 3000 },
+    { tbl: "tool_memories", changed_at: 3000 },
+  ]);
+});
+
+test("an incremental export equals the full export filtered to the changed rows", async () => {
+  const { a } = await pair();
+  await a.db.insert(toolMemories).values({ toolName: "t", note: "old" }).run();
+  await new Promise((r) => setTimeout(r, 5));
+  const since = Date.now();
+  const memory = (await a.db.select().from(toolMemories).all())[0];
+  await a.db.insert(memoryOperations).values({ sessionId: "s1", operation: "update", memoryId: memory.id, note: "n" }).run();
+  await a.db.update(chatSessions).set({ title: "Renamed" }).where(eq(chatSessions.id, "s1")).run();
+  await a.db.insert(chatSessions).values({ id: "s2", title: "Two", messages: "[]" }).run();
+  await a.db.delete(monitors).where(eq(monitors.id, "m1")).run();
+  await a.db.insert(appSettings).values({ key: "sync_peer_name", value: "x" }).run();
+
+  const full = await exportSyncPayload(a.db);
+  const part = await exportSyncPayload(a.db, since);
+  const changed = new Set(part.rows.map((r) => `${r.tbl}\0${r.row_key}`));
+  assert.ok(changed.size >= 4);
+  const keys: Record<string, string> = { provider_configs: "type", app_settings: "key", tool_memories: "uid", alert_issues: "issueId", memory_operations: "uid" };
+  const sorted = (rows: Record<string, any>[], prop: string) => [...rows].sort((x, y) => String(x[prop]).localeCompare(String(y[prop])));
+  const operations = full.tables.memory_operations.filter((o) => changed.has(`memory_operations\0${o.uid}`));
+  for (const [name, rows] of Object.entries(full.tables)) {
+    const prop = keys[name] ?? "id";
+    const expected = rows.filter((r) => changed.has(`${name}\0${r[prop]}`) || (name === "tool_memories" && operations.some((o) => o.memoryId === r.id)));
+    assert.deepEqual(sorted(part.tables[name], prop), sorted(expected, prop), name);
+  }
+  // The memory did not change, yet it travels so the receiver can map the operation.
+  assert.equal(part.tables.tool_memories.length, 1);
+  assert.deepEqual(part.rows, full.rows.filter((r) => changed.has(`${r.tbl}\0${r.row_key}`)));
+});
+
+test("the Vertex config row stays on the desktop and a Vertex chat model leaves the phone's model alone", async () => {
+  const a = await freshDb();
+  const b = await freshDb();
+  await a.db.insert(providerConfigs).values({ type: "google-vertex", config: "{}" }).run();
+  await a.db.insert(providerConfigs).values({ type: "google", config: "{}" }).run();
+  await a.db.insert(appSettings).values({ key: "chat_model", value: JSON.stringify({ provider: "google-vertex", modelId: "m" }) }).run();
+  await b.db.insert(appSettings).values({ key: "chat_model", value: JSON.stringify({ provider: "google", modelId: "p" }) }).run();
+
+  const wired = clone(await exportSnapshot(a.db));
+  assert.deepEqual(wired.tables.provider_configs.map((r) => r.type), ["google"]);
+  await importSnapshot(b.db, wired);
+  assert.equal((await b.db.select().from(appSettings).where(eq(appSettings.key, "chat_model")).get())?.value, JSON.stringify({ provider: "google", modelId: "p" }));
+
+  await mergeSyncPayload(b.db, clone(await exportSyncPayload(a.db)));
+  assert.equal((await b.db.select().from(appSettings).where(eq(appSettings.key, "chat_model")).get())?.value, JSON.stringify({ provider: "google", modelId: "p" }));
+});
+
+test("sync carries no run state: sessions export as done and a merge never overwrites it", async () => {
+  const { a, b } = await pair();
+  await a.db.update(chatSessions).set({ status: "streaming", runScope: "unified", resumed: 0 }).where(eq(chatSessions.id, "s1")).run();
+  const exported = (await exportSyncPayload(a.db)).tables.chat_sessions[0];
+  assert.deepEqual([exported.status, exported.runScope, exported.resumed], ["done", null, 0]);
+  assert.equal((await exportSnapshot(a.db)).tables.chat_sessions[0].status, "done");
+
+  await b.db.update(chatSessions).set({ status: "streaming", runScope: "newrelic", resumed: 1, title: "Old" }).where(eq(chatSessions.id, "s1")).run();
+  await a.db.update(chatSessions).set({ title: "From A" }).where(eq(chatSessions.id, "s1")).run();
+  await stamp(a.db, "chat_sessions", "s1", T0 + 3000);
+  await sync(a.db, b.db);
+  const onB = (await b.db.select().from(chatSessions).where(eq(chatSessions.id, "s1")).get())!;
+  assert.equal(onB.title, "From A");
+  assert.deepEqual([onB.status, onB.runScope, onB.resumed], ["streaming", "newrelic", 1]);
+
+  await a.db.insert(chatSessions).values({ id: "s2", title: "Two", messages: "[]", status: "streaming", runScope: "unified" }).run();
+  await sync(a.db, b.db);
+  const arrived = (await b.db.select().from(chatSessions).where(eq(chatSessions.id, "s2")).get())!;
+  assert.deepEqual([arrived.status, arrived.runScope, arrived.resumed], ["done", null, 0]);
+});
+
+test("a table larger than one read page exports every row once", async () => {
+  const { db } = await freshDb();
+  const ids = Array.from({ length: 450 }, (_, i) => `s${String(i).padStart(3, "0")}`);
+  for (let i = 0; i < ids.length; i += 50) {
+    await db.insert(chatSessions).values(ids.slice(i, i + 50).map((id) => ({ id, title: id, messages: "[]" }))).run();
+  }
+  const exported = (await exportSnapshot(db)).tables.chat_sessions.map((r) => r.id);
+  assert.deepEqual([...exported].sort(), ids);
+  assert.equal((await exportSyncPayload(db)).tables.chat_sessions.length, 450);
+});
+
+test("incoming rows with unknown columns or unsafe integration settings are rejected", async () => {
+  const { a, b } = await pair();
+  const snapshot = clone(await exportSnapshot(a.db));
+  const bad = clone(snapshot);
+  bad.tables.chat_sessions[0].injected = 1;
+  await assert.rejects(importSnapshot(b.db, bad), /unknown column "injected"/);
+
+  const setting = (key: string, value: unknown) => {
+    const copy = clone(snapshot);
+    copy.tables.app_settings.push({ key, value: JSON.stringify(value), updatedAt: 1 });
+    return copy;
+  };
+  await assert.rejects(importSnapshot(b.db, setting("integration:slack", { webhookUrl: "https://evil.example/x" })), /invalid setting/);
+  await assert.rejects(importSnapshot(b.db, setting("integration:jira", { domain: "evil.example/x#", email: "e", apiToken: "t" })), /invalid setting/);
+  await assert.rejects(importSnapshot(b.db, setting("integration:other", {})), /invalid setting/);
+  await importSnapshot(b.db, setting("integration:slack", { webhookUrl: "https://hooks.slack.com/services/T/B/x" }));
+  await importSnapshot(b.db, setting("integration:jira", { domain: "acme.atlassian.net", email: "e", apiToken: "t" }));
+
+  const payload = clone(await exportSyncPayload(a.db));
+  payload.tables.chat_sessions[0].injected = 1;
+  await assert.rejects(mergeSyncPayload(b.db, payload), /unknown column/);
+});
+
+test("a payload of another format gives the update message in both directions", async () => {
+  const { db } = await freshDb();
+  const payload = await exportSyncPayload(db);
+  assert.equal(payload.format, FORMAT);
+  for (const format of [FORMAT - 1, FORMAT + 1]) {
+    await assert.rejects(mergeSyncPayload(db, { ...payload, format }), /Update both apps/);
+  }
+});
+
+test("tables and log rows from an older version for dashboards are skipped; the rest applies", async () => {
+  const { a, b } = await pair();
+  await a.db.insert(chatSessions).values({ id: "s2", title: "Two", messages: "[]" }).run();
+  const old = { id: "d1", title: "Old", createdAt: 1, updatedAt: 1 };
+  const payload = await wire(a.db);
+  payload.tables.dashboards = [old];
+  payload.tables.dashboard_widgets = [{ id: "w1", dashboardId: "d1", title: "W" }];
+  payload.rows.push({ tbl: "dashboards", row_key: "d1", changed_at: T0, deleted: 0 }, { tbl: "dashboard_widgets", row_key: "w1", changed_at: T0, deleted: 0 });
+  const { applied } = await mergeSyncPayload(b.db, payload);
+  assert.equal(applied.chat_sessions, 1);
+  assert.equal(await logOf(b.db, "dashboards", "d1"), undefined);
+
+  const snapshot = clone(await exportSnapshot(a.db));
+  snapshot.tables.dashboards = [old];
+  await importSnapshot(b.db, snapshot);
+  assert.equal((await b.db.select().from(chatSessions).all()).length, 2);
+});
+
+test("setup drops the old dashboard tables, their log rows and their builder sessions", async () => {
+  const { sqlite, setupDriver } = await freshDb();
+  sqlite.exec(`
+    CREATE TABLE dashboards (id TEXT PRIMARY KEY);
+    CREATE TABLE dashboard_widgets (id TEXT PRIMARY KEY, dashboard_id TEXT REFERENCES dashboards(id));
+    INSERT INTO dashboards VALUES ('d1');
+    INSERT INTO dashboard_widgets VALUES ('w1', 'd1');
+    INSERT INTO sync_rows (tbl, row_key, changed_at) VALUES ('dashboards', 'd1', 1), ('dashboard_widgets', 'w1', 1);
+    INSERT INTO chat_sessions (id, title, messages) VALUES ('__dashboard__:d1', 'Dashboard Builder', '[]'), ('s1', 'Kept', '[]');
+  `);
+  await runSetup(setupDriver);
+  const tables = sqlite.prepare(`SELECT name FROM sqlite_master WHERE name IN ('dashboards', 'dashboard_widgets')`).all();
+  assert.equal(tables.length, 0);
+  assert.equal((sqlite.prepare(`SELECT count(*) AS n FROM sync_rows WHERE tbl IN ('dashboards', 'dashboard_widgets')`).get() as { n: number }).n, 0);
+  assert.deepEqual(sqlite.prepare(`SELECT id FROM chat_sessions`).all(), [{ id: "s1" }]);
+});

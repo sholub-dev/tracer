@@ -1,0 +1,93 @@
+import { z } from "zod";
+import { publicProcedure, router } from "../trpc.js";
+import { JiraClient, normalizeJiraDomain } from "../../integrations/jira/jira.client.js";
+import { readJiraConfig, writeJiraConfig, deleteJiraConfig } from "../../integrations/jira/config.js";
+import { readSlackConfig, writeSlackConfig, deleteSlackConfig, postSlack, parseMentions, mentionPrefix } from "../../integrations/slack.js";
+
+function maskToken(token: string): string {
+  return token.length <= 4 ? "••••" : "••••••••" + token.slice(-4);
+}
+
+export const integrationsRouter = router({
+  getJira: publicProcedure.query(async ({ ctx }) => {
+    const config = await readJiraConfig(ctx.db);
+    if (!config) return { configured: false, config: null };
+    return {
+      configured: true,
+      config: {
+        domain: config.domain,
+        email: config.email,
+        apiToken: maskToken(config.apiToken),
+      },
+    };
+  }),
+
+  // Accepts a classic Atlassian API token (email + token). The token authenticates
+  // against the site host with the account's permissions; Tracer constrains what it
+  // can do at the code/tool layer (read one issue, post one comment). Validated with
+  // a /myself call before persisting.
+  saveJira: publicProcedure
+    .input(
+      z.object({
+        domain: z.string().min(1),
+        email: z.string().min(1),
+        apiToken: z.string().min(1),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const domain = normalizeJiraDomain(input.domain);
+      if (!/^[a-z0-9][a-z0-9-]*$/i.test(domain)) {
+        return {
+          success: false,
+          error: 'Enter just your Jira site name, e.g. "yourco" for yourco.atlassian.net',
+        };
+      }
+
+      // The form sends the masked token back when only domain or email changed.
+      const stored = await readJiraConfig(ctx.db);
+      const token = input.apiToken.trim();
+      const apiToken = stored && token === maskToken(stored.apiToken) ? stored.apiToken : token;
+      const config = { domain, email: input.email.trim(), apiToken };
+      const result = await new JiraClient(config).validate();
+      if (!result.ok) {
+        return { success: false, error: result.error ?? "Connection failed" };
+      }
+      await writeJiraConfig(ctx.db, config);
+      return { success: true };
+    }),
+
+  removeJira: publicProcedure.mutation(async ({ ctx }) => {
+    await deleteJiraConfig(ctx.db);
+    return { success: true };
+  }),
+
+  getSlack: publicProcedure.query(async ({ ctx }) => {
+    const config = await readSlackConfig(ctx.db);
+    if (!config) return { configured: false, config: null };
+    return { configured: true, config: { webhookUrl: maskToken(config.webhookUrl), mentions: config.mentions ?? "" } };
+  }),
+
+  // Validated by posting a test message before persisting.
+  saveSlack: publicProcedure
+    .input(z.object({ webhookUrl: z.string().min(1), mentions: z.string().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const stored = await readSlackConfig(ctx.db);
+      const submitted = input.webhookUrl.trim();
+      const unchanged = !!stored && submitted === maskToken(stored.webhookUrl);
+      const webhookUrl = unchanged ? stored.webhookUrl : submitted;
+      const mentions = input.mentions?.trim() ?? "";
+      const parsed = parseMentions(mentions);
+      if ("error" in parsed) return { success: false, error: parsed.error };
+      if (!unchanged) {
+        const result = await postSlack(webhookUrl, { text: `${mentionPrefix(parsed.mentions)}Tracer is connected. Monitor alerts will be posted here.` });
+        if ("error" in result) return { success: false, error: result.error };
+      }
+      await writeSlackConfig(ctx.db, { webhookUrl, mentions });
+      return { success: true };
+    }),
+
+  removeSlack: publicProcedure.mutation(async ({ ctx }) => {
+    await deleteSlackConfig(ctx.db);
+    return { success: true };
+  }),
+});

@@ -1,0 +1,69 @@
+/**
+ * Shared helpers for provider tool factories — eliminates duplication
+ * between NR and GCP direct-mode tool setups.
+ */
+
+import type { AfterCompleteParams, ChatToolMemoryContext } from "@tracer-sh/shared";
+import type { Db } from "../db/driver.js";
+import { memoryOperations } from "../db/schema.js";
+import { runMemoryAgent } from "../agents/utility/memory.js";
+import { isEmptyQuery, isFailedQuery, type SubAgentQuery } from "../agents/chat/sub-agent.js";
+
+/**
+ * Converts tool output into a text part for model context.
+ * Shared by all provider tool `toModelOutput` handlers.
+ */
+export function toolModelOutput(output: unknown): { type: "text"; value: string } {
+  if (output && typeof output === "object" && "analysis" in output) {
+    // Analysis carries raw query data, so a closing tag inside it must not end the wrapper.
+    const analysis = (output as { analysis: string }).analysis.replaceAll("</tool_result>", "&lt;/tool_result&gt;");
+    return { type: "text", value: `<tool_result>\n${analysis}\n</tool_result>` };
+  }
+  if (output && typeof output === "object" && "error" in output) {
+    return { type: "text", value: `Error: ${(output as { error: string }).error}` };
+  }
+  return { type: "text", value: output !== null && typeof output === "object" ? JSON.stringify(output) : String(output) };
+}
+
+/**
+ * Builds the afterComplete callback for direct-mode tool factories.
+ * Runs the memory agent to extract lessons from the completed session.
+ */
+export function buildAfterComplete(opts: {
+  providerType: string;
+  db: Db | undefined;
+  memoryContext: ChatToolMemoryContext | undefined;
+  collectedQueries: SubAgentQuery[];
+}): (params: AfterCompleteParams) => void {
+  const { providerType, db, memoryContext, collectedQueries } = opts;
+
+  return (params: AfterCompleteParams) => {
+    if (!db || !memoryContext) return;
+    // A clean turn (rows everywhere) teaches nothing about the query language; only an error or an empty result can.
+    if (!collectedQueries.some((q) => isFailedQuery(q) || isEmptyQuery(q))) return;
+    const sessionId = params.sessionId;
+
+    void (async () => {
+      if (sessionId) {
+        try {
+          await db.insert(memoryOperations).values({
+            sessionId,
+            operation: "started",
+          }).run();
+        } catch { /* best-effort */ }
+      }
+
+      await runMemoryAgent({
+        providerType,
+        db,
+        existingMemories: memoryContext.existingMemories,
+        task: `[Direct conversation] ${params.lastUserMessage}`,
+        analysisText: params.lastAssistantText,
+        collectedQueries,
+        sessionId,
+      });
+    })().catch((err) => {
+      console.warn(`[memory-agent] ${providerType} direct-mode failed:`, err);
+    });
+  };
+}

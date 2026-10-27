@@ -1,0 +1,25 @@
+import { router } from "./trpc.js";
+import { providerRouter } from "./routers/provider.router.js";
+import { settingsRouter } from "./routers/settings.router.js";
+import { memoryRouter } from "./routers/memory.router.js";
+import { sessionsRouter } from "./routers/sessions.router.js";
+import { monitorsRouter } from "./routers/monitors.router.js";
+import { updateRouter } from "./routers/update.router.js";
+import { integrationsRouter } from "./routers/integrations.router.js";
+import { skillRouter } from "./routers/skill.router.js";
+import { transferRouter } from "./routers/transfer.router.js";
+
+export const appRouter = router({
+  provider: providerRouter,
+  integrations: integrationsRouter,
+  settings: settingsRouter,
+  memory: memoryRouter,
+  sessions: sessionsRouter,
+  monitors: monitorsRouter,
+  update: updateRouter,
+  skill: skillRouter,
+  transfer: transferRouter,
+});
+
+export type AppRouter = typeof appRouter;
+export type { AlertBrief } from "../monitors/repeats.js";

@@ -1,0 +1,56 @@
+{
+  "name": "tracer-sh",
+  "version": "0.7.23",
+  "type": "module",
+  "description": "Local-first debugging & analysis platform",
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sholub-dev/tracer.git"
+  },
+  "packageManager": "pnpm@10.10.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "bin": "./bin/tracer.mjs",
+  "files": [
+    "bin/tracer.mjs",
+    "packages/server/dist/",
+    "packages/web/dist/",
+    "skills/"
+  ],
+  "scripts": {
+    "preinstall": "node -e \"const [a,b]=process.versions.node.split('.').map(Number);if(a<22||(a===22&&b<12)){const m='\\ntracer-sh needs Node.js 22.12 or newer (found '+process.version+'). Run nvm use 22 (or install Node 22), then try again. To keep the previous version: npm i -g tracer-sh@0.4\\n\\n';console.error(m);try{require('fs').writeFileSync('/dev/tty',m)}catch{}process.exit(1)}\"",
+    "predev": "pnpm install --frozen-lockfile 2>/dev/null || pnpm install",
+    "dev": "concurrently --kill-others -n server,web -c blue,green \"pnpm --filter @tracer-sh/server dev\" \"pnpm --filter @tracer-sh/web dev\"",
+    "build": "pnpm --filter @tracer-sh/shared build && pnpm --filter @tracer-sh/server build && pnpm --filter @tracer-sh/web build",
+    "start": "node packages/server/dist/index.js",
+    "typecheck": "pnpm -r --parallel run typecheck",
+    "lint": "biome lint . && pnpm typecheck",
+    "release": "bin/release.sh",
+    "prepublishOnly": "if [ -z \"${CI:-}\" ]; then echo 'ERROR: Do not publish manually. Use: pnpm release <version>' && exit 1; fi && pnpm build"
+  },
+  "dependencies": {
+    "@napi-rs/keyring": "^2.1.0",
+    "better-sqlite3-multiple-ciphers": "^13.0.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3-multiple-ciphers",
+      "esbuild"
+    ],
+    "overrides": {
+      "postcss": "^8.5.28",
+      "shell-quote": "^1.11.0",
+      "source-map-js": "^1.2.2",
+      "uuid": "^11.1.1",
+      "esbuild": "^0.28.2"
+    }
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "concurrently": "^10.0.5",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  }
+}

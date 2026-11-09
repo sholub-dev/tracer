@@ -154,5 +154,4 @@ For code, fork the repo and open a pull request against `master`.
 
 ## License
 
-[Elastic License 2.0](https://www.elastic.co/licensing/elastic-license). You can use, change and share Tracer, also inside your company.
-You cannot offer it as a hosted or managed service.
+[MIT](LICENSE). Use it, change it and share it, at work or anywhere else.

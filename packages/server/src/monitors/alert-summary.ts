@@ -30,7 +30,7 @@ const slackFields = {
   status: z.string().describe("One of: ongoing; back to normal at <time>; recurring <pattern, e.g. hourly since 06:00>; never left its normal level. At most 6 words. Check the data up to now."),
   issues: z.array(z.object({
     service: z.string(),
-    endpoint: z.string().describe("Route pattern such as /loans/{id} or a GraphQL operation name, read from a result: the path without the transaction prefix and method. Empty for a service-wide value or when no result names one."),
+    endpoint: z.string().describe("Route pattern such as /orders/{id} or a GraphQL operation name, read from a result: the path without the transaction prefix and method. Empty for a service-wide value or when no result names one."),
     errors: z.string().describe("For errors: <count> × <error class or code> from the first bad minute to the status time, both from one result that counts this endpoint's errors by class, the class without its package (DataAccessResourceFailureException); when it shows several classes, name the largest with its own count. For latency or traffic: the value next to its normal level, e.g. 7.3s avg vs 0.08s normal; the same normal level the card states."),
     userImpact: z.string().describe("For an error line: the failure status code (4xx or 5xx) or error message from the same result as the count, or exactly \"none\". For a latency or traffic line: exactly \"none\"."),
   })).max(5).describe("Up to 3, one per endpoint, largest first"),

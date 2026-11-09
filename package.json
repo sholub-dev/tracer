@@ -3,7 +3,7 @@
   "version": "0.7.23",
   "type": "module",
   "description": "Local-first debugging & analysis platform",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/sholub-dev/tracer.git"

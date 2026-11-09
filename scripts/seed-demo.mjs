@@ -63,7 +63,7 @@ const latencyData = makeTimeseries(HOUR_AGO, 60, 60, (i) => {
   if (i >= 20 && i <= 22) base = 350 + Math.round(Math.random() * 100); // ramp up
   if (i >= 23 && i <= 30) base = 620 + Math.round(Math.random() * 230); // peak
   if (i >= 31 && i <= 34) base = 380 + Math.round(Math.random() * 120); // ramp down
-  return { average: base };
+  return { latency_ms: base };
 });
 
 // Error count: baseline 2-8, spike to 40-90 during the same window
@@ -98,18 +98,18 @@ const messages = [
         state: "output-available",
         input: {
           query:
-            "SELECT average(duration) FROM Transaction WHERE name = 'WebTransaction/Controller/checkout' SINCE 1 hour ago",
+            "SELECT average(duration) * 1000 AS 'latency_ms' FROM Transaction WHERE name = 'WebTransaction/Controller/checkout' SINCE 1 hour ago",
         },
         output: {
           parts: [
             {
               type: "query",
               query:
-                "SELECT average(duration) FROM Transaction WHERE name = 'WebTransaction/Controller/checkout' SINCE 1 hour ago",
-              results: [{ average: 0.347 }],
+                "SELECT average(duration) * 1000 AS 'latency_ms' FROM Transaction WHERE name = 'WebTransaction/Controller/checkout' SINCE 1 hour ago",
+              results: [{ latency_ms: 347 }],
             },
           ],
-          analysis: "average: 0.347s",
+          analysis: "latency_ms: 347",
         },
       },
       { type: "step-start" },
@@ -135,14 +135,14 @@ const messages = [
         state: "output-available",
         input: {
           query:
-            "SELECT average(duration) FROM Transaction WHERE name = 'WebTransaction/Controller/checkout' SINCE 1 hour ago TIMESERIES",
+            "SELECT average(duration) * 1000 AS 'latency_ms' FROM Transaction WHERE name = 'WebTransaction/Controller/checkout' SINCE 1 hour ago TIMESERIES",
         },
         output: {
           parts: [
             {
               type: "query",
               query:
-                "SELECT average(duration) FROM Transaction WHERE name = 'WebTransaction/Controller/checkout' SINCE 1 hour ago TIMESERIES",
+                "SELECT average(duration) * 1000 AS 'latency_ms' FROM Transaction WHERE name = 'WebTransaction/Controller/checkout' SINCE 1 hour ago TIMESERIES",
               results: latencyData,
             },
           ],
@@ -150,7 +150,7 @@ const messages = [
             .filter((_, i) => i % 10 === 0)
             .map(
               (d) =>
-                `${new Date(d.beginTimeSeconds * 1000).toISOString().slice(11, 19)}: ${d.average}ms`
+                `${new Date(d.beginTimeSeconds * 1000).toISOString().slice(11, 19)}: ${d.latency_ms}ms`
             )
             .join("\n"),
         },

@@ -77,15 +77,15 @@ test("clip cuts at a word boundary and hard-cuts when there is no space", () => 
 
 test("redact masks personal data, keeps normal text", () => {
   assert.equal(
-    redact("jo.d+x@corp.com 123-45-6789 (415) 555-1234 loan 1234567890 at 10:05 in svc-a v1.2"),
-    "[email] [ssn] [phone] loan at 10:05 in svc-a v1.2",
+    redact("jo.d+x@corp.com 123-45-6789 (415) 555-1234 order 1234567890 at 10:05 in svc-a v1.2"),
+    "[email] [ssn] [phone] order at 10:05 in svc-a v1.2",
   );
   assert.equal(
-    redact("GET /api/loans/7?token=abc&x=1 by 3f2b1c9e-1a2b-4c3d-9e8f-0a1b2c3d4e5f"),
-    "GET /api/loans by",
+    redact("GET /api/orders/7?token=abc&x=1 by 3f2b1c9e-1a2b-4c3d-9e8f-0a1b2c3d4e5f"),
+    "GET /api/orders by",
   );
   assert.equal(redact("yes, 08:30 PDT (session 3f2b1c9e-1a2b-4c3d-9e8f-0a1b2c3d4e5f), same cause"), "yes, 08:30 PDT, same cause");
-  assert.equal(redact("card 4111 1111 1111 1111 on /v1/loans/12345678/pay at 9/29"), "card on /v1/loans/pay at 9/29");
+  assert.equal(redact("card 4111 1111 1111 1111 on /v1/orders/12345678/pay at 9/29"), "card on /v1/orders/pay at 9/29");
 });
 
 test("redact removes links, ids and step citations without placeholders", () => {

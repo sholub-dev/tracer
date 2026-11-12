@@ -31,7 +31,6 @@ export function FindingCard({ card, revising = false, compact = false }: { card:
   const body = "text-[15px]/[1.6] text-ink-2 [overflow-wrap:anywhere]";
   return (
     <section
-      data-answer-card
       aria-label={label}
       className={cn(
         "rounded-[14px] border bg-card px-6 py-5 shadow-[0_1px_2px_rgb(0_0_0/0.05),0_8px_24px_rgb(0_0_0/0.08)] max-sm:px-4",

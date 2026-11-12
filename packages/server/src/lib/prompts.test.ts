@@ -102,18 +102,28 @@ test("prompts never let the agent claim an action or owner that no result shows"
   }
 });
 
-test("prompts tell the agent to report a finding in every turn that ran at least one query", () => {
+test("prompts make the finding card optional and keep its rules", () => {
   for (const [name, prompt] of allPrompts) {
-    assert.ok(prompt.includes("call `report_finding` once, alone in its step, in every turn that ran at least one query"), `${name}: missing report_finding rule`);
+    assert.ok(prompt.includes("Then call `report_finding` once, alone in its step. The card is the summary"), `${name}: missing report_finding rule`);
+    assert.ok(prompt.includes("A yes/no question, a simple lookup, a count, a short check or a follow-up gets a plain text answer: no card and no `begin_analysis`"), `${name}: missing text-answer rule`);
+    assert.ok(prompt.includes("Before a `root_cause` card, call the `begin_analysis` tool") && !prompt.includes("once in each reply that investigated"), `${name}: begin_analysis is not tied to the root-cause card`);
     assert.ok(prompt.includes("`root_cause` when the question asks why") && prompt.includes("`summary` for status"), `${name}: missing finding kinds`);
-    assert.ok(prompt.includes("Skip it only when no query ran"), `${name}: missing skip rule`);
-    assert.ok(prompt.includes("The card is the whole written answer") && prompt.includes("A statement no result shows is not in the explanation"), `${name}: missing explanation rule`);
+    assert.ok(!prompt.includes("every turn that ran at least one query") && !prompt.includes("Skip it only when no query ran"), `${name}: stale forced-card rule`);
+    assert.ok(prompt.includes("A statement no result shows is not in the explanation"), `${name}: missing explanation rule`);
     assert.ok(prompt.includes("never a query you can run yourself: run it before the card") || prompt.includes("or a query you can run yourself: run it before the card"), `${name}: unknown must not hold a runnable query`);
     assert.ok(prompt.includes("Each number appears once in the whole card"), `${name}: missing no-repeat rule`);
     assert.ok(prompt.includes("Do not run queries after the card"), `${name}: missing card-last rule`);
     for (const stale of ["Supporting visuals", "Nothing after the last visual", "Re-run queries here even if you already ran them", "`headline`", "`chain`"]) {
       assert.ok(!prompt.includes(stale), `${name}: stale rule "${stale}"`);
     }
+  }
+});
+
+test("prompts allow markdown tables and result blocks in the written answer", () => {
+  for (const [name, prompt] of allPrompts) {
+    assert.ok(!prompt.includes("never render data as markdown tables"), `${name}: stale table ban`);
+    assert.ok(prompt.includes("use a result block with the exact title of a query that succeeded in this reply: ```result"), `${name}: missing result block rule`);
+    assert.ok(prompt.includes("Exact values only."), `${name}: missing exact values rule`);
   }
 });
 
@@ -134,7 +144,7 @@ test("the evidence rule and the no-fixes principle each appear once in the assem
 test("the answer format names no provider query keyword, and the stale skip example is gone", () => {
   for (const [name, prompt] of allPrompts) {
     assert.ok(!/FACET|COMPARE WITH|TIMESERIES/.test(prompt.slice(prompt.indexOf("## Response Format"))), `${name}: provider keyword in the answer format`);
-    assert.ok(prompt.includes("a greeting, or a question answered from the conversation") && !prompt.includes("list my monitors"), `${name}: stale skip example`);
+    assert.ok(!prompt.includes("list my monitors"), `${name}: stale skip example`);
   }
 });
 

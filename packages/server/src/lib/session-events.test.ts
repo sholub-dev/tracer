@@ -27,3 +27,16 @@ test("sessionChanges ends at once when aborted while waiting", async () => {
   controller.abort();
   await done;
 });
+
+test("a subscriber that does not read holds each waiting session once", async () => {
+  const controller = new AbortController();
+  const gen = sessionChanges(controller.signal);
+  const first = gen.next();
+  await new Promise((r) => setTimeout(r, 0));
+  for (let i = 0; i < 5000; i++) sessionChanged(`s${i % 3}`);
+  const seen = [(await first).value as string];
+  for (let i = 0; i < 2; i++) seen.push((await gen.next()).value as string);
+  controller.abort();
+  assert.deepEqual(seen, ["s0", "s1", "s2"]);
+  assert.equal((await gen.next()).done, true);
+});

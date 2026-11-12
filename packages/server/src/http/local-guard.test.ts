@@ -55,6 +55,16 @@ describe("guardLocalRequests", () => {
     assert.equal(send("POST", "/api/v1/analyze", { ...json, origin: "http://localhost:5173" }).status, 200);
   });
 
+  it("requires the token from a same-host proxy on an exposed server", () => {
+    const via = (headers: Record<string, string>) =>
+      (guardLocalRequests(ok, "0.0.0.0", [], "s3cret")(new Request("http://x/api/trpc/settings.get", { headers }), env("127.0.0.1")) as Response).status;
+    assert.equal(via({ host: "localhost:3579" }), 200);
+    assert.equal(via({ host: "localhost:3579", "x-forwarded-for": "203.0.113.7" }), 401);
+    assert.equal(via({ host: "localhost:3579", forwarded: "for=203.0.113.7" }), 401);
+    assert.equal(via({ host: "tunnel.example" }), 401);
+    assert.equal(via({ host: "tunnel.example", authorization: "Bearer s3cret" }), 200);
+  });
+
   it("requires the bearer token on /api of an exposed server and leaves a loopback server alone", () => {
     const via = (bind: string, headers: Record<string, string>, token: string | null = "s3cret") =>
       (guardLocalRequests(ok, bind, [], token)(new Request("http://x/api/trpc/settings.get", { headers: { host: "192.168.1.5", ...headers } }), env("192.168.1.9")) as Response).status;

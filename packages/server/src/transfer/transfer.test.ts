@@ -7,10 +7,12 @@ import { appSettings, chatSessions, monitors, monitorTriggers, providerConfigs, 
 import { limits, MAX_SYNC_BYTES, MAX_UNPACKED_BYTES, randomSecret, seal, TooLargeError, unseal } from "./crypto.js";
 import { exportSnapshot, FORMAT, importSnapshot } from "./snapshot.js";
 import { exportSyncPayload } from "./sync.js";
-import { cancelReceive, inspectCopy, parseCopyLink, receiveCopy, receiveStatus, startReceive } from "./receive.js";
+import { cancelReceive, inspectCopy, parseCopyLink, receiveStatus, startReceive } from "./receive.js";
 import { approve, deny, sendStatus, startSend, stopSend } from "./send.js";
 import { getMark, getSetting } from "./peer.js";
 import { eq } from "drizzle-orm";
+
+const receiveCopy = async (...args: Parameters<typeof startReceive>) => (await startReceive(...args)).done;
 
 async function freshDb() {
   const { db, setupDriver } = createNodeDb(new Database(":memory:"));

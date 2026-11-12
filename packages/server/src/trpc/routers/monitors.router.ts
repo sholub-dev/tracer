@@ -41,7 +41,7 @@ export const monitorsRouter = router({
     .query(({ ctx, input }) => alertBrief(ctx.db, input.sessionId)),
 
   reorder: publicProcedure
-    .input(z.object({ ids: z.array(z.string()) }))
+    .input(z.object({ ids: z.array(z.string()).max(500) }))
     .mutation(async ({ ctx, input }) => {
       await runInTransaction(ctx.db, async (tx) => {
         for (const [i, id] of input.ids.entries()) await tx.update(monitors).set({ sortOrder: i }).where(eq(monitors.id, id)).run();

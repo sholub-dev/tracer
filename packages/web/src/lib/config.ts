@@ -21,16 +21,6 @@ export const WEB_CONFIG = {
   /** Reload anyway after this long without an answer from the restarted server. */
   updateRestartMaxWaitMs: 60_000,
 
-  /** Matches the sidebar's --sidebar-width. */
-  sidebarWidth: 280,
-  panelMinWidth: 260,
-  panelMaxWidthRatio: 0.8,
-
-  gridRows: 12,
-  gridCols: 12,
-  gridMinRowHeight: 20,
-  gridMargin: [8, 8] as [number, number],
-
   /** Streaming re-render cadence; 100ms reads as live while halving render work vs 50ms. */
   chatThrottleMs: 100,
   /** Wait before a live stream subscribes again after its connection ends. */

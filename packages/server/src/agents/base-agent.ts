@@ -1,6 +1,6 @@
 import { streamText, convertToModelMessages, hasToolCall, isStepCount, createUIMessageStream, toUIMessageStream, type UIMessage, type ToolSet } from "ai";
 import { and, eq, sql } from "drizzle-orm";
-import { CLIENT_TOOL_NAMES, DEFAULT_SESSION_TITLE, cardRejected, findingSchema, TOOL_NAMES, unixNow, splitAtAnalysis, mergeProgressPart, findingFromMessages, findingMarkdown, turnStart, type AfterCompleteParams, type ProgressPart, type TokenUsage } from "@tracer-sh/shared";
+import { CLIENT_TOOL_NAMES, DEFAULT_SESSION_TITLE, cardRejected, findingSchema, TOOL_NAMES, unixNow, splitAtAnalysis, mergeProgressPart, findingFromMessages, findingMarkdown, resultRefsToText, turnStart, type AfterCompleteParams, type ProgressPart, type TokenUsage } from "@tracer-sh/shared";
 import { chatSessions } from "../db/schema.js";
 import { sessionChanged } from "../lib/session-events.js";
 import { decodeMessages, encodeMessages } from "../lib/messages-codec.js";
@@ -123,6 +123,8 @@ export interface ChatAgentConfig {
   scope?: string;
   /** Marks a run a restart resumed, so a second interruption does not resume it again. */
   resumed?: boolean;
+  /** The run must end with a finding card: its last step forces the card, and a reply without one gets a repair pass. A chat run leaves the card to the agent. */
+  requireFinding?: boolean;
 }
 
 /**
@@ -216,13 +218,16 @@ export function owesFinding(toolNames: string[]): boolean {
 }
 
 /** The model cannot see its step count, so a deep investigation would spend the budget before its analysis and review. */
-export function budgetNote(stepNumber: number, maxSteps: number, toolNames: string[]): string | undefined {
+export function budgetNote(stepNumber: number, maxSteps: number, toolNames: string[], requireFinding: boolean): string | undefined {
   if (!owesFinding(toolNames)) return undefined;
   const reserve = Math.ceil(maxSteps / 10);
   if (stepNumber === maxSteps - 1) {
-    return "This is the last step. Call report_finding now from the results you have. State only what the results show, set the confidence label to match, and state in unknown the open why you did not reach.";
+    return requireFinding
+      ? "This is the last step. Call report_finding now from the results you have. State only what the results show, set the confidence label to match, and state in unknown the open why you did not reach."
+      : "This is the last step, and no query tools remain. Answer now from the results you have: in text, or with report_finding if this ends an investigation. State only what the results show, and name the open question you did not reach.";
   }
   if (reserve > 1 && stepNumber === maxSteps - reserve) {
+    if (!requireFinding) return `At this point ${reserve} steps remained in this reply. Finish the link you are on, then answer from the results you have.`;
     const analyzed = toolNames.includes(TOOL_NAMES.BEGIN_ANALYSIS);
     return `At this point ${reserve} steps remained in this reply. Finish the link you are on, ${analyzed ? "settle the challenges" : "call begin_analysis"}, then write the card. State the next open link in unknown.`;
   }
@@ -269,6 +274,8 @@ async function processLLMStream(
   final: boolean,
   /** Steps the reply held when the run began: a continued reply starts a fresh budget, a re-run attempt keeps spending the same one. */
   budgetFrom: number,
+  /** Whether the run must end with a finding card. */
+  requireFinding: boolean,
   /** The one extra pass that adds the finding card a finished turn still owes. */
   repair?: Owed,
 ): Promise<AttemptResult> {
@@ -394,10 +401,12 @@ async function processLLMStream(
   // `step` counts the steps of the reply since the run began, across re-run attempts.
   const toolsForStep = (step: number, steps: StepCalls) => {
     if (repair) return forceCard;
-    // The last step must carry the card, or a turn that spent its budget on queries ends without an answer.
+    // The last step must carry the answer, or a turn that spent its budget on queries ends on a tool call.
     if (step !== maxSteps - 1) return undefined;
     const names = [...turnToolNames(messages), ...stepToolNames(steps)];
-    return owesFinding(names) ? forceCard : undefined;
+    if (!owesFinding(names)) return undefined;
+    // A chat run may answer in text: only the query tools go, nothing is forced.
+    return requireFinding ? forceCard : { activeTools: [FINDING_TOOL] };
   };
   // Ends only this attempt (a silent stream), unlike serverAbort, which is a stop of the whole run.
   // Not AbortSignal.any: it needs iOS 17.4, and the app supports iOS 15. A stop of the run also ends the attempt.
@@ -429,7 +438,7 @@ async function processLLMStream(
         : undefined;
       lastStep = !!repair || step >= maxSteps - 1;
       const forTools = canReport ? toolsForStep(step, steps) : undefined;
-      const note = canReport && !repair ? budgetNote(step, maxSteps, [...turnToolNames(messages), ...stepToolNames(steps)]) : undefined;
+      const note = canReport && !repair ? budgetNote(step, maxSteps, [...turnToolNames(messages), ...stepToolNames(steps)], requireFinding) : undefined;
       const withNote = note ? { messages: [...(added?.messages ?? stepMessages), harnessNote(note)] } : added;
       return { messages: stepMessages, ...withNote, ...forTools };
     },
@@ -535,7 +544,7 @@ async function processLLMStream(
 
           const title = sessionTitle(enrichedMessages);
           // A stopped or failed reply gets no repair pass. While one is owed the row stays "streaming"; finalizeSession writes "done".
-          const owesCard = !settled && !failed && !serverAbort.signal.aborted && canReport && !repair && owesFinding(turnToolNames(enrichedMessages));
+          const owesCard = !settled && !failed && !serverAbort.signal.aborted && canReport && requireFinding && !repair && owesFinding(turnToolNames(enrichedMessages));
           const now = unixNow();
           const packed = encodeMessages([...enrichedMessages, ...(steer?.steered ?? [])]);
 
@@ -568,9 +577,10 @@ async function processLLMStream(
             let lastAssistantText = "";
             for (let i = enrichedMessages.length - 1; i >= 0; i--) {
               const msg = enrichedMessages[i];
-              const text = msg.parts.find((p: { type: string }) => p.type === "text");
+              // The last text part of a reply is its answer; the first can be a note before a tool call.
+              const text = (msg.role === "assistant" ? msg.parts.filter((p: { type: string }) => p.type === "text").at(-1) : msg.parts.find((p: { type: string }) => p.type === "text"));
               if (msg.role === "assistant" && !lastAssistantText && text) {
-                lastAssistantText = (text as { text: string }).text;
+                lastAssistantText = resultRefsToText((text as { text: string }).text);
               } else if (msg.role === "user" && !lastUserText && text) {
                 lastUserText = (text as { text: string }).text;
               }
@@ -695,6 +705,7 @@ async function processLLMStream(
     console.warn(`[chat] Stream error for ${sessionId}:`, err);
     failure ??= err;
   } finally {
+    serverAbort.signal.removeEventListener("abort", onRunAbort);
     reader.releaseLock();
     readDone();
   }
@@ -724,7 +735,7 @@ async function processLLMStream(
 }
 
 export async function runChatAgent({
-  sessionId, messages: incoming, summary, summaryUpTo, context, collectTools, sessionTitle, retryDelaysMs = [], onFailed, scope, resumed,
+  sessionId, messages: incoming, summary, summaryUpTo, context, collectTools, sessionTitle, retryDelaysMs = [], onFailed, scope, resumed, requireFinding = false,
 }: ChatAgentConfig) {
   const messages = stampSentTime(incoming, await getCurrentTimeText(context.db));
   const resolved = await resolveModel(context.db);
@@ -791,7 +802,7 @@ export async function runChatAgent({
       const { error, transient, checkpoint, owed } = await processLLMStream(
         sessionId, history, context, broadcaster, serverAbort,
         collectTools, sessionTitle, model, provider, modelId, providerOptions,
-        { summary, summaryUpTo }, final, budgetFrom,
+        { summary, summaryUpTo }, final, budgetFrom, requireFinding,
       ).catch(attemptFailed(final));
       if (error === undefined) {
         if (!owed) break;
@@ -799,7 +810,7 @@ export async function runChatAgent({
         const repaired = await processLLMStream(
           sessionId, owed.messages, context, broadcaster, serverAbort,
           collectTools, sessionTitle, model, provider, modelId, providerOptions,
-          { summary, summaryUpTo }, false, 0, owed,
+          { summary, summaryUpTo }, false, 0, requireFinding, owed,
         ).catch(attemptFailed(false));
         if (repaired.error !== undefined) {
           console.warn(`[chat] Finding pass for ${sessionId} failed:`, repaired.error);

@@ -44,3 +44,19 @@ test("extractAnalysis reads the reply a steered message trails", () => {
   const reply = msg([marker, findingCall(finding), { type: "text", text: "Details" }]);
   assert.equal(extractAnalysis([user, reply, steered]).analysis, extractAnalysis([user, reply]).analysis);
 });
+
+test("extractAnalysis returns a text answer with its queries and turns result blocks into references", () => {
+  const user = { id: "", role: "user", parts: [{ type: "text", text: "count?" }] } as unknown as UIMessage;
+  const query = { type: "tool-execute_nrql", toolCallId: "q", state: "output-available", input: { query: "SELECT 1" }, output: { parts: [{ query: "SELECT 1", results: [{ n: 1 }] }], analysis: "n = 1" } };
+  const out = extractAnalysis([user, msg([query, { type: "text", text: "One.\n\n```result\nCount\n```" }])]);
+  assert.equal(out.analysis, "One.\n\n[Chart: Count]");
+  assert.deepEqual(out.queries.map((q) => q.query), ["SELECT 1"]);
+});
+
+test("extractAnalysis keeps a text answer that a later tool call follows", () => {
+  const user = { id: "", role: "user", parts: [{ type: "text", text: "count?" }] } as unknown as UIMessage;
+  const query = { type: "tool-execute_nrql", toolCallId: "q", state: "output-available", input: { query: "SELECT 1" }, output: { parts: [{ query: "SELECT 1", results: [{ n: 1 }] }] } };
+  const timer = { type: "tool-schedule_followup", toolCallId: "t", state: "output-available", input: {}, output: {} };
+  const out = extractAnalysis([user, msg([{ type: "text", text: "Checking." }, query, { type: "text", text: "One." }, timer])]);
+  assert.equal(out.analysis, "One.");
+});

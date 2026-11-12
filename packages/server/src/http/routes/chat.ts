@@ -31,8 +31,22 @@ async function replyWithRun(c: HonoContext, start: () => Promise<RunResult | Res
   }
 }
 
+// Ids that start with "__" belong to server-owned sessions (monitors, the removed dashboard builder).
+const anySessionId = z.string().min(1);
+const chatSessionId = anySessionId.refine((id) => !id.startsWith("__"), "reserved session id");
+
+const chatBody = z.object({
+  id: chatSessionId,
+  message: z.looseObject({ role: z.string(), parts: z.array(z.unknown()) }),
+  activeProvider: z.string().optional(),
+});
+
+const monitorChatBody = chatBody.extend({ id: anySessionId });
+
+const stopBody = z.object({ sessionId: anySessionId });
+
 const steerBody = z.object({
-  sessionId: z.string().min(1),
+  sessionId: anySessionId,
   message: z.object({
     id: z.string().min(1).optional(),
     metadata: z.object({ steered: z.boolean().optional() }).optional(),
@@ -42,7 +56,10 @@ const steerBody = z.object({
 
 export function registerChatRoutes(app: Hono, context: Context): void {
   app.post("/api/chat", async (c) => {
-    const { id, message, activeProvider } = await c.req.json<{ id: string; message: UIMessage; activeProvider?: string }>();
+    const body = chatBody.safeParse(await c.req.json().catch(() => undefined));
+    if (!body.success) return c.text("Invalid chat request", 400);
+    const { id, activeProvider } = body.data;
+    const message = body.data.message as unknown as UIMessage;
     return replyWithRun(c, async () => {
       if (context.activeStreams.has(id)) return c.text(SESSION_BUSY, 409);
       const { messages, summary, summaryUpTo } = await loadSessionMessages(context.db, id, message);
@@ -67,8 +84,11 @@ export function registerChatRoutes(app: Hono, context: Context): void {
   });
 
   app.post("/api/monitor-chat", async (c) => {
-    const { id: sessionId, message } = await c.req.json<{ id?: string; message: UIMessage }>();
-    if (typeof sessionId !== "string" || !sessionId.startsWith(SESSION_PREFIX.MONITORS)) {
+    const body = monitorChatBody.safeParse(await c.req.json().catch(() => undefined));
+    if (!body.success) return c.text("Invalid chat request", 400);
+    const sessionId = body.data.id;
+    const message = body.data.message as unknown as UIMessage;
+    if (!sessionId.startsWith(SESSION_PREFIX.MONITORS)) {
       return c.text(`Monitor chat id must start with ${SESSION_PREFIX.MONITORS}`, 400);
     }
     return replyWithRun(c, async () => {
@@ -86,7 +106,9 @@ export function registerChatRoutes(app: Hono, context: Context): void {
 
   // Stop an active stream by session ID
   app.post("/api/chat/stop", async (c) => {
-    const { sessionId } = await c.req.json<{ sessionId: string }>();
+    const body = stopBody.safeParse(await c.req.json().catch(() => undefined));
+    if (!body.success) return c.text("Invalid stop request", 400);
+    const { sessionId } = body.data;
     const active = context.activeStreams.get(sessionId);
     if (!active) return c.json({ stopped: false });
     active.controller.abort();

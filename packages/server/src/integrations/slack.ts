@@ -3,7 +3,7 @@ import type { Db } from "../db/driver.js";
 import { appSettings } from "../db/schema.js";
 import { fetchWithRetry } from "../lib/fetch-retry.js";
 import { formatLocalTime } from "../lib/current-context.js";
-import type { Finding } from "@tracer-sh/shared";
+import { resultRefsToText, type Finding } from "@tracer-sh/shared";
 import { type AlertSummary } from "../monitors/alert-summary.js";
 import { readAppSetting, writeAppSetting } from "../db/config-reader.js";
 
@@ -65,7 +65,7 @@ export function redact(text: string): string {
     .replace(/https?:\/\/\S+/g, "")
     // A bare host needs a slash after the TLD, so "app.ts", "v1.2" and "end.Next" stay.
     .replace(/(?<![\w/@.-])(?:[a-z0-9-]+\.)+[a-z]{2,}\/\S*/gi, "")
-    .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, "[email]")
+    .replace(/(?<![\w.+-])[\w.+-]+@[\w-]+\.[\w.-]+/g, "[email]")
     .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, "[ip]")
     // A hex letter is required so times like 15:41:47 stay.
     .replace(/\b(?=[\d:]*[a-f])(?:[0-9a-f]{1,4}:){3,7}[0-9a-f]{1,4}\b/gi, "[ip]")
@@ -115,7 +115,7 @@ export const clip = (s: string, max: number) => {
   return `${space > 0 ? cut.slice(0, space) : cut} …`;
 };
 // Redact before clipping: a cut value may no longer match the redact patterns.
-const tidy = (s: string, max = DETAIL_MAX_CHARS) => clip(redact(s.replace(/\*\*|`/g, "").replace(/^[ \t]*[-*][ \t]+/gm, "• ").trim()), max);
+const tidy = (s: string, max = DETAIL_MAX_CHARS) => clip(redact(resultRefsToText(s).replace(/\*\*|`/g, "").replace(/^[ \t]*[-*][ \t]+/gm, "• ").trim()), max);
 export const known = (s: string) => (/^(none|unknown|n\/a)(?![a-z0-9])/i.test(s) ? "" : s);
 
 export interface Verdict {
@@ -234,7 +234,7 @@ export function triageUpdate(u: { name: string; action: string; ping: boolean; m
 
 /** Post for free text from the agent: redacted and escaped, so it carries no link, id or mention. */
 export function messagePost(text: string): SlackPayload | null {
-  const body = clip(escape(redact(text)), SECTION_MAX_CHARS);
+  const body = clip(escape(redact(resultRefsToText(text))), SECTION_MAX_CHARS);
   return body ? { text: body, blocks: [{ type: "section", text: { type: "mrkdwn", text: body } }] } : null;
 }
 

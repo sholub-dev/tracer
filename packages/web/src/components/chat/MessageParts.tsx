@@ -1,18 +1,17 @@
 import React from "react";
 import type { UIMessage } from "ai";
-import { Download, FileText, Loader2 } from "lucide-react";
+import { Download, FileText } from "lucide-react";
 import { ANALYSIS_MARKER, findAnalysisMarker, findingSources } from "@tracer-sh/shared";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { Markdown } from "../../lib/markdown";
+import { Markdown, ResultLookupProvider } from "../../lib/markdown";
 import type { ProgressStore } from "../../lib/progress-store";
 import type { AskState } from "../../lib/ask-card";
 import { AskCard } from "./AskCard";
 import { FindingCard } from "./FindingCard";
 import { ReasoningBlock } from "./ReasoningBlock";
-import { Narration, OtherToolPart, ProviderStep, isAskPart, isHiddenPart, isMonitorTool, isProviderTool, providerOf, stepQueryCount, type ToolPart } from "./ToolParts";
-import { providerLabel } from "../../lib/providers";
+import { OtherToolPart, ProviderStep, ResultCard, isAskPart, isHiddenPart, isProviderTool, resultLookup, type ToolPart } from "./ToolParts";
 import { latestCard, matchSources } from "../../lib/finding-card";
 import { ANSWER_PROSE, ANSWER_PROSE_COMPACT } from "./prose";
 
@@ -51,7 +50,7 @@ export function FileAttachment({ part, className }: { part: FilePartLike; classN
             {isImage ? (
               <img src={part.url} alt={label} className="max-h-full max-w-full object-contain" />
             ) : (
-              <iframe src={part.url} title={label} className="size-full rounded-md border bg-card" />
+              <iframe src={part.url} sandbox={part.url.startsWith("data:application/pdf") ? undefined : ""} title={label} className="size-full rounded-md border bg-card" />
             )}
           </div>
         </DialogContent>
@@ -83,136 +82,110 @@ interface Props {
 
 const sameAsk = (a?: AskState, b?: AskState) => a?.status === b?.status && (a as { chosen?: number | null } | undefined)?.chosen === (b as { chosen?: number | null } | undefined)?.chosen;
 
-/** One reply: the provider work folds into an "Investigated" section, the answer reads as prose below it. */
+interface Entry {
+  key: string;
+  node: React.ReactNode;
+  /** A step joins the run of steps around it in one list; text, files and the card stand on their own. */
+  step?: boolean;
+}
+
+// A group is keyed by its first part and only ever grows at its end, so a part that arrives later never changes what rendered before it.
+function flow(entries: Entry[]): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  let group: Entry[] = [];
+  const flush = () => {
+    if (group.length) out.push(<ol key={`g${group[0].key}`} className="space-y-3">{group.map((e) => e.node)}</ol>);
+    group = [];
+  };
+  for (const entry of entries) {
+    if (entry.step) group.push(entry);
+    else {
+      flush();
+      out.push(entry.node);
+    }
+  }
+  flush();
+  return out;
+}
+
+/** One reply, rendered in the order its parts arrive: text, steps and the card each stay where they appeared. */
 export const MessageParts = React.memo(
   function MessageParts({ parts, isAnimating, progressStore, compact = false, ask = CLOSED, onAsk }: Props) {
     if (parts.length === 0 && !isAnimating) {
       return <p className="text-sm text-muted-foreground">Interrupted before a reply.</p>;
     }
 
-    // The analysis marker splits work from answer; without one, the answer starts at the finding card, else after the last query.
     const marker = findAnalysisMarker(parts);
-    const findingIdx = parts.findIndex((p) => p.type === "tool-report_finding");
-    const lastCardIdx = parts.findLastIndex((p) => p.type === "tool-report_finding");
-    let workEnd = 0;
-    if (marker) workEnd = marker.partIdx;
-    else if (findingIdx !== -1) workEnd = findingIdx;
-    else parts.forEach((p, i) => { if (isProviderTool(p.type)) workEnd = i + 1; });
-
-    const work: Array<{ part: Part; key: string; text?: string }> = [];
-    const answer: Array<{ part: Part; key: string; text?: string }> = [];
-    const aside: Array<{ part: Part; key: string }> = [];
-    parts.forEach((part, i) => {
-      if (isHiddenPart(part as ToolPart) || isAskPart(part.type)) return;
-      if (marker && i === marker.partIdx) {
-        if (marker.kind === "text" && part.type === "text") {
-          work.push({ part, key: `${i}`, text: part.text.slice(0, marker.charIdx) });
-          answer.push({ part, key: `${i}-after`, text: part.text.slice(marker.charIdx + ANALYSIS_MARKER.length) });
-        }
-        return;
-      }
-      // The card is the answer; text after it would repeat it.
-      if (lastCardIdx !== -1 && i > lastCardIdx && part.type === "text") work.push({ part, key: `${i}` });
-      // Reasoning is work, never part of the Analysis box.
-      else if (i >= workEnd && part.type === "reasoning") {
-        if (!marker) work.push({ part, key: `${i}` });
-      } else if (i >= workEnd) answer.push({ part, key: `${i}` });
-      else if (part.type === "file" || isMonitorTool(part.type)) aside.push({ part, key: `${i}` });
-      else work.push({ part, key: `${i}` });
-    });
-
-    const steps = work.filter((w) => isProviderTool(w.part.type));
-    const running = isAnimating && answer.length === 0;
-
-    const renderWork = ({ part, key, text }: (typeof work)[number]) => {
-      if (part.type === "text") return <li key={key}><Narration content={text ?? part.text} isAnimating={isAnimating} /></li>;
-      if (part.type === "reasoning") return <li key={key}><ReasoningBlock content={part.text} isAnimating={isAnimating} streaming={isAnimating && part.state === "streaming"} /></li>;
-      if (isProviderTool(part.type)) return <ProviderStep key={key} part={snapshot(part)} progressStore={progressStore} isAnimating={isAnimating} />;
-      return <li key={key}><OtherToolPart part={snapshot(part)} isAnimating={isAnimating} /></li>;
-    };
-
-    const renderAnswer = ({ part, key, text }: (typeof answer)[number]) => {
-      if (part.type === "text") return <AnswerText key={key} text={text ?? part.text} isAnimating={isAnimating} compact={compact} />;
-      if (part.type === "reasoning") return <ReasoningBlock key={key} content={part.text} isAnimating={isAnimating} streaming={isAnimating && part.state === "streaming"} />;
-      if (part.type === "file") return <FileAttachment key={key} part={part as FilePartLike} />;
-      if (isProviderTool(part.type)) {
-        return (
-          <ol key={key}>
-            <ProviderStep part={snapshot(part)} progressStore={progressStore} isAnimating={isAnimating} />
-          </ol>
-        );
-      }
-      return <OtherToolPart key={key} part={snapshot(part)} isAnimating={isAnimating} />;
-    };
-
+    const cardIdx = parts.findIndex((p) => p.type === "tool-report_finding");
     const asked = parts.findLast((p) => isAskPart(p.type)) as ToolPart | undefined;
     const live = latestCard(parts, isAnimating);
-    const card = live && <FindingCard key="finding" card={live.card} revising={live.revising} compact={compact} />;
+    const stepParts = parts.filter((p) => isProviderTool(p.type)) as ToolPart[];
+    // Sources show once the card has finished streaming, so the list does not grow while the card does.
     const streamingCard = parts.some((p) => p.type === "tool-report_finding" && (p as ToolPart).state === "input-streaming");
     const sources = live && !streamingCard ? findingSources(live.card) : [];
-    const stepParts = parts.filter((p) => isProviderTool(p.type)) as ToolPart[];
     const matched = matchSources(sources, stepParts);
     const evidence = sources.length > 0 && (
-      <section key="evidence" aria-label="Evidence" className="space-y-3">
+      <section aria-label="Evidence" className="space-y-3">
         <p className="text-[11px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">Evidence</p>
         <ol className="space-y-3">
-          {sources.map((title, i) => (matched[i] ? (
-            <ProviderStep key={title.toLowerCase()} part={{ ...matched[i]! }} progressStore={progressStore} isAnimating={isAnimating} evidence />
-          ) : (
-            <li key={title.toLowerCase()} className="rounded-xl border bg-card p-4 text-sm font-medium text-foreground shadow-sm [overflow-wrap:anywhere]">
-              {title}
-            </li>
-          )))}
+          {sources.map((title, i) => {
+            const part = matched[i];
+            return (
+              <li key={title.toLowerCase()}>
+                {part ? <ResultCard part={part} /> : <p className="rounded-xl border bg-card p-4 text-sm font-medium text-foreground shadow-sm [overflow-wrap:anywhere]">{title}</p>}
+              </li>
+            );
+          })}
         </ol>
       </section>
     );
 
-    let investigation: React.ReactNode = null;
-    if (steps.length > 0) {
-      const providers = [...new Set(steps.map((s) => providerLabel(providerOf(s.part.type))))].join(", ");
-      const queries = steps.reduce((n, s) => n + stepQueryCount(s.part as ToolPart, progressStore), 0);
-      const label = [running ? "Investigating" : "Investigated", providers, queries > 0 && `${queries} ${queries === 1 ? "query" : "queries"}`]
-        .filter(Boolean)
-        .join(" · ");
-      investigation = (
-        <div>
-          <p className="inline-flex max-w-full items-center gap-1.5 py-1 text-[13px]/[18px] text-muted-foreground">
-            {running && <Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />}
-            <span className="min-w-0 truncate">{label}</span>
-          </p>
-          <ol className="mt-2 space-y-3">{work.map(renderWork)}</ol>
-        </div>
-      );
-    } else if (work.length > 0) {
-      investigation = <ol className="space-y-3">{work.map(renderWork)}</ol>;
-    }
+    const before: Entry[] = [];
+    const inside: Entry[] = [];
+    let target = before;
+    const text = (key: string, value: string) => ({ key, node: <AnswerText key={key} text={value} isAnimating={isAnimating} compact={compact} /> });
+    parts.forEach((part, i) => {
+      const key = `${i}`;
+      if (marker && i === marker.partIdx) {
+        if (marker.kind === "text" && part.type === "text") {
+          before.push(text(key, part.text.slice(0, marker.charIdx)));
+          inside.push(text(`${key}-after`, part.text.slice(marker.charIdx + ANALYSIS_MARKER.length)));
+        }
+        target = inside;
+        return;
+      }
+      if (i === cardIdx && live) {
+        target.push({ key, node: <React.Fragment key={key}><FindingCard card={live.card} revising={live.revising} compact={compact} />{evidence}</React.Fragment> });
+        return;
+      }
+      if (isHiddenPart(part as ToolPart) || isAskPart(part.type)) return;
+      if (part.type === "text") target.push(text(key, part.text));
+      else if (part.type === "reasoning") target.push({ key, step: true, node: <li key={key}><ReasoningBlock content={part.text} isAnimating={isAnimating} /></li> });
+      else if (part.type === "file") target.push({ key, node: <FileAttachment key={key} part={part as FilePartLike} /> });
+      else if (isProviderTool(part.type)) target.push({ key, step: true, node: <ProviderStep key={key} part={snapshot(part)} progressStore={progressStore} isAnimating={isAnimating} /> });
+      else if (part.type.startsWith("tool-")) target.push({ key, step: true, node: <li key={key} className="empty:hidden"><OtherToolPart part={snapshot(part)} isAnimating={isAnimating} /></li> });
+    });
 
     return (
-      <div className={cn("space-y-4", compact && "space-y-3")}>
-        {investigation}
-        {aside.map(({ part, key }) => (part.type === "file" ? <FileAttachment key={key} part={part as FilePartLike} /> : <OtherToolPart key={key} part={snapshot(part)} isAnimating={isAnimating} />))}
-        {card || (marker && answer.length > 0) ? (
-          <section
-            aria-label="Analysis"
-            // On a phone the box runs edge to edge, so the cards inside are as wide as the chat input.
-            className={cn(
-              "space-y-4 rounded-lg border border-primary/20 bg-primary-tint px-5 py-4",
-              compact ? "space-y-3 px-4 py-3" : "max-sm:-mx-4 max-sm:rounded-none max-sm:border-x-0 max-sm:px-4",
-            )}
-          >
-            {card}
-            {evidence}
-            {answer.map(renderAnswer)}
-          </section>
-        ) : (
-          <>
-            {card}
-            {evidence}
-            {answer.map(renderAnswer)}
-          </>
-        )}
-        {asked && <AskCard input={asked.input} state={isAnimating ? CLOSED : ask} onPick={onAsk} compact={compact} />}
-      </div>
+      <ResultLookupProvider value={resultLookup(stepParts)}>
+        <div className={cn("space-y-4", compact && "space-y-3")}>
+          {flow(before)}
+          {inside.length > 0 && (
+            <section
+              key="analysis"
+              aria-label="Analysis"
+              // On a phone the box runs edge to edge, so the cards inside are as wide as the chat input.
+              className={cn(
+                "space-y-4 rounded-lg border border-primary/20 bg-primary-tint px-5 py-4",
+                compact ? "space-y-3 px-4 py-3" : "max-sm:-mx-4 max-sm:rounded-none max-sm:border-x-0 max-sm:px-4",
+              )}
+            >
+              {flow(inside)}
+            </section>
+          )}
+          {asked && <AskCard input={asked.input} state={isAnimating ? CLOSED : ask} onPick={onAsk} compact={compact} />}
+        </div>
+      </ResultLookupProvider>
     );
   },
   (prev, next) => {

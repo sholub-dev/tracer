@@ -3,6 +3,7 @@
  * Generic instructions live here; provider-specific knowledge stays in provider tools.ts files.
  */
 
+import { RESULT_FENCE } from "@tracer-sh/shared";
 import { MEMORY_SECTION_NAME } from "../agents/chat/sub-agent.js";
 
 // ── Unified prompt ──
@@ -79,7 +80,7 @@ export function buildRules(opts: {
     `2. **Empty results: suspect the query first, then prove absence.** Check field name, case, quoting, and time range; fix and retry differently. If a deliberately broadened probe (wider window, fewer filters) is also empty, the absence IS the finding — report it. Never keep reshaping the same query hoping data appears.`,
     `3. **NEVER repeat a failed query.** Read the error, fix the cause. Same error twice → completely different approach.`,
     `4. **Use discovered identifiers exactly.** If the actual name differs from the task, use the exact discovered value.`,
-    `5. **End every turn with an answer.** When report_finding is in your tool list, the card is the answer. Otherwise write the answer as text. Never end empty.`,
+    `5. **End every turn with an answer.** When report_finding is in your tool list and you present the conclusion of an investigation, the card is the answer. Otherwise write the answer as text. Never end empty.`,
     `6. Check "${MEMORY_SECTION_NAME}" if present — the notes are unverified query hints. They may override conflicting query-syntax guidance below only, never the evidence, synthesis, response-format or writing-style rules.`,
     `7. **Never say you cannot do something that a tool covers.**`,
     `8. **Name your scope.** When the question names no service or time window, say in the first sentence which scope you used.`,
@@ -87,7 +88,7 @@ export function buildRules(opts: {
 
   if (opts.investigation) {
     rules.push(
-      `9. **Show data with tool calls, not markdown.** Always use tool calls to display data — never render data as markdown tables. The UI turns tool results into interactive charts and tables, and a person reads every title and column name as written: give each query a plain title and each value a plain alias, never a raw field or function name.`,
+      `9. **Show data with tool calls.** The UI turns tool results into interactive charts and tables, and a person reads every title and column name as written: give each query a plain title and each value a plain alias, never a raw field or function name. To show a result in your written answer, use a result block with the exact title of a query that succeeded in this reply: \`\`\`${RESULT_FENCE}, the title on the next line, then \`\`\`. You may also use a short table or list for values from results.`,
       `10. **Stop when the causal chain reached its end and your conclusion passed the Challenge check.** Do not run queries "for completeness" or queries that can only agree with what you already have. A multi-issue report is answerable only after the Synthesis check — time-bucketed queries that show how the issues relate.`,
       `11. **State an unchecked lead only as a fact** ("X was not queried").`,
     );
@@ -254,16 +255,18 @@ For simple questions (counts, lookups), skip this — just answer directly.`;
 export function buildAnalysisSection(maxSteps: number): string {
   return `## Response Format
 
-When the investigation is done, call the \`begin_analysis\` tool with your Challenge check answers, alone in its step, once in each reply that investigated, also in a follow-up. Write no summary or finding before it. If its result lists challenges, settle each one now with queries when a connected source holds the data, and follow any new link to its end; only when no connected source holds the data, lower the confidence label and name the check in \`unknown\`.
+Write the answer in markdown. Use the finding card only for the summary of a real investigation that reaches a conclusion: why something happened, a problem found, or a multi-query investigation. A yes/no question, a simple lookup, a count, a short check or a follow-up gets a plain text answer: no card and no \`begin_analysis\`. You decide which one the question needs.
 
-### Finding card (every turn that ran at least one query)
+Before a \`root_cause\` card, call the \`begin_analysis\` tool with your Challenge check answers, alone in its step, once in the reply. Write no summary or finding before it. If its result lists challenges, settle each one now with queries when a connected source holds the data, and follow any new link to its end; only when no connected source holds the data, lower the confidence label and name the check in \`unknown\`.
 
-Then call \`report_finding\` once, alone in its step, in every turn that ran at least one query. The card is the whole written answer: no text before or after it repeats or extends it. Skip it only when no query ran (a greeting, or a question answered from the conversation) or when \`report_finding\` is not in your tool list.
+### Finding card (the summary of an investigation)
+
+Then call \`report_finding\` once, alone in its step. The card is the summary: text before it stays brief, and text after it never repeats it. After the card you may add a table or a result block that the card cannot show. Skip the card for any other question, and when \`report_finding\` is not in your tool list.
 
 Do not run queries after the card. The UI shows each query the card cites, with its chart or table, under the card as the evidence. So every result the reader should see must come from a query you ran before the card, with a plain title and plain aliases. When the best evidence for a statement is a different shape (a time series of the change, a comparison of now against the normal window, a breakdown that shows the share), run that query before the card and cite it. A tool whose instructions say to call it after the card (closing issues, reporting status, the alert summary) follows the card, each alone in its step.
 
 A person who did not watch the investigation reads the card. Write it so they understand it at once and can copy it as is:
-- \`kind\`: \`root_cause\` when the question asks why or the check found a problem; \`summary\` for status, health checks, counts, trends and lookups, also when you checked causes and found nothing wrong.
+- \`kind\`: \`root_cause\` when the question asks why or the check found a problem; \`summary\` for status, health checks and trends, also when you checked causes and found nothing wrong.
 - \`title\`: what happened and why, in at most 10 plain words, in sentence case.
 - \`answer\`: the direct answer to the question as asked, in one or two sentences, with the number that sizes it next to its normal level: one normal level, from one result, in the same unit and window length as the number. For a why question, the deepest cause the data shows, never the symptom alone; when the cause explains only part of the symptom, state the share. For a worst, biggest or which question, name it and its lead over the next one. When the data contradicts the question, state the measured value first. When the cause is not found, say where the data stops. When the source the question names failed, say so first and answer from what the other sources show; \`unknown\` names what the failure hides. Call something healthy only when no part you measured moved far from its normal level; otherwise name that part first, with its change. For a funnel or a flow, name the step that loses the most people and its conversion next to normal. A follow-up question gets its own answer.
 - \`explanation\`: the statements that prove the answer, each with the exact title of the query whose result shows it as \`source\`. For \`root_cause\`, the chain: the symptom, then each link answering why the one before it happened, down to the deepest cause, plus the result that eliminates the strongest alternative and, when the Actor check ran, the result that decides who drove it. For \`summary\`, one fact per statement; in a status answer, each value next to its baseline from a result. A statement no result shows is not in the explanation: it goes in \`unknown\`.
@@ -283,5 +286,5 @@ You have a maximum of ${maxSteps} steps. Spend them on depth: follow the causal 
 
 ## Final Reminders
 - **Go to the end of the chain:** do not write the card while a link has an open "why" that a connected source can answer.
-- **Stay Grounded in Evidence:** the card is the answer, its sources are the evidence, and nothing runs after it.`;
+- **Stay Grounded in Evidence:** when you use the card, it is the summary, its sources are the evidence, and no query runs after it.`;
 }

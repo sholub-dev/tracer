@@ -101,7 +101,6 @@ export function AppSidebar({
           currentSessionId={currentPage === "debug" ? currentSessionId : null}
           onSelectSession={openSession}
           onDeleted={onDeleted}
-          onImported={openSession}
         />
       </SidebarContent>
 

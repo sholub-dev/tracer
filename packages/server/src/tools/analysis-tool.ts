@@ -105,7 +105,7 @@ export function createBeginAnalysisTool(
 ): Tool<Ledger, AnalysisOutput> {
   return tool({
     description:
-      "Call this tool when you are ready to present your findings. Fill in the ledger from the results you have. The tool checks it and may return challenges to settle in your report. This marks the start of your analysis section. Everything you write after calling this tool will be displayed with distinct analysis styling.",
+      "Call this tool before a root_cause card, when you are ready to present the conclusion of an investigation. A text answer or a summary card needs no call. Fill in the ledger from the results you have. The tool checks it and may return challenges to settle in your report. This marks the start of your analysis section. Everything you write after calling this tool will be displayed with distinct analysis styling.",
     inputSchema: ledgerSchema,
     execute: async (input, options): Promise<AnalysisOutput> => {
       const challenges = challengeLedger(input);

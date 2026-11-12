@@ -5,9 +5,6 @@ import { fileURLToPath } from "node:url";
 import { isNewerVersion } from "@tracer-sh/shared";
 import { CONFIG } from "./config.js";
 
-/** Exit code that signals the launcher to restart the server after an update. */
-export const RESTART_EXIT_CODE = CONFIG.restartExitCode;
-
 /**
  * How this instance of tracer-sh is running, which determines how we upgrade it:
  * - `global`: installed via `npm install -g tracer-sh`. Re-running the install

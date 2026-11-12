@@ -205,8 +205,8 @@ export class JiraClient {
     return {
       id,
       url: id
-        ? `${this.baseUrl}/browse/${key}?focusedCommentId=${id}`
-        : `${this.baseUrl}/browse/${key}`,
+        ? `${this.baseUrl}/browse/${encodeURIComponent(key)}?focusedCommentId=${id}`
+        : `${this.baseUrl}/browse/${encodeURIComponent(key)}`,
     };
   }
 }

@@ -16,7 +16,7 @@ const dbPath = join(dataDir, "tracer.db");
 // An empty file (created on open, never written) holds no data, so it does not block key generation.
 const plaintext = isPlaintext(dbPath);
 const hasEncryptedDb = !plaintext && existsSync(dbPath) && statSync(dbPath).size > 0;
-const keyHex = resolveDbKey(TRACER_HOME, { hasEncryptedDb });
+const { key: keyHex, finishMigration } = resolveDbKey(TRACER_HOME, { hasEncryptedDb });
 
 // Detection-driven, one-time migration: a plaintext DB left by a pre-encryption
 // version is converted in place on the first boot of the encrypted build. Fresh
@@ -28,6 +28,8 @@ if (plaintext) {
 export const sqlite: DatabaseType = new Database(dbPath);
 applyKey(sqlite, keyHex); // must precede every other statement on this connection
 sqlite.pragma("journal_mode = WAL");
+sqlite.prepare("SELECT count(*) FROM sqlite_master").get(); // throws if the key is wrong
+finishMigration?.();
 // NORMAL skips the per-commit WAL fsync; with WAL a crash can lose the last
 // commit but never corrupts the database.
 sqlite.pragma("synchronous = NORMAL");

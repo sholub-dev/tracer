@@ -1,4 +1,4 @@
-import { memo, useRef, type ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import type { UIMessage } from "ai";
 import { Bell, FileText, Timer } from "lucide-react";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
@@ -8,7 +8,7 @@ import type { ProgressStore } from "../../lib/progress-store";
 import { formatTime } from "../../lib/format";
 import { FoldTrigger } from "../common/FoldTrigger";
 import { FileAttachment, MessageParts } from "./MessageParts";
-import { MessageActions, extractMessageText, type SourceMeta } from "./MessageActions";
+import { MessageActions, extractMessageText } from "./MessageActions";
 
 export const POST_MORTEM_PROMPT = `Generate a Post-Mortem Report for this investigation session.
 
@@ -106,13 +106,11 @@ interface MessageViewProps extends MessageViewOptions {
   isAnimating: boolean;
   progressStore: ProgressStore;
   compact?: boolean;
-  meta?: SourceMeta;
   ask?: AskState;
   onAsk?: (label: string) => void;
 }
 
-export const MessageView = memo(function MessageView({ msg, isAnimating, progressStore, compact = false, meta, ask, onAsk, actions, showActions = !isAnimating, body, dimmed, footer }: MessageViewProps) {
-  const contentRef = useRef<HTMLDivElement>(null);
+export const MessageView = memo(function MessageView({ msg, isAnimating, progressStore, compact = false, ask, onAsk, actions, showActions = true, body, dimmed, footer }: MessageViewProps) {
   const isUser = msg.role === "user";
   const text = isUser ? textOf(msg) : "";
   const event = isUser ? eventOf(text) : null;
@@ -146,7 +144,7 @@ export const MessageView = memo(function MessageView({ msg, isAnimating, progres
       aria-busy={isAnimating || undefined}
       className={cn("group/turn relative space-y-2 transition-opacity", dimmed && "pointer-events-none opacity-40")}
     >
-      <div ref={contentRef} className={cn("bg-background", plain && !body && "flex justify-end")}>
+      <div className={cn("bg-background", plain && !body && "flex justify-end")}>
         {content}
       </div>
       {(showActions || footer) && !body && (
@@ -160,7 +158,7 @@ export const MessageView = memo(function MessageView({ msg, isAnimating, progres
           )}
         >
           {showActions && (
-            <MessageActions parts={msg.parts} contentRef={contentRef} download={!isUser} hoverOnly={isUser} meta={meta}>
+            <MessageActions parts={msg.parts} hoverOnly={isUser} className={isAnimating ? "invisible" : undefined}>
               {actions}
             </MessageActions>
           )}

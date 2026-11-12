@@ -104,7 +104,7 @@ function ModelRow() {
   );
 }
 
-function ApiKeyRow({ type, label, note }: { type: string; label: string; note?: ReactNode }) {
+function ApiKeyRow({ type, label, note }: { type: "anthropic" | "google"; label: string; note?: ReactNode }) {
   const utils = trpc.useUtils();
   const { data: existing, isLoading } = trpc.settings.getApiKey.useQuery(type);
   const saveKey = trpc.settings.saveApiKey.useMutation({ onSuccess: () => utils.settings.getApiKey.invalidate(type) });

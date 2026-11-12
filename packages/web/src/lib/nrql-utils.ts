@@ -6,5 +6,3 @@ export const TIME_RANGE_PRESETS = [
   { label: "7 days", since: "7 days ago" },
   { label: "30 days", since: "30 days ago" },
 ] as const;
-
-export const DEFAULT_SINCE = "24 hours ago";

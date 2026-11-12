@@ -95,3 +95,14 @@ test("a steer message is checked, and its role is always user", async () => {
   assert.equal(noId.status, 200);
   assert.ok(steer.pending[1].id);
 });
+
+test("malformed or reserved chat bodies answer 400", async () => {
+  const { app, post } = await setup();
+  const raw = (path: string, body: string) => app.request(path, { method: "POST", headers: { "content-type": "application/json" }, body });
+  assert.equal((await raw("/api/chat", "{")).status, 400);
+  assert.equal((await post({ id: "s1" })).status, 400);
+  assert.equal((await post({ ...first, id: "__monitors__:x" })).status, 400);
+  assert.equal((await raw("/api/chat/stop", "{")).status, 400);
+  assert.equal((await raw("/api/chat/stop", "{}")).status, 400);
+  assert.equal((await raw("/api/chat/steer", "{")).status, 400);
+});

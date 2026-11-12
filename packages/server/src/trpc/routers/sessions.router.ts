@@ -4,11 +4,8 @@ import { eq, desc, notLike, and, ne, sql } from "drizzle-orm";
 import type { UIMessage } from "ai";
 import {
   SESSION_PREFIX,
-  SESSION_KIND,
   DEFAULT_SESSION_TITLE,
   unixNow,
-  ImportedAnalysisSchema,
-  CLIENT_TOOL_NAMES,
   compactionUpTo,
   isAnalysisMessage,
   splitAtAnalysis,
@@ -160,43 +157,6 @@ export const sessionsRouter = router({
       return { success: true };
     }),
 
-  importAnalysis: publicProcedure
-    .input(ImportedAnalysisSchema)
-    .mutation(async ({ ctx, input }) => {
-      const id = crypto.randomUUID();
-      const assistantMessage = {
-        id: crypto.randomUUID(),
-        role: "assistant" as const,
-        metadata: {
-          sourceTitle: input.sourceTitle,
-          sourceCreatedAt: input.sourceCreatedAt,
-        },
-        parts: [
-          {
-            type: CLIENT_TOOL_NAMES.BEGIN_ANALYSIS,
-            toolCallId: crypto.randomUUID(),
-            state: "output-available" as const,
-            input: {},
-            output: { status: "Analysis mode active." },
-          },
-          ...input.parts,
-        ],
-      };
-      const title = input.sourceTitle.slice(0, 80) || DEFAULT_SESSION_TITLE;
-      await ctx.db
-        .insert(chatSessions)
-        .values({
-          id,
-          title,
-          status: "idle",
-          kind: SESSION_KIND.IMPORTED,
-          messages: encodeMessages([assistantMessage as UIMessage]),
-        })
-        .run();
-      sessionChanged(id);
-      return { id };
-    }),
-
   truncateMessages: publicProcedure
     .input(z.object({ id: z.string(), keepCount: z.number().int().min(0) }))
     .mutation(async ({ ctx, input }) => {
@@ -228,6 +188,10 @@ export const sessionsRouter = router({
       const sourceUpTo = row.summaryUpTo != null ? row.summaryUpTo + (keptAnalysisBoundary ? 1 : 0) : 0;
       const summaryStale = row.summaryUpTo != null && input.keepCount < sourceUpTo;
 
+      // A run may have started during the read above; nothing awaits between this check and the write.
+      if (ctx.activeStreams.has(input.id)) {
+        throw new TRPCError({ code: "CONFLICT", message: "Cannot truncate while a response is in progress" });
+      }
       await ctx.db
         .update(chatSessions)
         .set({

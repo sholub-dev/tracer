@@ -8,16 +8,23 @@ export function sessionChanged(...ids: string[]): void {
 
 /** Yields each changed session id until `signal` aborts. */
 export async function* sessionChanges(signal?: AbortSignal): AsyncGenerator<string> {
-  const queue: string[] = [];
+  // A Set: an id already waiting means "refetch this session", so a repeat adds nothing, and a subscriber that
+  // stops reading holds at most one entry per session.
+  const queue = new Set<string>();
   let wake: (() => void) | undefined;
-  const listener = (id: string) => { queue.push(id); wake?.(); };
+  const listener = (id: string) => {
+    queue.add(id);
+    wake?.();
+  };
   const onAbort = () => wake?.();
   listeners.add(listener);
   signal?.addEventListener("abort", onAbort);
   try {
     while (!signal?.aborted) {
-      if (queue.length > 0) {
-        yield queue.shift()!;
+      if (queue.size > 0) {
+        const id = queue.values().next().value!;
+        queue.delete(id);
+        yield id;
         continue;
       }
       await new Promise<void>((resolve) => { wake = resolve; });

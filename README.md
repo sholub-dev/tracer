@@ -13,11 +13,11 @@ It uses your own API keys. There is no Tracer server, no account and no telemetr
 
 ## What it does
 
-- **Investigates in chat.** Describe the problem. The agent writes and runs New Relic, PostHog and Google Cloud queries, draws the results, and states the root cause. Every query it used stays one click away.
+- **Investigates in chat.** Describe the problem. The agent writes and runs New Relic, PostHog and Google Cloud queries and answers with charts and tables. An investigation ends with a summary card that names the root cause and its evidence. Every query it used stays one click away.
 - **Watches for you.** Tell it what to watch. A monitor checks on a schedule, starts an investigation when it fires, and posts the finding to Slack.
 - **Goes with you.** The iPhone app runs the full agent on the phone. One QR scan syncs it with your computer.
 - **Takes any evidence.** Paste or drop screenshots, logs, code or PDFs into the chat.
-- **Shares results.** Export a post-mortem as Markdown, or an investigation as a PNG. Drop that PNG back into Tracer to reopen the full analysis.
+- **Shares results.** Export a post-mortem as Markdown.
 - **Remembers.** The agent keeps notes across sessions. Each session shows its cost.
 
 ![An investigation in Tracer](docs/screenshots/desktop-investigation.png)
@@ -65,11 +65,11 @@ pnpm --filter @tracer-sh/ios open
 ```
 
 In Xcode, select your team under **Signing & Capabilities**, select your iPhone, and click **Run**.
-A free Apple ID signs the app for 7 days. Requires iOS 15 or later.
+A free Apple ID signs the app for 7 days. Requires iOS 15.4 or later.
 
 **Limits on the phone:**
 - Monitors check only while the app is open. The screen stays on while an investigation runs.
-- Google Cloud, Vertex AI, the CLI and PNG import are desktop only.
+- Google Cloud, Vertex AI and the CLI are desktop only.
 
 ### Sync with your computer
 
@@ -116,13 +116,15 @@ Each data source setup tests the connection and explains how to create a read-on
 
 - **Local only.** Tracer talks only to your providers and your LLM, with your keys.
 - **Encrypted at rest.** SQLCipher (AES-256) encrypts the whole database. A copied `.db` file is unreadable without the key.
-- **Key in the OS keychain.** Tracer creates a random 256-bit key on first run and stores it in the macOS Keychain, Windows Credential Manager or Linux Secret Service. On iPhone, the key is in the iOS Keychain.
-- **Owner-only files.** The data folder is `0700`. A fallback key file is `0600`.
+- **Owner-only key file.** Tracer creates a random 256-bit key on first run and writes it to `~/.tracer/db-key` with mode `0600`. On iPhone, the key is in the iOS Keychain.
+- **Owner-only files.** The data folder is `0700`.
 - **Loopback only.** The desktop server listens on `127.0.0.1` and rejects requests for any other host name.
 
 Encryption protects the file, not a running session. Code that runs as your OS user can read what Tracer reads.
-If you lose the keychain entry (`tracer-sh` / `db-key`), you lose the database. Back up that entry if you need a safety net.
-Without a keychain (CI, headless Linux), set `TRACER_DB_KEY` to 64 hex characters (`openssl rand -hex 32`).
+If you lose `~/.tracer/db-key`, you lose the database. Back up that file if you need a safety net.
+To supply the key yourself (CI, a secrets manager), set `TRACER_DB_KEY` to 64 hex characters (`openssl rand -hex 32`).
+
+Upgrading from a version that kept the key in the OS keychain: the first start reads the key from the keychain once. macOS asks for access one last time. Choose **Allow**, not **Always Allow**. Tracer then writes the key file and removes the keychain entry. If that removal fails, Tracer prints a notice; remove the entry by hand with `security delete-generic-password -s tracer-sh -a db-key`.
 
 Check it yourself:
 
@@ -143,8 +145,7 @@ sqlite3 ~/.tracer/data/tracer.db '.tables'    # Error: file is not a database
 
 ```bash
 npm uninstall -g tracer-sh
-rm -rf ~/.tracer                                       # settings, sessions and keys
-security delete-generic-password -s tracer-sh -a db-key   # macOS keychain entry
+rm -rf ~/.tracer   # settings, sessions and the database key
 ```
 
 ## Contributing

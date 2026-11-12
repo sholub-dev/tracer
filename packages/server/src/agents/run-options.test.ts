@@ -39,6 +39,13 @@ test("user chat and unattended runs use their own retry delays", async () => {
   assert.equal((await chatRunOptions(context, "s1")).retryDelaysMs, CONFIG.chatRetryDelaysMs);
 });
 
+test("only a monitor run must end with a finding card", async () => {
+  const { context } = await env();
+  assert.equal((await buildRunOptions(context, { sessionId: "s1", kind: "monitor", scope: UNIFIED_SCOPE })).requireFinding, true);
+  assert.equal((await buildRunOptions(context, { sessionId: "s1", scope: UNIFIED_SCOPE, interactive: true })).requireFinding, false);
+  assert.equal((await chatRunOptions(context, "none")).requireFinding, false);
+});
+
 test("a monitor session and an interactive session get the same tools", async () => {
   const { db, context } = await env();
   await writeSlackConfig(db, { webhookUrl: "https://hooks.slack.com/services/T/B/x" });

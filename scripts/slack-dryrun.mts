@@ -52,7 +52,7 @@ mkdirSync(outDir, { recursive: true });
 // Read-only copy of the settings the agent needs; the app database is never written.
 const realHome = process.env.TRACER_HOME || join(homedir(), ".tracer");
 const real = new Database(join(realHome, "data", "tracer.db"), { readonly: true });
-applyKey(real, resolveDbKey(realHome, { hasEncryptedDb: true }));
+applyKey(real, resolveDbKey(realHome, { hasEncryptedDb: true }).key);
 const providerRows = real.prepare("SELECT * FROM provider_configs").all() as Array<Record<string, unknown>>;
 const settingRows = real.prepare("SELECT * FROM app_settings").all() as Array<Record<string, unknown>>;
 const memoryRows = real.prepare("SELECT * FROM tool_memories").all() as Array<Record<string, unknown>>;

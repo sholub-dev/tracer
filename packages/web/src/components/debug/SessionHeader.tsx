@@ -8,7 +8,6 @@ import { cn } from "@/lib/utils";
 import { usePolling } from "../../lib/hooks";
 import { trpc } from "../../lib/trpc";
 import { COLUMN } from "../chat/Transcript";
-import { SAVE_IMAGE_LABEL, downloadImage, stampedPngName } from "../chat/MessageActions";
 import { ConfirmDialog } from "../common/ConfirmDialog";
 import { MoreActionsMenu } from "../common/MoreActionsMenu";
 import { PageSidebarButton } from "../layout/Shell";
@@ -141,11 +140,10 @@ export function SessionHeader({
   children,
 }: SessionHeaderProps) {
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const headerRef = useRef<HTMLElement>(null);
   const postMortemBlocked = busy || streaming;
 
   return (
-    <header ref={headerRef} data-page-header className="sticky top-0 z-20 border-b bg-background/90 backdrop-blur-md">
+    <header data-page-header className="sticky top-0 z-20 border-b bg-background/90 backdrop-blur-md">
       <div className={cn(COLUMN, "flex items-center gap-3 py-3")}>
         <PageSidebarButton />
         <div className="min-w-0 flex-1">
@@ -201,15 +199,6 @@ export function SessionHeader({
             </DropdownMenuItem>
           )}
           <DropdownMenuItem onSelect={onCopyText}>Copy as text</DropdownMenuItem>
-          <DropdownMenuItem
-            onSelect={() => {
-              // The header sits first in the transcript element, so its parent is the whole session.
-              const transcript = headerRef.current?.parentElement;
-              if (transcript) void downloadImage(transcript, stampedPngName("investigation"));
-            }}
-          >
-            {SAVE_IMAGE_LABEL}
-          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem variant="destructive" disabled={streaming} onSelect={() => setConfirmDelete(true)}>
             Delete investigation

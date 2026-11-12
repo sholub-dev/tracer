@@ -11,6 +11,15 @@ import { timeoutSignal } from "../../lib/timeout-signal.js";
 // Loaded on demand: it reads gcloud credentials from disk, which only the desktop server can do.
 const getGcpAuth = async () => (await import("../../providers/gcp/gcp-auth.js")).getGcpAuth();
 
+// Two quick saves of one type would otherwise start two provider instances at once, and the first one's subprocesses could outlive it.
+const saveQueues = new Map<string, Promise<unknown>>();
+function serialized<T>(type: string, run: () => Promise<T>): Promise<T> {
+  const result = (saveQueues.get(type) ?? Promise.resolve()).then(run, run);
+  const tail = result.catch(() => {}).finally(() => { if (saveQueues.get(type) === tail) saveQueues.delete(type); });
+  saveQueues.set(type, tail);
+  return result;
+}
+
 export const providerRouter = router({
   list: publicProcedure.query(async ({ ctx }) => {
     await ctx.providers.whenLoaded();
@@ -73,7 +82,7 @@ export const providerRouter = router({
         config: z.record(z.string(), z.string()),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .mutation(({ ctx, input }) => serialized(input.type, async () => {
       if (!ctx.providers.getRegisteredTypes().some(t => t.type === input.type)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -108,7 +117,7 @@ export const providerRouter = router({
         success: provider.connected,
         error: provider.connected ? undefined : initError ?? "Connection test failed",
       };
-    }),
+    })),
 
   removeConfig: publicProcedure
     .input(z.string())

@@ -4,6 +4,7 @@ import { runInTransaction, type Db } from "../db/driver.js";
 import * as schema from "../db/schema.js";
 import { LOCAL_SETTING_KEYS } from "../db/setup.js";
 import { isSlackWebhook } from "../integrations/slack.js";
+import { isPosthogHost, isPosthogProjectId } from "../providers/posthog/posthog.client.js";
 import { isJiraDomain } from "../integrations/jira/jira.client.js";
 
 // Parents before children, so inserts satisfy the foreign keys and deletes run in reverse.
@@ -81,6 +82,7 @@ export function checkRows(name: string, table: SQLiteTable, rows: Record<string,
       if (!columns.has(key)) throw new Error(`The data has an unknown column "${key}" in ${name}.`);
     }
     if (name === "app_settings") checkSetting(row.key, row.value);
+    if (name === "provider_configs") checkProviderConfig(row.type, row.config);
   }
 }
 
@@ -92,6 +94,16 @@ function checkSetting(key: unknown, value: unknown): void {
     : key === "integration:jira" ? typeof config?.domain === "string" && isJiraDomain(config.domain)
       : false;
   if (!valid) throw new Error(`The data has an invalid setting "${key}".`);
+}
+
+function checkProviderConfig(type: unknown, value: unknown): void {
+  if (type !== "posthog") return;
+  let config: { host?: unknown; projectId?: unknown } | null = null;
+  try { config = JSON.parse(String(value)); } catch { /* rejected below */ }
+  const host = config?.host;
+  const valid = (host === undefined || host === "" || (typeof host === "string" && isPosthogHost(host.trim().replace(/\/+$/, ""))))
+    && (config?.projectId === undefined || (typeof config.projectId === "string" && isPosthogProjectId(config.projectId)));
+  if (!valid) throw new Error(`The data has an invalid provider config "${type}".`);
 }
 
 /** With `since`, only the entries this device changed at or after that local time. */

@@ -6,13 +6,12 @@ import {
   useCallback,
   useImperativeHandle,
   forwardRef,
-  memo,
   startTransition,
   type ReactNode,
 } from "react";
 import { useChat, Chat } from "@ai-sdk/react";
 import { DefaultChatTransport, type FileUIPart, type UIMessage } from "ai";
-import { CLIENT_TOOL_NAMES, findingFromMessages, readAskUser } from "@tracer-sh/shared";
+import { CLIENT_TOOL_NAMES, readAskUser } from "@tracer-sh/shared";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -28,14 +27,14 @@ import { WEB_CONFIG } from "../../lib/config";
 import { serverFetch } from "../../lib/server-fetch";
 import { IS_IOS } from "../../lib/platform";
 import { preloadResultChunks } from "../charts/ResultView";
-import { WorkingIndicator } from "./ChatIndicators";
-import { ErrorBoundary } from "../ErrorBoundary";
+import { ActivityLine } from "./ChatIndicators";
+import { activityLabel, endsAnswered } from "./activity";
 import { Composer, STEER_PLACEHOLDER, type Attachment } from "./Composer";
 import { QueuedMessages, type QueuedMessage } from "./QueuedMessages";
 import { FollowUpTimerBar } from "./FollowUpTimerBar";
-import { MessageView, textOf, type MessageViewOptions } from "./MessageView";
+import { textOf } from "./MessageView";
+import { MessageRow, type RenderView } from "./MessageRow";
 import { Transcript } from "./Transcript";
-import type { SourceMeta } from "./MessageActions";
 
 const INITIAL_ROWS = 2;
 const MAX_ATTACH_BYTES = 10 * 1024 * 1024;
@@ -44,7 +43,6 @@ const MAX_ATTACH_BYTES = 10 * 1024 * 1024;
 const isAttachable = (type: string) =>
   type === "" || type.startsWith("image/") || type.startsWith("text/") || type === "application/pdf" || type === "application/json";
 
-export type RenderView = (options?: MessageViewOptions) => ReactNode;
 
 interface ChatCoreProps {
   chatId: string;
@@ -84,11 +82,6 @@ interface ChatCoreProps {
   /** Truncates the persisted copy to the kept count before Retry re-sends; without it the no-reply Retry is hidden. */
   onRetryTruncate?: (keepCount: number) => Promise<unknown>;
 
-  /** Embedded in downloaded reply images so they re-import with their origin. */
-  sourceTitle?: string;
-  sourceCreatedAt?: number;
-  resolveSourceTitle?: () => Promise<string | undefined>;
-
   className?: string;
 }
 
@@ -103,42 +96,6 @@ export interface ChatCoreRef {
   readonly streaming: boolean;
   stop: () => void;
 }
-
-// Memoized so a streaming chunk only re-renders the row whose message object changed.
-const MessageRow = memo(function MessageRow({
-  msg,
-  msgIndex,
-  isAnimating,
-  progressStore,
-  compact,
-  meta,
-  renderMessage,
-  piece,
-  ask,
-  onAsk,
-}: {
-  msg: UIMessage;
-  msgIndex: number;
-  isAnimating: boolean;
-  progressStore: ProgressStore;
-  compact: boolean;
-  meta: SourceMeta;
-  renderMessage?: ChatCoreProps["renderMessage"];
-  /** A piece of a reply that a steered message cut apart, not its last one. */
-  piece?: boolean;
-  ask?: AskState;
-  onAsk?: (label: string) => void;
-}) {
-  const view: RenderView = (options) => (
-    <MessageView msg={msg} isAnimating={isAnimating} progressStore={progressStore} compact={compact} meta={meta} ask={ask} onAsk={onAsk} showActions={piece ? false : undefined} {...options} />
-  );
-  // No content-visibility here: a skipped reply takes its real height only as it scrolls into view, and that moves the view under the reader.
-  return (
-    <div data-role={msg.role}>
-      <ErrorBoundary resetKey={msg}>{renderMessage ? renderMessage(msg, msgIndex, view) : view()}</ErrorBoundary>
-    </div>
-  );
-});
 
 const NETWORK_ERROR = /failed to fetch|load failed|networkerror|network request failed|fetch failed/i;
 const MISSING_KEY = /api key not configured/i;
@@ -185,9 +142,6 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
     readOnlyNotice,
     inputDisabled = false,
     onRetryTruncate,
-    sourceTitle,
-    sourceCreatedAt,
-    resolveSourceTitle,
     className,
   },
   ref,
@@ -310,8 +264,6 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   };
   const firstRow = showAll ? collapse : Math.max(collapse, messages.length - INITIAL_ROWS);
 
-  const meta = useMemo<SourceMeta>(() => ({ sourceTitle, sourceCreatedAt, resolveSourceTitle }), [sourceTitle, sourceCreatedAt, resolveSourceTitle]);
-
   const steeredRef = useRef(steered);
   steeredRef.current = steered;
   const prevStatus = useRef(status);
@@ -338,19 +290,10 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   // The server saves the reason a run ended on its last reply; a returning viewer sees it here.
   const savedError = !isLoading && lastMessage?.role === "assistant" ? (lastMessage.metadata as { error?: unknown } | undefined)?.error : undefined;
   const savedErrorText = typeof savedError === "string" ? savedError : null;
-  // A reply with a finding card ends on its last supporting visual, so a finished tool part there is a complete answer.
-  const endsOnVisual = !!lastMessage && (lastPart as { state?: string } | undefined)?.state === "output-available" && !!findingFromMessages([lastMessage]);
+  const answered = !!lastMessage && endsAnswered(lastMessage);
   // A question to the person ends the reply on purpose.
   const endsOnAsk = lastPart?.type === CLIENT_TOOL_NAMES.ASK_USER;
-  const needsContinue = !isLoading && !error && !savedErrorText && messages.length > collapse && lastMessage?.role === "assistant" && lastPart?.type.startsWith("tool-") && !endsOnVisual && !endsOnAsk;
-
-  // A step can run several tools at once, so any unsettled tool part of the reply counts, not only the last part.
-  const isSubAgentRunning = lastMessage?.role === "assistant" && lastMessage.parts.some((p) => {
-    const state = (p as { state?: string }).state;
-    return p.type.startsWith("tool-") && state !== "output-available" && state !== "output-error";
-  });
-  const isContentStreaming = lastPart?.type === "text" || lastPart?.type === "reasoning";
-  const showWorking = status === "submitted" || (status === "streaming" && !isContentStreaming && !isSubAgentRunning);
+  const needsContinue = !isLoading && !error && !savedErrorText && messages.length > collapse && lastMessage?.role === "assistant" && lastPart?.type.startsWith("tool-") && !answered && !endsOnAsk;
 
   // A failed reply keeps its saved tool work, so the run continues from it instead of starting over.
   const hasPartialReply = lastMessage?.role === "assistant" && lastMessage.parts.some((p) => p.type !== "step-start");
@@ -606,7 +549,6 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
             isAnimating={last && msg.id === lastId}
             progressStore={progressStore}
             compact={compact}
-            meta={meta}
             // The pieces before a steered message have no actions of their own; a pending steered message has none yet.
             renderMessage={last && index < messages.length ? renderMessage : undefined}
             piece={!last}
@@ -614,7 +556,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
             onAsk={canAnswer ? handleAsk : undefined}
           />
         ))}
-        {showWorking && <WorkingIndicator label="Investigating" />}
+        {isLoading && <ActivityLine label={activityLabel(messages)} />}
         {!readOnly && !inputDisabled && needsContinue && (
           <NoticeRow action={<Button variant="outline" size="sm" onClick={handleContinue}>Continue</Button>}>
             The reply was interrupted.

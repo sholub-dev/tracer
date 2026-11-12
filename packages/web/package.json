@@ -17,9 +17,7 @@
     "@capacitor-community/sqlite": "8.1.1",
     "@capacitor/app": "8.1.2",
     "@capacitor/core": "8.5.2",
-    "@capacitor/filesystem": "8.1.4",
     "@capacitor/keyboard": "8.0.6",
-    "@capacitor/share": "8.0.3",
     "@tanstack/react-query": "^5.104.0",
     "@tracer-sh/shared": "workspace:*",
     "@trpc/client": "^11.19.0",
@@ -28,11 +26,9 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.50.0",
-    "modern-screenshot": "^4.7.0",
     "radix-ui": "^1.6.7",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "react-grid-layout": "^2.2.4",
     "react-json-view-lite": "^2.5.0",
     "recharts": "^3.10.1",
     "sonner": "^2.0.8",
@@ -49,6 +45,6 @@
     "@vitejs/plugin-react": "^6.1.1",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",
-    "vite": "^8.3.1"
+    "vite": "^8.3.3"
   }
 }

@@ -3,6 +3,7 @@ import type { Http2Bindings, HttpBindings } from "@hono/node-server";
 
 type Bindings = HttpBindings | Http2Bindings;
 
+const FORWARDING_HEADERS = ["x-forwarded-for", "x-forwarded-host", "x-real-ip", "forwarded", "via", "cf-connecting-ip", "true-client-ip"];
 const LOOPBACK_NAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 function hostName(host: string | null): string {
@@ -29,7 +30,9 @@ function tokenMatches(header: string | null, token: string): boolean {
  * that rebinds its own domain to 127.0.0.1 cannot call the API. The copy routes hand out every stored secret,
  * so they also need a loopback Host and a loopback peer when the server is exposed with TRACER_HOST.
  * An exposed server requires the bearer `token` on every /api request from a non-loopback peer.
- * A loopback peer is the owner's own machine, so the bundled web UI works there without the token.
+ * A loopback peer with a loopback Host and no forwarding header is the owner's own browser, so the bundled web UI
+ * works there without the token. A same-host reverse proxy or tunnel also shows a loopback peer, so a forwarding
+ * header or a foreign Host marks the request as remote.
  */
 export function guardLocalRequests(
   fetchImpl: (req: Request, env: Bindings) => Response | Promise<Response>,
@@ -44,7 +47,8 @@ export function guardLocalRequests(
     // tRPC percent-decodes the procedure path, so "transfer%2Esend" must match too.
     let path = new URL(req.url).pathname;
     try { path = decodeURIComponent(path); } catch { /* tRPC rejects a malformed path too */ }
-    if (!listensOnLoopback && token && !isLoopbackAddress(env.incoming.socket.remoteAddress) && path.startsWith("/api/") && !tokenMatches(req.headers.get("authorization"), token)) {
+    const ownBrowser = localHost && isLoopbackAddress(env.incoming.socket.remoteAddress) && !FORWARDING_HEADERS.some((h) => req.headers.has(h));
+    if (!listensOnLoopback && token && !ownBrowser && path.startsWith("/api/") && !tokenMatches(req.headers.get("authorization"), token)) {
       return new Response("Unauthorized", { status: 401 });
     }
     if (path.startsWith("/api/trpc/") && path.includes("transfer.") && !(localHost && isLoopbackAddress(env.incoming.socket.remoteAddress))) {

@@ -102,7 +102,7 @@ Judge health per entity type from its signals against a normal window. Find whic
 - If you cannot evaluate a signal, mark it N/A and give the reason.
 
 ### Reporting Format
-Do not write a results table or a verdict line. Put the result in the finding card: the answer gives the overall verdict, and each explanation statement gives one signal's current value against its baseline. Show the signals that matter most with queries (for example \`COMPARE WITH 1 week ago\` for current against baseline).`;
+Do not write a separate verdict line. Give the overall verdict first, then each signal's current value against its baseline: in the finding card when the check is a multi-query investigation, otherwise in a short text answer. Show the signals that matter most with queries (for example \`COMPARE WITH 1 week ago\` for current against baseline).`;
 
 const NR_QUERY_DEFAULTS = `## Query Defaults
 - Always include \`SINCE\`. Match the window to the question. Look wider than the incident, to find its onset and a normal baseline.

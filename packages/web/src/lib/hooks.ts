@@ -5,22 +5,18 @@ import { AVAILABLE_MODELS } from "./models";
 import { WEB_CONFIG } from "./config";
 import { IS_IOS } from "./platform";
 import { RESUME_EVENT, useOnResume } from "./resume";
-import { takeFreshKeys } from "./answer-cards";
 
 /** Chat scroll that follows content growth; any upward scroll pauses it until the bottom is reached again. A new `mountKey` re-attaches to a swapped container. */
 export function useChatScroll(mountKey?: unknown) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const shouldAutoScroll = useRef(true);
-  // Set when the follow stops at an answer card; only the user's own input clears it.
-  const pinned = useRef(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
 
   const scrollToBottom = useCallback((opts?: { animation?: "instant" | "smooth" }) => {
     const el = scrollRef.current;
     if (!el) return;
     shouldAutoScroll.current = true;
-    pinned.current = false;
     el.scrollTo({ top: el.scrollHeight, behavior: opts?.animation === "smooth" ? "smooth" : "instant" });
   }, []);
 
@@ -28,7 +24,6 @@ export function useChatScroll(mountKey?: unknown) {
     const el = scrollRef.current;
     if (!el) return;
     shouldAutoScroll.current = false;
-    pinned.current = false;
     el.scrollTo({ top: 0, behavior: opts?.animation === "smooth" ? "smooth" : "instant" });
   }, []);
 
@@ -50,54 +45,22 @@ export function useChatScroll(mountKey?: unknown) {
       setIsAtBottom(atBottom);
       if (top >= 0) {
         if (top < lastTop && distance > lastGap && height >= lastHeight) shouldAutoScroll.current = false;
-        else if (atBottom && !pinned.current) shouldAutoScroll.current = true;
+        else if (atBottom) shouldAutoScroll.current = true;
       }
       lastTop = top;
       lastHeight = height;
       lastGap = distance;
     };
-    const onUser = () => { pinned.current = false; };
-    // pointerdown, not touchmove: charts stop touchmove propagation, and a scrollbar drag sends no wheel event.
-    const inputs = ["wheel", "pointerdown", "keydown"];
     el.addEventListener("scroll", onScroll, { passive: true });
-    for (const type of inputs) el.addEventListener(type, onUser, { passive: true });
-    return () => {
-      el.removeEventListener("scroll", onScroll);
-      for (const type of inputs) el.removeEventListener(type, onUser);
-    };
+    return () => el.removeEventListener("scroll", onScroll);
   }, [mountKey]);
 
   // ResizeObserver on inner content div — auto-scrolls on any content growth
   useEffect(() => {
     const el = contentRef.current;
     if (!el) return;
-    // A new answer card stops the follow; its top is brought into view once, and nothing re-anchors afterwards.
-    const cardsNow = () => [...el.querySelectorAll("[data-answer-card]")];
-    // A card is identified by its position, not its element, so a remount does not count as a new answer.
-    const keyOf = (card: Element) => {
-      const row = card.closest("[data-role]");
-      const rows = [...el.querySelectorAll("[data-role]")];
-      return `${row ? rows.indexOf(row) : -1}:${row ? [...row.querySelectorAll("[data-answer-card]")].indexOf(card) : 0}`;
-    };
-    const lastRow = [...el.querySelectorAll("[data-role]")].at(-1);
-    const openCard = lastRow?.getAttribute("data-role") === "assistant" ? [...lastRow.querySelectorAll("[data-answer-card]")].at(-1) : undefined;
-    const seen = new Set<string>(cardsNow().filter((c) => c !== openCard).map(keyOf));
-    const reveal = (scroller: HTMLElement, card: Element) => {
-      const header = scroller.querySelector("[data-page-header]")?.getBoundingClientRect().height ?? 0;
-      const top = card.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-      if (top >= header && top <= scroller.clientHeight - 80) return;
-      scroller.scrollTo({ top: scroller.scrollTop + top - header - 16 });
-    };
     const ro = new ResizeObserver(() => {
-      const cards = cardsNow();
-      const freshKeys = new Set(takeFreshKeys(seen, cards.map(keyOf)));
-      const card = cards.filter((c) => freshKeys.has(keyOf(c))).at(-1);
-      const scroller = scrollRef.current;
-      if (!shouldAutoScroll.current) return;
-      if (!card || !scroller) return scrollToBottom();
-      shouldAutoScroll.current = false;
-      pinned.current = true;
-      reveal(scroller, card);
+      if (shouldAutoScroll.current) scrollToBottom();
     });
     ro.observe(el);
     return () => ro.disconnect();

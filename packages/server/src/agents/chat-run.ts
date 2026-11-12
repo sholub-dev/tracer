@@ -12,7 +12,7 @@ import { CONFIG } from "../config.js";
 
 export const MONITOR_CHAT_SCOPE = "__monitor_chat__";
 
-type RunOptions = Pick<ChatAgentConfig, "collectTools" | "sessionTitle" | "retryDelaysMs" | "onFailed" | "scope">;
+type RunOptions = Pick<ChatAgentConfig, "collectTools" | "sessionTitle" | "retryDelaysMs" | "onFailed" | "scope" | "requireFinding">;
 
 export interface RunSpec {
   sessionId: string;
@@ -57,6 +57,8 @@ export async function buildRunOptions(context: Context, spec: RunSpec): Promise<
   return {
     scope,
     retryDelaysMs,
+    // Slack and the triage read the card, so only a monitor run has to end with one.
+    requireFinding: monitor,
     collectTools: async (writer) => {
       const collected = await collectChatTools(context.providers, context.db, writer, scopedProvider, mode);
       const afterComplete: typeof collected.afterComplete = onComplete

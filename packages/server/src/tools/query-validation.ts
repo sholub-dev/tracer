@@ -1,6 +1,3 @@
-import { substituteTimeRange } from "@tracer-sh/shared";
-import type { IProvider } from "@tracer-sh/shared";
-
 /** Check that a query contains the required {{SINCE}} and {{UNTIL}} placeholders. */
 export function requireTimeRangePlaceholders(query: string): { error: string } | null {
   if (!query.includes("{{SINCE}}") || !query.includes("{{UNTIL}}")) {
@@ -9,21 +6,4 @@ export function requireTimeRangePlaceholders(query: string): { error: string } |
     };
   }
   return null;
-}
-
-/** Substitute placeholders and execute the query for validation. Returns null on success. */
-export async function executeValidationQuery(
-  query: string,
-  provider: IProvider,
-  defaultSince: string,
-): Promise<{ result: unknown } | { error: string }> {
-  const validationQuery = substituteTimeRange(query, defaultSince);
-  try {
-    const result = await provider.executeRawQuery(validationQuery);
-    return { result };
-  } catch (err) {
-    return {
-      error: `Query validation failed: ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
 }

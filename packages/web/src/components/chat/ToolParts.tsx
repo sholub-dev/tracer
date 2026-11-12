@@ -1,16 +1,15 @@
 import { memo, useRef, useState } from "react";
-import { AlertCircle, ClipboardCheck, Copy, History, Loader2, Send, Timer, type LucideIcon } from "lucide-react";
+import { AlertCircle, ClipboardCheck, Copy, History, Send, Timer, type LucideIcon } from "lucide-react";
 import { CLIENT_TOOL_NAMES, isPlainObject, type ProgressPart } from "@tracer-sh/shared";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
-import { Markdown } from "../../lib/markdown";
+import { Markdown, type ResultLookup } from "../../lib/markdown";
 import ResultView, { JsonTree } from "../charts/ResultView";
 import { useProgress, type ProgressStore } from "../../lib/progress-store";
 import { hasErrorOutput } from "../../lib/chat-utils";
 import { MonitorSavedCard, type MonitorSavedOutput } from "../monitors/MonitorSavedCard";
 import { FoldTrigger } from "../common/FoldTrigger";
 import { ProviderDot } from "../common/ProviderDot";
-import { WorkingIndicator } from "./ChatIndicators";
 import { IconButton } from "../common/IconButton";
 import { copyText } from "./MessageActions";
 import { ReasoningBlock } from "./ReasoningBlock";
@@ -60,8 +59,6 @@ const PROVIDER_BY_TOOL: Record<string, string> = {
   "tool-add_jira_comment": "jira",
 };
 
-export const isMonitorTool = (type: string) => MONITOR_TOOLS.has(type);
-
 export const providerOf = (type: string) => PROVIDER_BY_TOOL[type] ?? "gcp";
 
 /** Parts that never render: the analysis marker, removed propose_monitor drafts, read_result, and report_finding (shown as a card). */
@@ -98,10 +95,6 @@ function stepParts(part: ToolPart, progress: ProgressPart[] | undefined): Progre
   if (progress?.length) return progress;
   if (isSubAgentOutput(output)) return output.parts?.length ? output.parts : legacyToParts(output);
   return [];
-}
-
-export function stepQueryCount(part: ToolPart, store: ProgressStore): number {
-  return stepParts(part, store.getSnapshot(part.toolCallId ?? "")?.parts).filter((p) => p.type === "query").length;
 }
 
 function stepTitle(part: ToolPart, provider: string): string {
@@ -159,13 +152,12 @@ function ErrorLine({ children }: { children: string }) {
   );
 }
 
-export function Narration({ content, isAnimating }: { content: string; isAnimating: boolean }) {
+function Narration({ content, isAnimating }: { content: string; isAnimating: boolean }) {
   if (!content.trim()) return null;
   return <Markdown text={content} isAnimating={isAnimating} className="max-w-[68ch] text-sm leading-relaxed text-ink-2" />;
 }
 
-function ProgressItems({ parts, isAnimating, provider, resultsOnly = false }: { parts: ProgressPart[]; isAnimating: boolean; provider: string; resultsOnly?: boolean }) {
-  if (resultsOnly) return <>{parts.map((p, i) => (p.type === "query" ? <ResultView key={i} data={p.results} totalRows={p.totalRows} provider={provider} /> : null))}</>;
+function ProgressItems({ parts, isAnimating, provider }: { parts: ProgressPart[]; isAnimating: boolean; provider: string }) {
   let inAnalysis = false;
   return (
     <>
@@ -183,7 +175,7 @@ function ProgressItems({ parts, isAnimating, provider, resultsOnly = false }: { 
           );
         }
         if (p.type === "reasoning") return <ReasoningBlock key={i} content={p.content} isAnimating={isAnimating} />;
-        if (p.type === "tool-call") return isAnimating ? <WorkingIndicator key={i} label={`Running ${p.toolName.replace(/_/g, " ")}`} /> : null;
+        if (p.type === "tool-call") return null;
         if (inAnalysis && p.type === "text") {
           return <Markdown key={i} text={p.content} isAnimating={isAnimating} className={ANSWER_PROSE_COMPACT} />;
         }
@@ -291,7 +283,7 @@ function stepError(part: ToolPart): string | null {
   return isSubAgentOutput(output) && output.error ? output.error : null;
 }
 
-function StepBody({ part, progressStore, isAnimating, resultsOnly = false }: { part: ToolPart; progressStore: ProgressStore; isAnimating: boolean; resultsOnly?: boolean }) {
+function StepBody({ part, progressStore, isAnimating }: { part: ToolPart; progressStore: ProgressStore; isAnimating: boolean }) {
   const progress = useProgress(progressStore, part.toolCallId);
   const complete = part.state === "output-available";
   const running = !complete && isAnimating;
@@ -321,32 +313,29 @@ function StepBody({ part, progressStore, isAnimating, resultsOnly = false }: { p
   const parts = stepParts(part, progress?.parts);
   if (parts.length > 0 || !complete) {
     const query = typeof part.input?.query === "string" ? part.input.query : null;
-    if (resultsOnly) return <ProgressItems parts={parts} isAnimating={running} provider={providerOf(part.type)} resultsOnly />;
     return (
       <>
         {parts.length === 0 && query && <QueryBlock query={query} />}
         <ProgressItems parts={parts} isAnimating={running} provider={providerOf(part.type)} />
-        {running && <WorkingIndicator label={`Querying ${providerLabel(providerOf(part.type))}`} />}
       </>
     );
   }
 
-  // Raw outputs: GCP MCP results, New Relic issue actions and pre-progress sessions. A folded step hides a plain status object.
+  // Raw outputs: GCP MCP results, New Relic issue actions and pre-progress sessions.
   const query = inputText(part);
   return (
     <>
-      {query && !resultsOnly && <QueryBlock query={query} />}
-      {output != null && !(resultsOnly && isPlainObject(output)) && <ResultView data={output} provider={providerOf(part.type)} />}
+      {query && <QueryBlock query={query} />}
+      {output != null && <ResultView data={output} provider={providerOf(part.type)} />}
     </>
   );
 }
 
-// A folded step keeps its charts and tables visible; only the query hides.
-type StepProps = { part: ToolPart; progressStore: ProgressStore; isAnimating: boolean; evidence?: boolean };
+type StepProps = { part: ToolPart; progressStore: ProgressStore; isAnimating: boolean };
 
 // The AI SDK clones the streaming message per chunk, so part identity changes even when nothing read here did.
 function stepPropsEqual(prev: StepProps, next: StepProps): boolean {
-  if (prev.progressStore !== next.progressStore || prev.isAnimating !== next.isAnimating || prev.evidence !== next.evidence) return false;
+  if (prev.progressStore !== next.progressStore || prev.isAnimating !== next.isAnimating) return false;
   const a = prev.part;
   const b = next.part;
   if (a === b) return true;
@@ -355,18 +344,17 @@ function stepPropsEqual(prev: StepProps, next: StepProps): boolean {
   return a.output === b.output && a.errorText === b.errorText && a.input?.task === b.input?.task && a.input?.query === b.input?.query && a.input?.title === b.input?.title;
 }
 
-// A finished step with one chart or table result sits in a card, with its query behind the chevron.
-/** One cited result under the card: a flat numbered row, so the list reads (and copies) as "[1] Title". */
-function EvidenceStep({ part, query, results, totalRows }: { part: ToolPart; query: string | null; results: unknown; totalRows?: number }) {
+/** A finished step's results in a card, with its query behind a toggle: the evidence under a summary card and a result block in the answer. */
+// Memoized: a settled part never changes, and the reply around it re-renders on every streamed chunk.
+export const ResultCard = memo(function ResultCard({ part }: { part: ToolPart }) {
   const [open, setOpen] = useState(false);
   const provider = providerOf(part.type);
+  const query = inputText(part);
   return (
-    <li data-tool-call={part.toolCallId} className="rounded-xl border bg-card p-4 shadow-sm max-sm:px-3">
+    <div className="rounded-xl border bg-card p-4 font-sans text-base leading-normal shadow-sm max-sm:px-3">
       <Collapsible open={open} onOpenChange={setOpen}>
         <div className="flex items-baseline gap-3">
-          <p className="min-w-0 flex-1 text-sm font-medium break-words text-foreground">
-            {stepTitle(part, provider)}
-          </p>
+          <p className="min-w-0 flex-1 text-sm font-medium break-words text-foreground">{stepTitle(part, provider)}</p>
           <span className="shrink-0 text-xs text-muted-foreground">{providerLabel(provider)}</span>
           {query && (
             <CollapsibleTrigger className="shrink-0 rounded text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
@@ -380,86 +368,87 @@ function EvidenceStep({ part, query, results, totalRows }: { part: ToolPart; que
           </CollapsibleContent>
         )}
       </Collapsible>
-      <div className="mt-2">
-        <ResultView data={results} totalRows={totalRows} provider={provider} />
+      <div className="mt-2 space-y-2">
+        {stepResults(part).map((r, i) => <ResultView key={i} data={r.data} totalRows={r.totalRows} provider={provider} />)}
       </div>
-    </li>
+    </div>
   );
+});
+
+/** What a running sub-agent does now, shown in its folded row. */
+function liveActivity(parts: ProgressPart[]): string | null {
+  const last = parts.at(-1);
+  if (!last) return null;
+  if (last.type === "tool-call") return `Running ${last.toolName.replace(/_/g, " ")}`;
+  if (last.type === "query") return "Query returned";
+  if (last.type === "reasoning") return "Thinking";
+  if (last.type === "text") return "Summarizing";
+  return null;
 }
 
-function ChartStep({ part, query, results, totalRows, evidence }: { part: ToolPart; query: string | null; results: unknown; totalRows?: number; evidence?: boolean }) {
-  const [open, setOpen] = useState(false);
-  const provider = providerOf(part.type);
-  const title = stepTitle(part, provider);
-  if (evidence) return <EvidenceStep part={part} query={query} results={results} totalRows={totalRows} />;
-  return (
-    <li data-tool-call={part.toolCallId} className="animate-in fade-in duration-200 data-[flash]:rounded-xl data-[flash]:ring-2 data-[flash]:ring-primary/50">
-      <Collapsible open={open} onOpenChange={setOpen} className="rounded-xl border bg-card p-4 shadow-sm max-sm:px-3">
-        <FoldTrigger
-          chevronEnd
-          disabled={!query}
-          chevronClassName={cn("text-muted-foreground", !query && "hidden")}
-          aria-label={query ? `${title}: show query` : title}
-          className="flex w-full items-start justify-between gap-3 rounded-md text-left"
-        >
-          <span className="flex min-w-0 items-center gap-2">
-            <ProviderDot provider={provider} />
-            <span className="sr-only">{providerLabel(provider)}:</span>
-            <span className="truncate text-sm font-semibold text-foreground">{title}</span>
-          </span>
-        </FoldTrigger>
-        {query && (
-          <CollapsibleContent className="mt-3">
-            <QueryBlock query={query} />
-          </CollapsibleContent>
-        )}
-        <div className="mt-2">
-          <ResultView data={results} totalRows={totalRows} provider={provider} />
-        </div>
-      </Collapsible>
-    </li>
-  );
-}
-
-export const ProviderStep = memo(function ProviderStep({ part, progressStore, isAnimating, evidence }: StepProps) {
+// One folded row for the whole life of a step: it never changes shape, so nothing below it moves. The reply shows results in result blocks and under the card.
+export const ProviderStep = memo(function ProviderStep({ part, progressStore, isAnimating }: StepProps) {
   const [open, setOpen] = useState(false);
   const progress = useProgress(progressStore, part.toolCallId);
   const provider = providerOf(part.type);
   const settled = part.state === "output-available" || part.state === "output-error";
-  const running = !settled && isAnimating;
-  const queries = !settled || stepError(part) ? [] : stepParts(part, progress?.parts).filter((p) => p.type === "query");
-  const only = queries.length === 1 && queries[0].type === "query" && queries[0].query && isRowResult(queries[0].results) ? queries[0] : null;
-  if (only) return <ChartStep part={part} query={only.query} results={only.results} totalRows={only.totalRows} evidence={evidence} />;
-  const rows = !settled || stepError(part) ? null : rowsOf(part.output);
-  if (rows) return <ChartStep part={part} query={inputText(part)} results={rows} evidence={evidence} />;
   const error = open ? null : stepError(part);
+  const activity = !settled && isAnimating ? liveActivity(progress?.parts ?? []) : null;
   return (
-    <li data-tool-call={part.toolCallId} className="animate-in fade-in duration-200 data-[flash]:rounded-xl data-[flash]:ring-2 data-[flash]:ring-primary/50">
+    <li className="animate-in fade-in duration-200">
       <Collapsible open={open} onOpenChange={setOpen}>
         <FoldTrigger
           chevronEnd
           chevronClassName="text-muted-foreground"
           className="-ml-1.5 flex max-w-full items-center gap-2 rounded-md px-1.5 py-1 text-left hover:text-foreground"
         >
-          {!evidence && <ProviderDot provider={provider} />}
-          {!evidence && <span className="sr-only">{providerLabel(provider)}:</span>}
+          <ProviderDot provider={provider} />
+          <span className="sr-only">{providerLabel(provider)}:</span>
           <span className="min-w-0 truncate text-sm font-medium">{stepTitle(part, provider)}</span>
-          {running && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-label="Running" />}
+          {activity && <span className="min-w-0 truncate text-[13px]/[18px] text-muted-foreground">{activity}</span>}
           {!settled && !isAnimating && <span className="shrink-0 text-xs text-muted-foreground">Stopped</span>}
         </FoldTrigger>
         <CollapsibleContent className="mt-2 ml-4 space-y-2">
           <StepBody part={part} progressStore={progressStore} isAnimating={isAnimating} />
         </CollapsibleContent>
       </Collapsible>
-      {!open && (
-        <div className="mt-2 ml-4 space-y-2">
-          <StepBody part={part} progressStore={progressStore} isAnimating={isAnimating} resultsOnly />
-        </div>
-      )}
       {error && <div className="mt-1 ml-4"><ErrorLine>{error}</ErrorLine></div>}
     </li>
   );
 }, stepPropsEqual);
+
+/** What a running tool does, for the indicator at the tail of the reply. */
+export function toolActivity(part: ToolPart): string {
+  if (isProviderTool(part.type)) {
+    const title = stepTitle(part, providerOf(part.type));
+    return title === "Query" ? "Preparing a query" : `Querying ${title}`;
+  }
+  if (part.type === CLIENT_TOOL_NAMES.BEGIN_ANALYSIS) return "Checking the analysis";
+  if (part.type === "tool-report_finding") return part.state === "input-streaming" ? "Writing the summary" : "Checking the summary";
+  if (MONITOR_TOOLS.has(part.type)) return "Working on the monitor";
+  return SMALL_TOOLS[part.type]?.loading ?? "Working";
+}
+
+/** The results a finished step holds, one per query or one for a tool that returns rows. */
+function stepResults(part: ToolPart): Array<{ data: unknown; totalRows?: number }> {
+  if (stepError(part)) return [];
+  const queries = stepParts(part, undefined).flatMap((p) => (p.type === "query" ? [{ data: p.results, totalRows: p.totalRows }] : []));
+  if (queries.length) return queries;
+  const rows = rowsOf(part.output);
+  return rows ? [{ data: rows }] : [];
+}
+
+/** Resolves the title of a ```result block against the queries of the same reply. */
+export function resultLookup(parts: ReadonlyArray<ToolPart>): ResultLookup {
+  const steps = parts.filter((p) => isProviderTool(p.type));
+  return (title) => {
+    const key = title.trim().toLowerCase();
+    const titled = steps.filter((p) => typeof p.input?.title === "string" && p.input.title.trim().toLowerCase() === key);
+    const ready = titled.findLast((p) => p.state === "output-available" && stepResults(p).length > 0);
+    if (!ready) return null;
+    return <div className="my-4"><ResultCard part={ready} /></div>;
+  };
+}
 
 function StoppedLine() {
   return <p className="text-[13px]/[18px] text-muted-foreground">Stopped</p>;
@@ -473,13 +462,13 @@ export const OtherToolPart = memo(function OtherToolPart({ part, isAnimating }: 
   if (MONITOR_TOOLS.has(part.type)) {
     if (part.state === "output-available") return <MonitorSavedCard output={(part.output ?? {}) as MonitorSavedOutput} fresh={savedLive} />;
     if (part.state === "output-error") return <ErrorLine>{part.errorText ?? "Monitor save failed"}</ErrorLine>;
-    return isAnimating ? <WorkingIndicator label="Working on the monitor" /> : <StoppedLine />;
+    return isAnimating ? null : <StoppedLine />;
   }
 
   const spec = SMALL_TOOLS[part.type];
   if (!spec) return null;
   if (part.state === "output-error") return <ErrorLine>{`${spec.errorLabel}: ${part.errorText ?? "failed"}`}</ErrorLine>;
-  if (part.state !== "output-available") return isAnimating ? <WorkingIndicator label={spec.loading} /> : <StoppedLine />;
+  if (part.state !== "output-available") return isAnimating ? null : <StoppedLine />;
   const failed = hasErrorOutput(part.output);
   const Icon = failed ? AlertCircle : spec.icon;
   return (

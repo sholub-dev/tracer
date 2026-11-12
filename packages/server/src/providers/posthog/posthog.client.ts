@@ -3,6 +3,15 @@ import type { HogQLQueryResponse } from "./types.js";
 
 const DEFAULT_HOST = "https://us.posthog.com";
 
+export function isPosthogHost(host: string): boolean {
+  if (!host.startsWith("https://")) return false;
+  try { new URL(host); return true; } catch { return false; }
+}
+
+export function isPosthogProjectId(id: string): boolean {
+  return /^\d+$/.test(id);
+}
+
 /**
  * Thin client over PostHog's official Query API. Runs HogQL (PostHog's SQL)
  * via `POST {host}/api/projects/{projectId}/query/`, authenticated with a
@@ -21,8 +30,8 @@ export class PosthogClient {
 
   async query(hogql: string, options?: { retry?: boolean; signal?: AbortSignal }): Promise<HogQLQueryResponse> {
     // The key goes to this host and the project id lands in the URL path, so both need a strict shape.
-    if (!this.host.startsWith("https://") || !URL.canParse(this.host)) throw new Error("PostHog host must be an https URL");
-    if (!/^\d+$/.test(this.projectId)) throw new Error("PostHog project ID must be a number");
+    if (!isPosthogHost(this.host)) throw new Error("PostHog host must be an https URL");
+    if (!isPosthogProjectId(this.projectId)) throw new Error("PostHog project ID must be a number");
     const response = await fetchWithRetry(`${this.host}/api/projects/${this.projectId}/query/`, {
       method: "POST",
       signal: options?.signal,

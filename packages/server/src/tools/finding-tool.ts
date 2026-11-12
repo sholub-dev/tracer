@@ -104,8 +104,8 @@ export function reportFindingTool(
   stepReads: () => StepResult[] = () => [],
 ): Tool<Finding, FindingOutput> {
   return tool({
-    description: "Show the answer as a card. The card is the whole written answer: call it once, alone in its step, in every turn that ran at least one query, after the investigation. "
-      + "Use kind root_cause (with a verdict) when the turn explains why something happened, summary for status, counts, trends and lookups. Skip it only when no query ran. Facts from query results only; never a fix. You may state an action you performed in this turn as a fact. "
+    description: "Show the summary of an investigation as a card: call it once, alone in its step, after an investigation that reaches a conclusion. Skip it for a yes/no question, a simple lookup, a count, a short check or a follow-up: answer those in text. Text after the card never repeats it. "
+      + "Use kind root_cause (with a verdict) when the turn explains why something happened, summary for status, health checks and trends. Facts from query results only; never a fix. You may state an action you performed in this turn as a fact. "
       + "Each explanation source is the exact title of a query that succeeded in this turn, and each number in a statement is in that query's result. Each number in the answer is in the result of a source the explanation cites. Each number appears once in the card: a number in the answer is in no statement. At most two decimals, thousands separators, no ids. A card that calls traffic a bot or automated needs actor.indicator and actor.holdsChange in the ledger. A card that fails these checks is sent back, at most twice.",
     inputSchema: findingSchema,
     execute: async (card, options): Promise<FindingOutput> => {

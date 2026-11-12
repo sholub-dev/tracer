@@ -28,6 +28,7 @@ export class McpProvider extends BaseProvider {
   private liveTools: Record<string, any> = {};
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
   private inFlight = 0;
+  private disposed = false;
   idle = false;
 
   constructor(
@@ -116,6 +117,7 @@ export class McpProvider extends BaseProvider {
   }
 
   async dispose(): Promise<void> {
+    this.disposed = true;
     clearTimeout(this.idleTimer);
     await this.closeAllClients();
     this.cachedTools = null;
@@ -199,6 +201,11 @@ export class McpProvider extends BaseProvider {
     if (failed) {
       await Promise.all(started.map((c) => c.close().catch(() => {})));
       throw failed.reason;
+    }
+    // A dispose during the spawn found no clients to close, so these would outlive the provider.
+    if (this.disposed) {
+      await Promise.all(started.map((c) => c.close().catch(() => {})));
+      throw new Error("The provider was disposed during startup");
     }
     this.clients = started;
   }

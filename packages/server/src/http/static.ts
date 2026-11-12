@@ -1,19 +1,8 @@
 import { readFileSync, existsSync, statSync } from "node:fs";
-import { resolve, dirname, extname, sep } from "node:path";
+import { resolve, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Hono } from "hono";
-
-const MIME_TYPES: Record<string, string> = {
-  ".html": "text/html",
-  ".css": "text/css",
-  ".js": "application/javascript",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".ico": "image/x-icon",
-  ".json": "application/json",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2",
-};
+import { getMimeType } from "hono/utils/mime";
 
 /**
  * Serves the web SPA from the built dist directory.
@@ -44,7 +33,7 @@ export function mountStaticFiles(app: Hono): void {
         await next();
         return;
       }
-      const mime = MIME_TYPES[extname(filePath)] || "application/octet-stream";
+      const mime = getMimeType(filePath) ?? "application/octet-stream";
       const headers: Record<string, string> = { "Content-Type": mime };
       if (reqPath.startsWith("assets/")) {
         headers["Cache-Control"] = "public, max-age=31536000, immutable";
@@ -56,5 +45,5 @@ export function mountStaticFiles(app: Hono): void {
   });
   // no-cache (revalidate, don't skip) so a self-update never serves a stale
   // shell pointing at old hashed chunks.
-  app.get("*", (c) => c.html(indexHtml, 200, { "Cache-Control": "no-cache" }));
+  app.get("*", (c) => c.req.path.startsWith("/api/") ? c.json({ error: "Not found" }, 404) : c.html(indexHtml, 200, { "Cache-Control": "no-cache" }));
 }

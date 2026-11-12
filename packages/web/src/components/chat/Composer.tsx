@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
 import { ArrowUp, CornerDownRight, FileText, Paperclip, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -69,17 +69,17 @@ export function Composer({
   const inputRef = textareaRef ?? ownTextareaRef;
 
   // WebKit sizes the field to its value only, so an empty field cuts off a placeholder that wraps.
-  useLayoutEffect(() => {
+  const fit = useCallback(() => {
     const ta = inputRef.current;
     if (!ta) return;
-    const fit = () => {
-      ta.style.minHeight = "";
-      if (!ta.value) ta.style.minHeight = `${ta.scrollHeight}px`;
-    };
-    fit();
+    ta.style.minHeight = "";
+    if (!ta.value) ta.style.minHeight = `${ta.scrollHeight}px`;
+  }, [inputRef]);
+  useLayoutEffect(fit, [fit, value, placeholder]);
+  useEffect(() => {
     window.addEventListener("resize", fit);
     return () => window.removeEventListener("resize", fit);
-  }, [inputRef, value, placeholder]);
+  }, [fit]);
 
   return (
     <form

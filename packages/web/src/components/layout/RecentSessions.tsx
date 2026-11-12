@@ -12,10 +12,9 @@ import { ShrinkingBar } from "../chat/FollowUpTimerBar";
 import { ConfirmDialog } from "../common/ConfirmDialog";
 import { MoreActionsMenu } from "../common/MoreActionsMenu";
 import { SegmentedControl } from "../common/SegmentedControl";
-import { ImportDropZone } from "./ImportDropZone";
 import { IS_IOS } from "../../lib/platform";
 
-type Filter = "all" | SessionKindKey;
+type Filter = "all" | Exclude<SessionKindKey, "imported">;
 type Day = "today" | "yesterday" | "earlier";
 
 interface SessionItem {
@@ -27,12 +26,12 @@ interface SessionItem {
   timer: { fireAt: number; setAt: number } | null;
 }
 
-// The iOS app has no API and no import.
+// The iOS app has no API.
 const filters: { value: Filter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "chat", label: "Chats" },
   { value: "alert", label: "Alerts" },
-  ...(IS_IOS ? [] : [{ value: "api", label: "API" }, { value: "imported", label: "Imported" }] as const),
+  ...(IS_IOS ? [] : [{ value: "api", label: "API" }] as const),
 ];
 
 const days: { day: Day; label: string }[] = [
@@ -56,14 +55,15 @@ interface RecentSessionsProps {
   currentSessionId: string | null;
   onSelectSession: (id: string) => void;
   onDeleted: (id: string) => void;
-  onImported: (id: string) => void;
 }
 
-export const RecentSessions = memo(function RecentSessions({ currentSessionId, onSelectSession, onDeleted, onImported }: RecentSessionsProps) {
+export const RecentSessions = memo(function RecentSessions({ currentSessionId, onSelectSession, onDeleted }: RecentSessionsProps) {
   // Live updates arrive over the session change stream; focus refetch is only a safety net.
   const sessionsQuery = trpc.sessions.list.useQuery(undefined, { refetchOnWindowFocus: true });
   const deleteSession = useDeleteSession({ onDeleted });
-  const [filter, setFilter] = usePersistedState<Filter>("tracer:sidebarFilter", "all");
+  const [storedFilter, setFilter] = usePersistedState<Filter>("tracer:sidebarFilter", "all");
+  // A saved value can name a filter this build no longer offers.
+  const filter = filters.some((f) => f.value === storedFilter) ? storedFilter : "all";
   const [deleting, setDeleting] = useState<SessionItem | null>(null);
 
   // Rows seen at least once render still; only rows that arrive later animate in.
@@ -100,7 +100,6 @@ export const RecentSessions = memo(function RecentSessions({ currentSessionId, o
         className="mb-2 w-full"
         itemClassName="flex-auto px-1.5"
       />
-      {filter === "imported" && <ImportDropZone onImported={onImported} />}
       {days.map(({ day, label }) => {
         const rows = shown.filter((s) => dayOf(new Date(s.activeAt * 1000)) === day);
         if (!rows.length) return null;

@@ -13,7 +13,8 @@ import { sessionKindLabel } from "../lib/session-kind";
 import { formatTime } from "../lib/format";
 import { SessionLoadError } from "../components/chat/SessionLoadError";
 import { LiveStreamView } from "../components/chat/LiveStreamView";
-import { ChatCore, type ChatCoreRef, type RenderView } from "../components/chat/ChatCore";
+import { ChatCore, type ChatCoreRef } from "../components/chat/ChatCore";
+import type { RenderView } from "../components/chat/MessageRow";
 import { COLUMN } from "../components/chat/Transcript";
 import { POST_MORTEM_PROMPT, monitorNameOf, textOf, transcriptOf } from "../components/chat/MessageView";
 import { MessageActionButton, copyText } from "../components/chat/MessageActions";
@@ -192,11 +193,9 @@ function ImportedView({ sessionId, sessionTitle, initialMessages, onDelete }: Im
       readOnly
       readOnlyNotice={
         <p className="rounded-xl border bg-card px-4 py-3 text-center text-[13px]/[18px] text-muted-foreground">
-          Imported from an image{date ? ` of ${date}` : ""}. Read-only.
+          Imported session{date ? ` of ${date}` : ""}. Read-only.
         </p>
       }
-      sourceTitle={sourceTitle}
-      sourceCreatedAt={sourceCreatedAt}
       scrollHeader={
         <SessionHeader
           chatId={sessionId}
@@ -303,11 +302,6 @@ function DebugChat({ chatId, initialMessages, sources, cost, costText, activePro
     if (prevTitlePending.current && !titlePending) refreshCostData();
     prevTitlePending.current = titlePending;
   }, [titlePending, refreshCostData]);
-
-  const resolveSourceTitle = useCallback(async () => {
-    const fresh = await utils.sessions.getTitle.fetch({ id: chatId }, { staleTime: 0 });
-    return fresh?.title;
-  }, [utils, chatId]);
 
   const handlePostMortem = () => {
     if (!coreRef.current) return;
@@ -427,7 +421,8 @@ function DebugChat({ chatId, initialMessages, sources, cost, costText, activePro
 
   const renderMessage = useCallback(
     (msg: UIMessage, index: number, view: RenderView) => {
-      // Actions are hidden during streaming, editing and compaction: a truncate racing those would corrupt indices.
+      // Edit and delete are hidden during streaming, editing and compaction: a truncate racing those would corrupt indices.
+      // The row itself stays, hidden while the reply streams, so it does not shift the reply when it appears.
       const idle = !isStreaming && editingIndex === null && !selectingCompact && compacting === null;
       let footer: React.ReactNode = null;
       if (compacting?.upTo === index + 1) {
@@ -445,7 +440,7 @@ function DebugChat({ chatId, initialMessages, sources, cost, costText, activePro
         );
       }
       return view({
-        showActions: idle,
+        showActions: editingIndex === null && !selectingCompact && compacting === null,
         actions: idle && (
           <>
             {msg.role === "user" && <MessageActionButton icon={<Pencil />} label="Edit" onClick={() => handleStartEditRef.current(index)} />}
@@ -505,9 +500,6 @@ function DebugChat({ chatId, initialMessages, sources, cost, costText, activePro
         apiEndpoint="/api/chat"
         placeholder={hasMessages ? "Ask a follow-up" : "Describe the problem, paste an error, or drop a screenshot"}
         initialMessages={initialMessages}
-        sourceTitle={liveTitle}
-        sourceCreatedAt={sessionUpdatedAt}
-        resolveSourceTitle={resolveSourceTitle}
         scrollHeader={header}
         emptyState={(composer) => <NewInvestigation composer={composer} />}
         beforeMessages={

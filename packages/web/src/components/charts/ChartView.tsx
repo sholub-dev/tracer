@@ -274,7 +274,10 @@ function TimeseriesPlot({ series, containerSize, plotHeight, threshold, dualAxis
     () => (sharePrefix ? splitSeriesLabels(series.map((s) => s.name)) : { prefix: "", labels: series.map((s) => s.name) }),
     [series, sharePrefix],
   );
-  const config: ChartConfig = Object.fromEntries(series.map((s, i) => [keys[i], { label: onRight[i] ? `${labels[i]} (right axis)` : labels[i], color: colorOf(s, i) }]));
+  const config = useMemo<ChartConfig>(
+    () => Object.fromEntries(series.map((s, i) => [keys[i], { label: onRight[i] ? `${labels[i]} (right axis)` : labels[i], color: colorOf(s, i) }])),
+    [series, keys, onRight, labels],
+  );
   const min = xs[0] ?? 0;
   const max = xs[xs.length - 1] ?? 0;
   const span = max - min;

@@ -338,8 +338,3 @@ export async function cancelReceive(): Promise<void> {
   if (!current || current.own.phase === "apply" || finished(current)) return;
   current.abort.abort();
 }
-
-/** Asks the computer for approval, then replaces this database with its copy or merges both databases. */
-export async function receiveCopy(db: Db, link: string, beforeImport?: () => void): Promise<{ mode: SyncMode; counts: Record<string, number> }> {
-  return (await startReceive(db, link, beforeImport)).done;
-}

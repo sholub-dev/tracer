@@ -230,7 +230,7 @@ test("Anthropic chat request: date-only system prompt with cache breakpoint, tim
   }
 });
 
-async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string | null)[]; onRequest?: (n: number) => Promise<void> }, retryDelaysMs: number[], whileRunning?: (ctx: Context) => Promise<void>, tools?: ToolSet | ((writer: { write: (part: Record<string, unknown>) => void }) => ToolSet), maxSteps?: number, thinking = true) {
+async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string | null)[]; onRequest?: (n: number) => Promise<void> }, retryDelaysMs: number[], whileRunning?: (ctx: Context) => Promise<void>, tools?: ToolSet | ((writer: { write: (part: Record<string, unknown>) => void }) => ToolSet), maxSteps?: number, thinking = true, requireFinding = true) {
   const db = memoryDb();
   // The session status at each model request.
   const statusAtRequest: (string | undefined)[] = [];
@@ -249,11 +249,12 @@ async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string 
     if (!thinking) await writeAppSetting(db, SETTINGS_KEYS.thinkingBudgetAnthropic, 0);
     const context: Context = { db, providers: {} as ProviderRegistry, activeStreams: new Map() };
     let completed = 0;
+    let completedWith: { lastAssistantText: string } | undefined;
     const failed: string[] = [];
     const res = await runChatAgent({
       sessionId: "s1", messages: [{ id: "u1", role: "user", parts: [{ type: "text", text: "why?" }] }], context,
-      collectTools: async (writer) => ({ tools: typeof tools === "function" ? tools(writer) : tools, maxSteps, afterComplete: () => { completed++; } }),
-      sessionTitle: () => "t", retryDelaysMs, onFailed: (e) => failed.push(e),
+      collectTools: async (writer) => ({ tools: typeof tools === "function" ? tools(writer) : tools, maxSteps, afterComplete: (params) => { completed++; completedWith = params; } }),
+      sessionTitle: () => "t", retryDelaysMs, onFailed: (e) => failed.push(e), requireFinding,
     });
     assert.ok("stream" in res && res.stream);
     const parts: UIMessageChunk[] = [];
@@ -266,7 +267,7 @@ async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string 
     const row = await db.select().from(schema.chatSessions).get();
     const saved = decodeMessages(row!.messages);
     const runs = await db.select().from(schema.agentRuns).all();
-    return { bodies, completed, failed, parts, saved, status: row?.status, title: row?.title, statusAtRequest, runs };
+    return { bodies, completed, completedWith, failed, parts, saved, status: row?.status, title: row?.title, statusAtRequest, runs };
   } finally {
     delete process.env.ANTHROPIC_BASE_URL;
     server.close();
@@ -385,6 +386,44 @@ test("a turn that ran a query and stopped without a finding card gets one extra 
   assert.equal(r.completed, 1, "follow-up work runs once, after the repair pass");
   assert.equal(r.statusAtRequest[2], "streaming", "the row is not done while the repair pass runs");
   assert.equal(r.status, "done");
+});
+
+test("a chat run that queried and answered in text gets no repair pass and no forced card", async () => {
+  const r = await retryRun({ script: [TOOL_CALL_SSE, SSE] }, [], undefined, findingTools, undefined, true, false);
+  assert.equal(r.bodies.length, 2, "no repair request follows the text answer");
+  assert.deepEqual((r.bodies[1].tools as { name: string }[]).map((t) => t.name), ["lookup", "report_finding", "read_result"]);
+  assert.ok(!r.saved[1].parts.some((p) => p.type === "tool-report_finding"));
+  assert.equal(r.completed, 1);
+  assert.equal(r.status, "done");
+});
+
+test("the memory input of a text answer is the last text part, with result blocks as references", async () => {
+  const note = sse([
+    MESSAGE_START,
+    ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
+    ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Checking." } }],
+    ["content_block_stop", { type: "content_block_stop", index: 0 }],
+    ["content_block_start", { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_1", name: "lookup", input: {} } }],
+    ["content_block_delta", { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: "{\"title\":\"Lookup\"}" } }],
+    ["content_block_stop", { type: "content_block_stop", index: 1 }],
+    ["message_delta", { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 2 } }],
+    ["message_stop", { type: "message_stop" }],
+  ]);
+  const answer = sse([
+    MESSAGE_START,
+    ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
+    ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Done.\n\n```result\nLookup\n```" } }],
+    ...end("end_turn"),
+  ]);
+  const r = await retryRun({ script: [note, answer] }, [], undefined, findingTools, undefined, true, false);
+  assert.equal(r.completedWith?.lastAssistantText, "Done.\n\n[Chart: Lookup]");
+});
+
+test("a chat run at its last step loses its query tools but is not forced to a card", async () => {
+  const r = await retryRun({ script: [TOOL_CALL_SSE, SSE] }, [], undefined, findingTools, 2, false, false);
+  assert.deepEqual((r.bodies[1].tools as { name: string }[]).map((t) => t.name), ["report_finding"]);
+  assert.notDeepEqual(r.bodies[1].tool_choice, forcedCard);
+  assert.match(JSON.stringify(r.bodies[1].messages), /in text, or with report_finding/);
 });
 
 test("a repair card the check sends back gets one more step to fix it", async () => {
@@ -913,18 +952,20 @@ test("a run and a stop work without AbortSignal.any, which iOS before 17.4 lacks
 });
 
 test("the agent hears once when a tenth of its steps remain, and again on its last step", () => {
-  const notes = Array.from({ length: 100 }, (_, i) => budgetNote(i, 100, ["execute_nrql"]));
+  const notes = Array.from({ length: 100 }, (_, i) => budgetNote(i, 100, ["execute_nrql"], true));
   assert.deepEqual(notes.flatMap((n, i) => (n ? [i] : [])), [90, 99]);
   assert.match(notes[90]!, /^At this point 10 steps remained.*call begin_analysis/);
   assert.match(notes[99]!, /last step/);
-  assert.deepEqual(Array.from({ length: 5 }, (_, i) => budgetNote(i, 5, ["execute_nrql"])).flatMap((n, i) => (n ? [i] : [])), [4]);
-  assert.equal(budgetNote(4, 5, []), undefined, "a turn with no query is not told to report");
+  assert.deepEqual(Array.from({ length: 5 }, (_, i) => budgetNote(i, 5, ["execute_nrql"], true)).flatMap((n, i) => (n ? [i] : [])), [4]);
+  assert.equal(budgetNote(4, 5, [], true), undefined, "a turn with no query is not told to report");
+  assert.match(budgetNote(99, 100, ["execute_nrql"], false)!, /in text, or with report_finding/);
+  assert.doesNotMatch(budgetNote(90, 100, ["execute_nrql"], false)!, /begin_analysis|card/);
 });
 
 test("the step notice does not ask for a second analysis or card", () => {
-  assert.match(budgetNote(90, 100, ["execute_nrql", "begin_analysis"])!, /settle the challenges/);
-  assert.equal(budgetNote(90, 100, ["begin_analysis", "report_finding"]), undefined);
-  assert.equal(budgetNote(99, 100, ["report_finding"]), undefined);
+  assert.match(budgetNote(90, 100, ["execute_nrql", "begin_analysis"], true)!, /settle the challenges/);
+  assert.equal(budgetNote(90, 100, ["begin_analysis", "report_finding"], true), undefined);
+  assert.equal(budgetNote(99, 100, ["report_finding"], true), undefined);
 });
 
 const forcedCard = { type: "tool", name: "report_finding" };

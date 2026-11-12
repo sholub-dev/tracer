@@ -43,7 +43,7 @@ export function isNumericGroup(v: unknown): v is Record<string, unknown> {
   return members.length > 0 && members.every((m) => m == null || coerceNumeric(m) !== null || (isGroup(m) && isNumericGroup(m)));
 }
 
-export const isGroup = (v: unknown): v is Record<string, unknown> => isPlainObject(v) && !isPercentileResult(v);
+const isGroup = (v: unknown): v is Record<string, unknown> => isPlainObject(v) && !isPercentileResult(v);
 
 /** Chart input: replace each object-valued column with one `<column>.<member>` column per member, in returned order. */
 export function expandObjectColumns(rows: Record<string, unknown>[]): Record<string, unknown>[] {

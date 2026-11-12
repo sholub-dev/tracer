@@ -1,5 +1,5 @@
 import type { UIMessage } from "ai";
-import { CLIENT_TOOL_NAMES, findingFromMessages, findingMarkdown, turnStart } from "@tracer-sh/shared";
+import { CLIENT_TOOL_NAMES, findingFromMessages, findingMarkdown, resultRefsToText, turnStart } from "@tracer-sh/shared";
 
 interface MessagePart {
   type: string;
@@ -81,7 +81,7 @@ export function renderToolPart(p: MessagePart, queries: QueryRecord[]): string {
  * is the final Analysis: text interleaved with provider query tool parts. We
  * serialize both, in order, so the analysis includes the queries and their
  * results (not just the prose). If the agent answered without the marker, fall
- * back to the last assistant message's text. Also returns the queries as a
+ * back to the text after the last tool call. Result blocks become plain references. Also returns the queries as a
  * structured array for programmatic consumers.
  */
 export function extractAnalysis(messages: UIMessage[]): { analysis: string; queries: QueryRecord[] } {
@@ -116,13 +116,20 @@ export function extractAnalysis(messages: UIMessage[]): { analysis: string; quer
       }
     }
   } else {
+    // The answer is the last run of text with no tool call inside it; text between queries is narration, and a
+    // tool call after the answer (a timer, a question) does not hide it.
     const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
-    for (const p of (lastAssistant?.parts as MessagePart[] | undefined) ?? []) {
+    const parts = (lastAssistant?.parts as MessagePart[] | undefined) ?? [];
+    const lastText = parts.map((p) => p.type === "text" && !!p.text?.trim()).lastIndexOf(true);
+    const lastTool = parts.slice(0, lastText + 1).map((p) => p.type.startsWith("tool-")).lastIndexOf(true);
+    for (const p of parts.slice(lastTool + 1, lastText + 1)) {
       if (p.type === "text" && p.text?.trim()) segments.push(p.text);
     }
+    // A text answer has no marker, but its queries still belong in the structured output.
+    for (const p of assistantParts) if (p.type.startsWith("tool-")) renderToolPart(p, queries);
   }
 
   const finding = findingFromMessages(turn);
   if (finding) segments.unshift(findingMarkdown(finding));
-  return { analysis: segments.join("\n\n").trim(), queries };
+  return { analysis: resultRefsToText(segments.join("\n\n")).trim(), queries };
 }

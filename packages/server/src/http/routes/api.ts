@@ -1,4 +1,5 @@
 import type { Hono } from "hono";
+import { z } from "zod";
 import { and, eq, gte, sql } from "drizzle-orm";
 import type { UIMessage } from "ai";
 import { SESSION_KIND, unixNow } from "@tracer-sh/shared";
@@ -8,6 +9,12 @@ import { startAgentSession } from "../../agents/start-session.js";
 import { extractAnalysis } from "../../agents/analysis.js";
 import { decodeMessages } from "../../lib/messages-codec.js";
 
+const analyzeBody = z.object({
+  message: z.string().optional(),
+  sessionId: z.string().min(1).refine((id) => !id.startsWith("__"), "reserved session id").nullish(),
+  provider: z.string().nullish(),
+});
+
 /**
  * Headless analysis API for other local agents (e.g. Claude Code). Runs the same
  * investigation agent as the web UI, but blocks until completion and returns only
@@ -16,13 +23,12 @@ import { decodeMessages } from "../../lib/messages-codec.js";
  */
 export function registerApiRoutes(app: Hono, context: Context): void {
   app.post("/api/v1/analyze", async (c) => {
-    let body: { message?: string; sessionId?: string; provider?: string };
-    try {
-      body = await c.req.json();
-    } catch {
-      return c.json({ status: "error", error: "invalid JSON body" }, 400);
+    const parsed = analyzeBody.safeParse(await c.req.json().catch(() => undefined));
+    if (!parsed.success) {
+      return c.json({ status: "error", error: "invalid request body" }, 400);
     }
-    const message = typeof body.message === "string" ? body.message.trim() : "";
+    const body = parsed.data;
+    const message = body.message?.trim() ?? "";
     if (!message) {
       return c.json({ status: "error", error: "`message` is required" }, 400);
     }
@@ -34,7 +40,7 @@ export function registerApiRoutes(app: Hono, context: Context): void {
       sessionId,
       kind: SESSION_KIND.API,
       message,
-      provider: body.provider,
+      provider: body.provider ?? undefined,
     });
 
     if ("error" in result) {

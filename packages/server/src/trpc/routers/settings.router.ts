@@ -46,7 +46,7 @@ export const settingsRouter = router({
   saveApiKey: publicProcedure
     .input(
       z.object({
-        type: z.string().min(1),
+        type: z.enum(["anthropic", "google"]),
         apiKey: z.string().trim().min(1),
       }),
     )

@@ -309,6 +309,15 @@ test("incoming rows with unknown columns or unsafe integration settings are reje
   await importSnapshot(b.db, setting("integration:slack", { webhookUrl: "https://hooks.slack.com/services/T/B/x" }));
   await importSnapshot(b.db, setting("integration:jira", { domain: "acme.atlassian.net", email: "e", apiToken: "t" }));
 
+  const provider = (config: unknown) => {
+    const copy = clone(snapshot);
+    copy.tables.provider_configs.push({ type: "posthog", config: JSON.stringify(config), createdAt: 1 });
+    return copy;
+  };
+  await assert.rejects(importSnapshot(b.db, provider({ apiKey: "k", projectId: "1", host: "http://evil.example" })), /invalid provider config/);
+  await assert.rejects(importSnapshot(b.db, provider({ apiKey: "k", projectId: "1/../x" })), /invalid provider config/);
+  await importSnapshot(b.db, provider({ apiKey: "k", projectId: "1", host: "https://eu.posthog.com/" }));
+
   const payload = clone(await exportSyncPayload(a.db));
   payload.tables.chat_sessions[0].injected = 1;
   await assert.rejects(mergeSyncPayload(b.db, payload), /unknown column/);

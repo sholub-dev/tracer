@@ -248,6 +248,12 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+
+  .animate-shimmer {
+    animation: none;
+    background: none;
+    color: var(--muted-foreground);
+  }
 }
 
 @keyframes row-in {
@@ -258,13 +264,20 @@
   from { opacity: 0; filter: blur(3px); }
 }
 
-.animate-row-in { animation: row-in 220ms ease-out; }
-.animate-title-in { animation: title-in 350ms ease-out; }
-
-.react-grid-placeholder {
-  background: var(--input) !important;
-  opacity: 0.2 !important;
+@keyframes shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
 }
+
+.animate-row-in { animation: row-in 220ms ease-out; }
+.animate-shimmer {
+  color: transparent;
+  background: linear-gradient(90deg, var(--muted-foreground) 35%, var(--foreground) 50%, var(--muted-foreground) 65%) 100% 0 / 250% 100% no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: shimmer 1.8s linear infinite;
+}
+.animate-title-in { animation: title-in 350ms ease-out; }
 
 /* Recharts makes charts focusable; clicking one draws the browser focus ring. */
 .recharts-wrapper:focus,

@@ -5,16 +5,16 @@ import { handleProgressData, stopChat, useCompactedMessages } from "../../lib/ch
 import { useChatScroll } from "../../lib/hooks";
 import { WEB_CONFIG } from "../../lib/config";
 import { isSteered } from "@tracer-sh/shared";
-import { lastTurnMessage } from "../../lib/message-queue";
 import { placeSteered } from "../../lib/steer-thread";
 import { nextEndState, withLiveReply } from "../../lib/live-stream";
 import { readEventStream } from "../../lib/sse";
 import { serverFetch } from "../../lib/server-fetch";
 import { useOnResume } from "../../lib/resume";
-import { WorkingIndicator } from "./ChatIndicators";
+import { ActivityLine } from "./ChatIndicators";
+import { activityLabel } from "./activity";
 import { Composer, RUN_PLACEHOLDER } from "./Composer";
 import { FollowUpTimerBar } from "./FollowUpTimerBar";
-import { MessageView } from "./MessageView";
+import { MessageRow } from "./MessageRow";
 import { Transcript } from "./Transcript";
 
 interface LiveStreamViewProps {
@@ -37,6 +37,8 @@ interface LiveStreamViewProps {
 /** Reconnects to an in-progress server stream over SSE and rebuilds the growing reply from replayed and live chunks. */
 export function LiveStreamView({ sessionId, initialMessages, onComplete, header, beforeMessages, collapseCount = 0, analysisOnlyIndex, sources, cost }: LiveStreamViewProps) {
   const [messages, setMessages] = useState<UIMessage[]>(initialMessages);
+  // The parent unmounts this view a moment after the run ends; until then nothing should look busy.
+  const [over, setOver] = useState(false);
   const progressStore = useRef(new ProgressStore()).current;
   const initialMessagesRef = useRef(initialMessages);
   initialMessagesRef.current = initialMessages;
@@ -107,6 +109,7 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
             ended = true;
           } else if (res.ok && res.body && res.headers.get("content-type")?.startsWith("text/event-stream")) {
             opened = true;
+            setOver(false);
             await readEventStream(res.body, (event, data) => {
               resetIdle();
               if (event === "part") {
@@ -128,6 +131,7 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
         try { ctrl.close(); } catch { /* already closed */ }
         if (cancelled) return;
         if (finished || ended) {
+          setOver(true);
           // onComplete fires after the last flush so the final content renders first.
           await reading;
           const end = nextEndState(notified, finished ? "finished" : "ended");
@@ -158,7 +162,6 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
   }, [sessionId, progressStore]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const lastIdx = messages.findLastIndex((m) => !isSteered(m));
-  const waiting = lastTurnMessage(messages)?.role === "user";
   const { collapse, analysisOnlyMsg } = useCompactedMessages(messages, collapseCount, analysisOnlyIndex);
   const rows = useMemo(
     () => placeSteered(messages.map((m, i) => (i === analysisOnlyIndex && analysisOnlyMsg ? analysisOnlyMsg : m)), []),
@@ -194,15 +197,17 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
       >
         {beforeMessages}
         {rows.map(({ msg, index, key, last }) => index < collapse ? null : (
-          <MessageView
+          <MessageRow
             key={key}
             msg={msg}
+            msgIndex={index}
             isAnimating={last && msg.role === "assistant" && index === lastIdx}
             progressStore={progressStore}
-            showActions={false}
+            compact={false}
+            piece={!last}
           />
         ))}
-        {waiting && <WorkingIndicator label="Investigating" />}
+        <ActivityLine label={over ? null : activityLabel(messages)} />
       </Transcript>
     </div>
   );

@@ -9,6 +9,8 @@ import type { Db } from "../../db/driver.js";
 import { JiraClient } from "./jira.client.js";
 import { readJiraConfig } from "./config.js";
 
+export const ISSUE_KEY = /^[A-Z][A-Z0-9_]*-\d+$/i;
+
 const JIRA_PROMPT_FRAGMENT = `## Jira
 You can read Jira issues and post comments via the jira tools.
 - Use get_jira_issue when the user references a ticket key (LETTERS-NUMBER, e.g. PROJ-123) or asks what a ticket says.
@@ -29,7 +31,7 @@ export async function getJiraChatTools(
       description:
         "Read a Jira issue's details by its issue key (e.g. PROJ-123): summary, description, status, type, priority, assignee, reporter, labels, components, fix versions, resolution, created/updated/due dates, and its comment thread.",
       inputSchema: z.object({
-        issueKey: z.string().describe("Jira issue key, e.g. PROJ-123"),
+        issueKey: z.string().regex(ISSUE_KEY).describe("Jira issue key, e.g. PROJ-123"),
       }),
       execute: async ({ issueKey }) => {
         try {
@@ -43,7 +45,7 @@ export async function getJiraChatTools(
       description:
         "Post a plain-text comment to a Jira issue. Only call when the user explicitly asks to comment on or update a ticket.",
       inputSchema: z.object({
-        issueKey: z.string().describe("Jira issue key, e.g. PROJ-123"),
+        issueKey: z.string().regex(ISSUE_KEY).describe("Jira issue key, e.g. PROJ-123"),
         body: z.string().min(1).describe("Plain-text comment body"),
       }),
       execute: async ({ issueKey, body }) => {

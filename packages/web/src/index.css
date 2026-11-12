@@ -249,10 +249,9 @@
     transition-duration: 0.01ms !important;
   }
 
-  .animate-shimmer {
+  .loading-dot {
     animation: none;
-    background: none;
-    color: var(--muted-foreground);
+    opacity: 0.6;
   }
 }
 
@@ -264,18 +263,20 @@
   from { opacity: 0; filter: blur(3px); }
 }
 
-@keyframes shimmer {
-  from { background-position: 100% 0; }
-  to { background-position: -100% 0; }
+@keyframes loading-dot {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.35; }
+  40% { transform: scale(1); opacity: 1; }
 }
 
 .animate-row-in { animation: row-in 220ms ease-out; }
-.animate-shimmer {
-  color: transparent;
-  background: linear-gradient(90deg, var(--muted-foreground) 35%, var(--foreground) 50%, var(--muted-foreground) 65%) 100% 0 / 250% 100% no-repeat;
-  -webkit-background-clip: text;
-  background-clip: text;
-  animation: shimmer 1.8s linear infinite;
+.loading-dot {
+  display: block;
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: currentColor;
+  will-change: transform, opacity;
+  animation: loading-dot 1.2s ease-in-out infinite both;
 }
 .animate-title-in { animation: title-in 350ms ease-out; }
 

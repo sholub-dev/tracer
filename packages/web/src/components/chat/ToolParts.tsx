@@ -13,6 +13,7 @@ import { ProviderDot } from "../common/ProviderDot";
 import { IconButton } from "../common/IconButton";
 import { copyText } from "./MessageActions";
 import { ReasoningBlock } from "./ReasoningBlock";
+import { LoadingDots } from "./ChatIndicators";
 import { ANSWER_PROSE_COMPACT } from "./prose";
 import { providerLabel } from "../../lib/providers";
 import { smallToolLabel } from "../../lib/tool-label";
@@ -386,12 +387,19 @@ function liveActivity(parts: ProgressPart[]): string | null {
   return null;
 }
 
-// One folded row for the whole life of a step: it never changes shape, so nothing below it moves. The reply shows results in result blocks and under the card.
+// A running step is one folded row; once it finishes with results, they show in a card and only the query folds away.
 export const ProviderStep = memo(function ProviderStep({ part, progressStore, isAnimating }: StepProps) {
   const [open, setOpen] = useState(false);
   const progress = useProgress(progressStore, part.toolCallId);
   const provider = providerOf(part.type);
   const settled = part.state === "output-available" || part.state === "output-error";
+  if (part.state === "output-available" && stepResults(part).length > 0) {
+    return (
+      <li className="animate-in fade-in duration-200">
+        <ResultCard part={part} />
+      </li>
+    );
+  }
   const error = open ? null : stepError(part);
   const activity = !settled && isAnimating ? liveActivity(progress?.parts ?? []) : null;
   return (
@@ -405,6 +413,7 @@ export const ProviderStep = memo(function ProviderStep({ part, progressStore, is
           <ProviderDot provider={provider} />
           <span className="sr-only">{providerLabel(provider)}:</span>
           <span className="min-w-0 truncate text-sm font-medium">{stepTitle(part, provider)}</span>
+          {!settled && isAnimating && <LoadingDots className="shrink-0" />}
           {activity && <span className="min-w-0 truncate text-[13px]/[18px] text-muted-foreground">{activity}</span>}
           {!settled && !isAnimating && <span className="shrink-0 text-xs text-muted-foreground">Stopped</span>}
         </FoldTrigger>

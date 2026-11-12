@@ -55,15 +55,25 @@ export function useChatScroll(mountKey?: unknown) {
     return () => el.removeEventListener("scroll", onScroll);
   }, [mountKey]);
 
-  // ResizeObserver on inner content div — auto-scrolls on any content growth
+  // Follows content growth, and the viewport's own size: on a phone the page can lay out before the scroller has its
+  // final height (navigation transition, toolbar, keyboard), so a scroll made then lands short of the last message.
   useEffect(() => {
     const el = contentRef.current;
+    const scroller = scrollRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => {
       if (shouldAutoScroll.current) scrollToBottom();
     });
     ro.observe(el);
-    return () => ro.disconnect();
+    if (scroller) ro.observe(scroller);
+    // Opening a chat lands on its last message once the first paint has settled.
+    const frame = requestAnimationFrame(() => {
+      if (shouldAutoScroll.current) scrollToBottom();
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      ro.disconnect();
+    };
   }, [scrollToBottom, mountKey]);
 
   return { scrollRef, contentRef, isAtBottom, scrollToBottom, scrollToTop };

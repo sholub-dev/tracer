@@ -17,10 +17,9 @@ interface ConfirmDialogProps {
   description: ReactNode;
   actionLabel: string;
   onConfirm: () => void;
-  destructive?: boolean;
 }
 
-export function ConfirmDialog({ open, onOpenChange, title, description, actionLabel, onConfirm, destructive = true }: ConfirmDialogProps) {
+export function ConfirmDialog({ open, onOpenChange, title, description, actionLabel, onConfirm }: ConfirmDialogProps) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
@@ -30,7 +29,7 @@ export function ConfirmDialog({ open, onOpenChange, title, description, actionLa
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction variant={destructive ? "destructive" : "default"} onClick={onConfirm}>
+          <AlertDialogAction variant="destructive" onClick={onConfirm}>
             {actionLabel}
           </AlertDialogAction>
         </AlertDialogFooter>

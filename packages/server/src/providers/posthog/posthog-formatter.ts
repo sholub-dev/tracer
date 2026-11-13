@@ -1,6 +1,7 @@
 // ── HogQL response → row objects + token-efficient CSV (for the LLM) ──
 
 import type { HogQLQueryResponse } from "./types.js";
+import { MAX_ARRAY_ITEMS, MAX_RESULT_CHARS, clipCell, csvBlock } from "../../lib/result-format.js";
 
 /** Suffix repeated column names (`count()`, `count()` -> `count()`, `count()_2`) so no column overwrites another. */
 function uniqueNames(columns: string[]): string[] {
@@ -31,14 +32,10 @@ export function rowsToObjects(resp: HogQLQueryResponse): Record<string, unknown>
   });
 }
 
-// ── Timeseries shaping: make time-bucketed HogQL results chart like New Relic ──
-//
-// New Relic's TIMESERIES results carry a numeric `beginTimeSeconds` per row, which the web
-// auto-detects and plots. HogQL has no TIMESERIES clause: a `GROUP BY toStartOf*(timestamp)`
-// returns the bucket as a DateTime *string* column, so those results fell through to a flat table.
-// `toChartRows` reshapes them into the exact row contract New Relic emits — a numeric
-// `beginTimeSeconds` plus the metric columns (and an optional `facet`) — so the existing web
-// chart (and table) rendering picks them up identically, with no duplicated charting logic.
+// ── Timeseries shaping ──
+// HogQL has no TIMESERIES clause: a GROUP BY toStartOf*(timestamp) returns the bucket as a DateTime string.
+// `toChartRows` reshapes such rows into the contract New Relic emits (a numeric `beginTimeSeconds`, the metric
+// columns and an optional `facet`), so the web charts them without separate logic.
 
 /** ClickHouse Date / DateTime string, e.g. "2024-01-15" or "2024-01-15 14:00:00(.sss)(Z|+00:00)". */
 const CH_DATETIME_RE = /^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$/;
@@ -103,44 +100,25 @@ export function toChartRows(rows: Record<string, unknown>[]): Record<string, unk
   });
 }
 
-// Cap what reaches the MODEL: tool results are re-sent on every later step, so the cost compounds.
-// The UI still gets the full untruncated rows via the query `parts`.
-const MAX_CELL_CHARS = 1000;
-const MAX_ARRAY_ITEMS = 50;
-/** Text budget for one result, in characters. */
-const MAX_RESULT_CHARS = 30_000;
-
-function capCell(s: string): string {
-  return s.length <= MAX_CELL_CHARS ? s : `${s.slice(0, MAX_CELL_CHARS)}… (+${s.length - MAX_CELL_CHARS} chars)`;
-}
-
 function fmtVal(v: unknown): string {
   if (v == null) return "null";
   if (typeof v === "number") return Number.isInteger(v) ? String(v) : Math.abs(v) < 1 ? Number(v.toPrecision(3)).toString() : v.toFixed(2);
   if (Array.isArray(v)) {
     const items = v.slice(0, MAX_ARRAY_ITEMS).map((x) => (x !== null && typeof x === "object" ? JSON.stringify(x) : String(x)));
     const more = v.length > MAX_ARRAY_ITEMS ? `; … +${v.length - MAX_ARRAY_ITEMS} more` : "";
-    return capCell(items.join("; ") + more);
+    return clipCell(items.join("; ") + more);
   }
-  if (typeof v === "object") return capCell(JSON.stringify(v));
+  if (typeof v === "object") return clipCell(JSON.stringify(v));
   const s = String(v);
   // HogQL returns a `properties` map as a JSON string: show it compact.
   if (/^\s*[{[]/.test(s)) {
     try {
       const parsed: unknown = JSON.parse(s);
       // Strip whitespace outside strings only: reparsing would round integers above 2^53.
-      if (parsed !== null && typeof parsed === "object") return capCell(s.replace(/"(?:[^"\\]|\\.)*"|\s+/g, (m) => (m[0] === '"' ? m : "")));
+      if (parsed !== null && typeof parsed === "object") return clipCell(s.replace(/"(?:[^"\\]|\\.)*"|\s+/g, (m) => (m[0] === '"' ? m : "")));
     } catch { /* not JSON: print as text */ }
   }
-  return capCell(s);
-}
-
-/** Escape a value for CSV: quote if it contains commas, quotes, or newlines. */
-function csvEscape(val: string): string {
-  if (val.includes(",") || val.includes('"') || val.includes("\n")) {
-    return `"${val.replace(/"/g, '""')}"`;
-  }
-  return val;
+  return clipCell(s);
 }
 
 /** What the HogQL API returns when a query has no LIMIT clause. */
@@ -176,30 +154,11 @@ export function formatHogqlCsv(rows: Record<string, unknown>[], query?: string):
   if (rows.length === 0) return "No results.";
 
   const headers = Object.keys(rows[0]);
-  const hdr = headers.map(csvEscape).join(",");
-
-  const lines: string[] = [];
-  let size = hdr.length;
-  let rowCut = false;
-  for (const r of rows) {
-    let line = headers.map((k) => csvEscape(fmtVal(r[k]))).join(",");
-    if (lines.length === 0 && size + line.length + 1 > MAX_RESULT_CHARS) {
-      line = line.slice(0, Math.max(0, MAX_RESULT_CHARS - size - 1));
-      rowCut = true;
-    }
-    // Always show one row, so a result is never empty.
-    if (lines.length > 0 && size + line.length + 1 > MAX_RESULT_CHARS) break;
-    lines.push(line);
-    size += line.length + 1;
-  }
-
-  let note = rowCut ? `\n(Row cut at ${MAX_RESULT_CHARS} characters; select fewer columns.)` : "";
-  if (lines.length < rows.length) {
-    note = `\n(Showing ${lines.length} of ${rows.length} rows; the rest do not fit the ${MAX_RESULT_CHARS}-character result cap. Aggregate, narrow the window or lower the LIMIT to see the rest.)`;
-  }
+  let out = csvBlock(headers, rows.map((r) => () => headers.map((k) => fmtVal(r[k]))), {
+    cut: (shown, total) => `\n(Showing ${shown} of ${total} rows; the rest do not fit the ${MAX_RESULT_CHARS}-character result cap. Aggregate, narrow the window or lower the LIMIT to see the rest.)`,
+  });
   // A result that fills the query's row limit, explicit or default, can be cut short.
   const limit = query === undefined ? null : outerLimit(query);
-  if (rows.length === limit) note += `\n(The result fills the query's row limit of ${limit}; there can be more. This is not a total.)`;
-
-  return `${hdr}\n${lines.join("\n")}${note}`;
+  if (rows.length === limit) out += `\n(The result fills the query's row limit of ${limit}; there can be more. This is not a total.)`;
+  return out;
 }

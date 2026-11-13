@@ -6,17 +6,28 @@ import { WEB_CONFIG } from "./config";
 import { IS_IOS } from "./platform";
 import { RESUME_EVENT, useOnResume } from "./resume";
 
-/** Chat scroll that follows content growth; any upward scroll pauses it until the bottom is reached again. A new `mountKey` re-attaches to a swapped container. */
+const rowsOf = (content: HTMLElement) => content.querySelectorAll<HTMLElement>("[data-role]");
+
+/**
+ * Chat scroll that follows content growth; any upward scroll pauses it until the bottom is reached again. A new
+ * `mountKey` re-attaches to a swapped container. An anchor holds an element's top under the header while content
+ * loads and grows: the last message when a chat opens (its summary when it has one), the summary when it appears in a followed reply. The reader's
+ * own input releases it.
+ */
 export function useChatScroll(mountKey?: unknown) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const shouldAutoScroll = useRef(true);
+  const anchor = useRef<(() => Element | null | undefined) | null>(null);
+  // Rows whose summary was already seen, by position: a remounted row is not a new answer.
+  const seenSummaries = useRef(new Set<number>());
   const [isAtBottom, setIsAtBottom] = useState(true);
 
   const scrollToBottom = useCallback((opts?: { animation?: "instant" | "smooth" }) => {
     const el = scrollRef.current;
     if (!el) return;
     shouldAutoScroll.current = true;
+    anchor.current = null;
     el.scrollTo({ top: el.scrollHeight, behavior: opts?.animation === "smooth" ? "smooth" : "instant" });
   }, []);
 
@@ -24,8 +35,27 @@ export function useChatScroll(mountKey?: unknown) {
     const el = scrollRef.current;
     if (!el) return;
     shouldAutoScroll.current = false;
+    anchor.current = null;
     el.scrollTo({ top: 0, behavior: opts?.animation === "smooth" ? "smooth" : "instant" });
   }, []);
+
+  const holdAnchor = useCallback(() => {
+    const scroller = scrollRef.current;
+    if (!scroller || !anchor.current) return;
+    const target = anchor.current();
+    // A target that left the thread ends the hold, so the view follows the bottom again.
+    if (!target) anchor.current = null;
+    else scrollUnderHeader(scroller, target, "instant");
+  }, []);
+
+  const scrollToLastMessage = useCallback(() => {
+    shouldAutoScroll.current = false;
+    anchor.current = () => {
+      const last = contentRef.current && [...rowsOf(contentRef.current)].at(-1);
+      return last?.querySelector("[data-summary]") ?? last;
+    };
+    holdAnchor();
+  }, [holdAnchor]);
 
   // Track isAtBottom and re-enable auto-scroll when user scrolls back down
   useEffect(() => {
@@ -43,7 +73,7 @@ export function useChatScroll(mountKey?: unknown) {
       const distance = gap(top);
       const atBottom = distance < 50;
       setIsAtBottom(atBottom);
-      if (top >= 0) {
+      if (top >= 0 && !anchor.current) {
         if (top < lastTop && distance > lastGap && height >= lastHeight) shouldAutoScroll.current = false;
         else if (atBottom) shouldAutoScroll.current = true;
       }
@@ -51,22 +81,47 @@ export function useChatScroll(mountKey?: unknown) {
       lastHeight = height;
       lastGap = distance;
     };
+    const release = () => { anchor.current = null; };
+    // pointerdown and touchstart, not touchmove: charts stop touchmove propagation, and a scrollbar drag sends no wheel event.
+    // The document, not the scroller, hears them: the summary tabs sit outside the scroller.
+    const inputs = ["wheel", "pointerdown", "touchstart", "keydown"];
     el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
+    for (const type of inputs) document.addEventListener(type, release, { passive: true, capture: true });
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      for (const type of inputs) document.removeEventListener(type, release, { capture: true });
+    };
   }, [mountKey]);
 
-  // ResizeObserver on inner content div — auto-scrolls on any content growth
   useEffect(() => {
     const el = contentRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => {
-      if (shouldAutoScroll.current) scrollToBottom();
+      const rows = rowsOf(el);
+      const seen = seenSummaries.current;
+      for (const index of seen) if (index >= rows.length) seen.delete(index);
+      const last = rows.length - 1;
+      const fresh = last >= 0 && !seen.has(last) && rows[last].querySelector("[data-summary]");
+      if (fresh) seen.add(last);
+      if (fresh && shouldAutoScroll.current && !anchor.current) {
+        shouldAutoScroll.current = false;
+        anchor.current = () => rowsOf(el)[last]?.querySelector("[data-summary]");
+      }
+      if (anchor.current) holdAnchor();
+      else if (shouldAutoScroll.current) scrollToBottom();
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [scrollToBottom, mountKey]);
+  }, [scrollToBottom, holdAnchor, mountKey]);
 
-  return { scrollRef, contentRef, isAtBottom, scrollToBottom, scrollToTop };
+  return { scrollRef, contentRef, isAtBottom, scrollToBottom, scrollToTop, scrollToLastMessage };
+}
+
+/** Scrolls so `target` sits 12 px under the scroller's sticky page header. */
+export function scrollUnderHeader(scroller: HTMLElement, target: Element, behavior: ScrollBehavior) {
+  const header = scroller.querySelector("[data-page-header]")?.getBoundingClientRect().height ?? 0;
+  const top = Math.max(0, scroller.scrollTop + target.getBoundingClientRect().top - scroller.getBoundingClientRect().top - header - 12);
+  if (Math.abs(scroller.scrollTop - top) > 1) scroller.scrollTo({ top, behavior });
 }
 
 /** Measure container size via ResizeObserver */
@@ -180,10 +235,16 @@ export function useDeleteSession({ noun = "investigation", onDeleted }: { noun?:
   return (id: string) => mutation.mutate({ id });
 }
 
+/** Moves to a path without a reload; `replace` swaps the current history entry. */
+export function navigate(path: string, replace = false) {
+  if (replace) window.history.replaceState(null, "", path);
+  else window.history.pushState(null, "", path);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
 /** Opens the Settings page without a reload. */
 export function openSettings() {
-  window.history.pushState(null, "", "/settings");
-  window.dispatchEvent(new PopStateEvent("popstate"));
+  navigate("/settings");
 }
 
 /** Escape calls `onStop` while `active`, unless an open dialog or menu took the key. */
@@ -205,7 +266,7 @@ export function useEscapeToStop(active: boolean, onStop: () => void) {
 /** Polled gcloud auth status, shared by the GCP project picker and the Vertex card. */
 export function useGcpAuthStatus() {
   return trpc.provider.gcpAuthStatus.useQuery(undefined, {
-    refetchInterval: WEB_CONFIG.sessionStaleTimeMs,
+    refetchInterval: WEB_CONFIG.gcpAuthPollMs,
     // The iOS app has no gcloud credentials to read.
     enabled: !IS_IOS,
   });

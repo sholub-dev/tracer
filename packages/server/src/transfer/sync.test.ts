@@ -3,11 +3,12 @@ import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import Database from "better-sqlite3-multiple-ciphers";
 import { createNodeDb } from "../db/node-db.js";
-import { runSetup } from "../db/setup.js";
+import { LOCAL_SETTING_KEYS, runSetup } from "../db/setup.js";
 import type { Db } from "../db/driver.js";
 import { appSettings, chatSessions, providerConfigs, memoryOperations, monitors, monitorTriggers, syncRows, toolMemories } from "../db/schema.js";
 import { exportSnapshot, FORMAT, importSnapshot } from "./snapshot.js";
-import { exportSyncPayload, LOCAL_SETTING_KEYS, mergeSyncPayload } from "./sync.js";
+import { exportSyncPayload, mergeSyncPayload } from "./sync.js";
+import { failedWindowEnds } from "../monitors/store.js";
 
 async function freshDb() {
   const sqlite = new Database(":memory:");
@@ -257,6 +258,26 @@ test("the Vertex config row stays on the desktop and a Vertex chat model leaves 
 
   await mergeSyncPayload(b.db, clone(await exportSyncPayload(a.db)));
   assert.equal((await b.db.select().from(appSettings).where(eq(appSettings.key, "chat_model")).get())?.value, JSON.stringify({ provider: "google", modelId: "p" }));
+});
+
+test("a merge drops a Vertex provider row it is sent", async () => {
+  const { a, b } = await pair();
+  const row = { id: 1, type: "google-vertex", config: "{}", createdAt: 0 };
+  const payload = clone(await exportSyncPayload(a.db));
+  payload.tables.provider_configs = [row];
+  payload.rows.push({ tbl: "provider_configs", row_key: "google-vertex", changed_at: T0, deleted: 0 });
+  const { applied } = await mergeSyncPayload(b.db, payload);
+  assert.equal(applied.provider_configs, 0);
+  assert.equal((await b.db.select().from(providerConfigs).all()).length, 0);
+});
+
+test("a merge that changes a monitor makes it retry its failed window", async () => {
+  const { a, b } = await pair();
+  failedWindowEnds.set("m1", 100);
+  await a.db.update(monitors).set({ alertEnabled: 0 }).where(eq(monitors.id, "m1")).run();
+  await stamp(a.db, "monitors", "m1", T0 + 1000);
+  await mergeSyncPayload(b.db, await wire(a.db));
+  assert.equal(failedWindowEnds.has("m1"), false);
 });
 
 test("sync carries no run state: sessions export as done and a merge never overwrites it", async () => {

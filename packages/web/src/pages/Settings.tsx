@@ -55,7 +55,7 @@ export function Settings() {
           </ul>
         </nav>
         <div className="min-w-0 max-w-[720px] flex-1 pb-16">
-          <Panel key={tab} />
+          <Panel />
         </div>
       </div>
     </div>

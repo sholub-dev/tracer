@@ -1,6 +1,6 @@
-import { streamText, convertToModelMessages, hasToolCall, isStepCount, createUIMessageStream, toUIMessageStream, type UIMessage, type ToolSet } from "ai";
+import { streamText, convertToModelMessages, hasToolCall, isStepCount, createUIMessageStream, toUIMessageStream, type UIMessage, type ToolSet, isTextUIPart } from "ai";
 import { and, eq, sql } from "drizzle-orm";
-import { CLIENT_TOOL_NAMES, DEFAULT_SESSION_TITLE, cardRejected, findingSchema, TOOL_NAMES, unixNow, splitAtAnalysis, mergeProgressPart, findingFromMessages, findingMarkdown, resultRefsToText, turnStart, type AfterCompleteParams, type ProgressPart, type TokenUsage } from "@tracer-sh/shared";
+import { CLIENT_TOOL_NAMES, DEFAULT_SESSION_TITLE, cardRejected, findingSchema, TOOL_NAMES, unixNow, splitAtAnalysis, findingFromMessages, findingMarkdown, resultRefsToText, turnStart, type AfterCompleteParams, type TokenUsage } from "@tracer-sh/shared";
 import { chatSessions } from "../db/schema.js";
 import { sessionChanged } from "../lib/session-events.js";
 import { decodeMessages, encodeMessages } from "../lib/messages-codec.js";
@@ -8,7 +8,6 @@ import { resolveModel, type ProviderOptions } from "../llm/resolve.js";
 import { extractUsage, recordEachCall } from "../llm/usage.js";
 import { StreamBroadcaster } from "../lib/stream-broadcaster.js";
 import type { Context } from "../trpc/context.js";
-import type { ChatToolWriter as StreamWriter } from "@tracer-sh/shared";
 import { getCurrentDateBlock, getCurrentTimeText } from "../lib/current-context.js";
 import { stampSentTime, withPromptCaching, withSentTimes } from "../llm/prompt-cache.js";
 import { ASK_USER_PROMPT, BASE_PROMPT, buildNoProviderPrompt, EVIDENCE_GROUNDING, PLAIN_LANGUAGE } from "../lib/shared-prompts.js";
@@ -106,7 +105,7 @@ export interface ChatAgentConfig {
   summary?: string | null;
   summaryUpTo?: number | null;
   context: Context;
-  collectTools: (writer: StreamWriter) => Promise<{
+  collectTools: (sessionId: string) => Promise<{
     tools: Record<string, unknown> | undefined;
     systemPrompt?: string;
     promptFragments?: string[];
@@ -133,20 +132,14 @@ export interface ChatAgentConfig {
  */
 async function finalizeSession(sessionId: string, context: Context, broadcaster: StreamBroadcaster): Promise<void> {
   if (!context.activeStreams.has(sessionId)) return;
+  const markDone = () => context.db
+    .update(chatSessions)
+    .set({ status: "done", updatedAt: unixNow() })
+    .where(eq(chatSessions.id, sessionId))
+    .run();
   try {
-    // One retry: a row left "streaming" with no run shows as running forever.
-    for (let attempt = 0; ; attempt++) {
-      try {
-        await context.db
-          .update(chatSessions)
-          .set({ status: "done", updatedAt: unixNow() })
-          .where(eq(chatSessions.id, sessionId))
-          .run();
-        break;
-      } catch (err) {
-        if (attempt > 0) throw err;
-      }
-    }
+    // One retry: a row left "streaming" with no run shows as running forever. The desktop driver returns synchronously.
+    await Promise.resolve().then(markDone).catch(markDone);
   } catch (err) {
     console.warn(`[chat] Failed to mark ${sessionId} done:`, err);
   } finally {
@@ -180,9 +173,7 @@ function endsWithToolStep(msg: UIMessage | undefined): boolean {
   });
 }
 
-const FINDING_TOOL = "report_finding";
 const READ_RESULT_TOOL = "read_result";
-const SUMMARY_TOOL = "report_alert_summary";
 
 /** True for a card that was shown: recorded, or saved before the output said so (a valid card and no error). An aborted or sent-back card is not. */
 function cardRecorded(input: unknown, output: unknown): boolean {
@@ -197,24 +188,24 @@ export function turnToolNames(messages: UIMessage[]): string[] {
   return messages.slice(turnStart(messages)).flatMap((msg) => msg.parts.flatMap((part) => {
     const p = part as { type: string; toolName?: string; state?: string; input?: unknown; output?: unknown };
     const name = p.type === "dynamic-tool" ? p.toolName : p.type.startsWith("tool-") ? p.type.slice(5) : undefined;
-    return name && !(name === FINDING_TOOL && (p.state !== "output-available" || !cardRecorded(p.input, p.output))) ? [name] : [];
+    return name && !(name === TOOL_NAMES.FINDING && (p.state !== "output-available" || !cardRecorded(p.input, p.output))) ? [name] : [];
   }));
 }
 
 type StepCalls = { toolResults: { toolName: string; input?: unknown; output: unknown }[] }[];
 
-const cardShown = ({ steps }: { steps: StepCalls }) => stepToolNames(steps).includes(FINDING_TOOL);
+const cardShown = ({ steps }: { steps: StepCalls }) => stepToolNames(steps).includes(TOOL_NAMES.FINDING);
 
 /** Names of the tool calls in this attempt's finished steps; a card that was not recorded does not count. */
 function stepToolNames(steps: StepCalls): string[] {
-  return steps.flatMap((s) => s.toolResults.flatMap((r) => (r.toolName === FINDING_TOOL && !cardRecorded(r.input, r.output) ? [] : [r.toolName])));
+  return steps.flatMap((s) => s.toolResults.flatMap((r) => (r.toolName === TOOL_NAMES.FINDING && !cardRecorded(r.input, r.output) ? [] : [r.toolName])));
 }
 
 /** True when a query ran and no finding card followed. */
 export function owesFinding(toolNames: string[]): boolean {
   // A question to the person ends the reply on purpose, so it is a valid end without a card.
   if (toolNames.includes(TOOL_NAMES.ASK_USER)) return false;
-  return toolNames.some((name) => !NON_QUERY_TOOLS.has(name)) && !toolNames.includes(FINDING_TOOL);
+  return toolNames.some((name) => !NON_QUERY_TOOLS.has(name)) && !toolNames.includes(TOOL_NAMES.FINDING);
 }
 
 /** The model cannot see its step count, so a deep investigation would spend the budget before its analysis and review. */
@@ -224,7 +215,7 @@ export function budgetNote(stepNumber: number, maxSteps: number, toolNames: stri
   if (stepNumber === maxSteps - 1) {
     return requireFinding
       ? "This is the last step. Call report_finding now from the results you have. State only what the results show, set the confidence label to match, and state in unknown the open why you did not reach."
-      : "This is the last step, and no query tools remain. Answer now from the results you have: in text, or with report_finding if this ends an investigation. State only what the results show, and name the open question you did not reach.";
+      : "This is the last step, and no query tools remain. Answer now from the results you have with report_finding, or in text when the answer is one fact. State only what the results show, and name the open question you did not reach.";
   }
   if (reserve > 1 && stepNumber === maxSteps - reserve) {
     if (!requireFinding) return `At this point ${reserve} steps remained in this reply. Finish the link you are on, then answer from the results you have.`;
@@ -252,6 +243,32 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+/** What stays the same across the attempts of one run. */
+interface RunConfig {
+  sessionId: string;
+  context: Context;
+  broadcaster: StreamBroadcaster;
+  serverAbort: AbortController;
+  collectTools: ChatAgentConfig["collectTools"];
+  sessionTitle: ChatAgentConfig["sessionTitle"];
+  model: Parameters<typeof streamText>[0]["model"];
+  provider: string;
+  modelId: string;
+  providerOptions: ProviderOptions;
+  compaction: { summary?: string | null; summaryUpTo?: number | null };
+  /** Whether the run must end with a finding card. */
+  requireFinding: boolean;
+}
+
+interface AttemptOptions {
+  history: UIMessage[];
+  final: boolean;
+  /** Steps the reply held when the run began: a continued reply starts a fresh budget, a re-run attempt keeps spending the same one. */
+  budgetFrom: number;
+  /** The one extra pass that adds the finding card a finished turn still owes. */
+  repair?: Owed;
+}
+
 /**
  * Background LLM processing — runs completely independent of the HTTP response.
  * Emits stream parts to the broadcaster; saves messages to DB after each tool step and on completion.
@@ -259,43 +276,11 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
  * A failed last attempt and a stopped run still save the reply they produced.
  */
 async function processLLMStream(
-  sessionId: string,
-  messages: UIMessage[],
-  context: Context,
-  broadcaster: StreamBroadcaster,
-  serverAbort: AbortController,
-  collectTools: ChatAgentConfig["collectTools"],
-  sessionTitle: ChatAgentConfig["sessionTitle"],
-  model: Parameters<typeof streamText>[0]["model"],
-  provider: string,
-  modelId: string,
-  providerOptions: ProviderOptions,
-  compaction: { summary?: string | null; summaryUpTo?: number | null },
-  final: boolean,
-  /** Steps the reply held when the run began: a continued reply starts a fresh budget, a re-run attempt keeps spending the same one. */
-  budgetFrom: number,
-  /** Whether the run must end with a finding card. */
-  requireFinding: boolean,
-  /** The one extra pass that adds the finding card a finished turn still owes. */
-  repair?: Owed,
+  run: RunConfig,
+  { history: messages, final, budgetFrom, repair }: AttemptOptions,
 ): Promise<AttemptResult> {
-  // Sub-agent progress per tool call, so a stopped run keeps what its tools streamed.
-  const progress = new Map<string, ProgressPart[]>();
-  const writer: StreamWriter = {
-    write: (part) => {
-      const p = part as Record<string, unknown>;
-      if (p.type === "data-provider-part") {
-        const data = p.data as { toolCallId: string; part: { type: string } };
-        progress.set(data.toolCallId, mergeProgressPart(progress.get(data.toolCallId) ?? [], data.part));
-      }
-      const emitted = p.type === "data-provider-part"
-        ? { ...p, transient: true }
-        : p;
-      broadcaster.emit(emitted);
-    },
-    sessionId,
-  };
-  const collected = await collectTools(writer);
+  const { sessionId, context, broadcaster, serverAbort, collectTools, sessionTitle, model, provider, modelId, providerOptions, compaction, requireFinding } = run;
+  const collected = await collectTools(sessionId);
   // One gate per attempt: it holds the tool calls of a step to the read limit and runs writes alone.
   // The run's own model reviews the conclusion; swap the tool before gating so it stays a gated write.
   // The repair pass and the last step have no step left to fix a sent-back summary or to write a ledger for the card.
@@ -307,9 +292,17 @@ async function processLLMStream(
   const reviewed = collectedTools && {
     ...collectedTools,
     [READ_RESULT_TOOL]: readResultTool(originals),
-    ...(ANALYSIS_TOOL_NAME in collectedTools && { [ANALYSIS_TOOL_NAME]: createBeginAnalysisTool((ledger, msgs, signal) => reviewConclusion(context.db, sessionId, model, modelId, ledger, restoreContext(msgs, originals), signal, providerOptions, questionStart, Object.keys(collectedTools), gate.stepReads()), (ledger, msgs) => citedOriginals(`${ledger.chain ?? ""} ${ledger.causeEvidence ?? ""}`, msgs, originals, CONFIG.citedResultsMaxChars), originals, () => questionStart, gate.stepReads) }),
-    ...(FINDING_TOOL in collectedTools && { [FINDING_TOOL]: reportFindingTool(originals, () => questionStart, () => ANALYSIS_TOOL_NAME in collectedTools, () => lastStep, gate.stepReads) }),
-    ...(isSlackSummaryTool(collectedTools[SUMMARY_TOOL]) && { [SUMMARY_TOOL]: reportAlertSummaryTool({ slack: true }, (summary, msgs, signal) => reviewSummary(context.db, sessionId, model, modelId, summary, restoreContext(msgs, originals), signal, providerOptions, questionStart, gate.stepReads()), () => questionStart, () => lastStep) }),
+    ...(ANALYSIS_TOOL_NAME in collectedTools && {
+      [ANALYSIS_TOOL_NAME]: createBeginAnalysisTool(
+        (ledger, msgs, signal) => reviewConclusion(context.db, sessionId, model, modelId, ledger, restoreContext(msgs, originals), signal, providerOptions, questionStart, Object.keys(collectedTools), gate.stepReads()),
+        (ledger, msgs) => citedOriginals(`${ledger.chain ?? ""} ${ledger.causeEvidence ?? ""}`, msgs, originals, CONFIG.citedResultsMaxChars),
+        originals,
+        () => questionStart,
+        gate.stepReads,
+      ),
+    }),
+    ...(TOOL_NAMES.FINDING in collectedTools && { [TOOL_NAMES.FINDING]: reportFindingTool(originals, () => questionStart, () => ANALYSIS_TOOL_NAME in collectedTools, () => lastStep, gate.stepReads) }),
+    ...(isSlackSummaryTool(collectedTools[TOOL_NAMES.ALERT_SUMMARY]) && { [TOOL_NAMES.ALERT_SUMMARY]: reportAlertSummaryTool({ slack: true }, (summary, msgs, signal) => reviewSummary(context.db, sessionId, model, modelId, summary, restoreContext(msgs, originals), signal, providerOptions, questionStart, gate.stepReads()), () => questionStart, () => lastStep) }),
   };
   const tools = reviewed && gate(reviewed);
 
@@ -384,7 +377,7 @@ async function processLLMStream(
   if (steer?.steered.length) modelMessages.push(...await convertToModelMessages(withSentTimes(steer.steered), { convertDataPart: () => undefined }));
 
   // The nudge is model input only, so the saved reply does not gain a user turn.
-  if (repair) modelMessages.push(harnessNote(`Call ${FINDING_TOOL} now with the answer to the question.`));
+  if (repair) modelMessages.push(harnessNote(`Call ${TOOL_NAMES.FINDING} now with the answer to the question.`));
 
   const cached = withPromptCaching(provider, systemPrompt, providerOptions);
   const maxSteps = collected.maxSteps ?? DEFAULTS.directModeMaxSteps;
@@ -394,10 +387,10 @@ async function processLLMStream(
   const spent = repair ? 0 : Math.max(0, replySteps - budgetFrom);
   // The repair pass gets more steps only to fix cards the check sent back.
   const stepLimit = repair ? 1 + MAX_SEND_BACKS : Math.max(1, maxSteps - spent);
-  const canReport = tools !== undefined && FINDING_TOOL in tools;
+  const canReport = tools !== undefined && TOOL_NAMES.FINDING in tools;
   // Anthropic extended thinking rejects a forced tool choice; activeTools alone still works.
   const mayForceTool = provider !== "anthropic" || !providerOptions?.anthropic?.thinking;
-  const forceCard = { activeTools: [FINDING_TOOL], ...(mayForceTool ? { toolChoice: { type: "tool" as const, toolName: FINDING_TOOL } } : {}) };
+  const forceCard = { activeTools: [TOOL_NAMES.FINDING], ...(mayForceTool ? { toolChoice: { type: "tool" as const, toolName: TOOL_NAMES.FINDING } } : {}) };
   // `step` counts the steps of the reply since the run began, across re-run attempts.
   const toolsForStep = (step: number, steps: StepCalls) => {
     if (repair) return forceCard;
@@ -406,7 +399,7 @@ async function processLLMStream(
     const names = [...turnToolNames(messages), ...stepToolNames(steps)];
     if (!owesFinding(names)) return undefined;
     // A chat run may answer in text: only the query tools go, nothing is forced.
-    return requireFinding ? forceCard : { activeTools: [FINDING_TOOL] };
+    return requireFinding ? forceCard : { activeTools: [TOOL_NAMES.FINDING] };
   };
   // Ends only this attempt (a silent stream), unlike serverAbort, which is a stop of the whole run.
   // Not AbortSignal.any: it needs iOS 17.4, and the app supports iOS 15. A stop of the run also ends the attempt.
@@ -420,8 +413,9 @@ async function processLLMStream(
     instructions: cached.instructions,
     messages: modelMessages,
     tools: tools as Parameters<typeof streamText>[0]["tools"],
-    // A question to the person ends the reply; their answer starts the next turn.
-    stopWhen: tools ? [isStepCount(stepLimit), hasToolCall(TOOL_NAMES.ASK_USER), ...(repair ? [cardShown] : [])] : undefined,
+    // A question to the person ends the reply; their answer starts the next turn. An accepted card ends a chat reply;
+    // a monitor run still calls its triage and Slack tools after the card.
+    stopWhen: tools ? [isStepCount(stepLimit), hasToolCall(TOOL_NAMES.ASK_USER), ...(repair || !requireFinding ? [cardShown] : [])] : undefined,
     prepareStep: async ({ stepNumber, steps, messages: carried }) => {
       gate.startStep();
       // Masking is idempotent and the returned messages carry forward, so each step masks only what the watermark newly passed.
@@ -522,25 +516,9 @@ async function processLLMStream(
             return;
           }
 
-          // A stopped or failed reply can end inside a tool call; saved, it would show as still running.
-          const withProgress = toSave.map((msg) => msg.role !== "assistant" ? msg : {
-            ...msg,
-            parts: msg.parts.map((part) => {
-              const p = part as Record<string, unknown>;
-              const streamed = typeof p.toolCallId === "string" ? progress.get(p.toolCallId) : undefined;
-              return streamed?.length && p.state !== "output-available" && p.state !== "output-error"
-                ? { ...p, output: { parts: streamed } } as typeof part
-                : part;
-            }),
-          });
-          const enrichedMessages = sanitizeMessages(withProgress).map((msg, i) => {
-            if (msg.role !== "assistant") return msg;
-            const parts = msg.parts;
-            if (i === toSave.length - 1) {
-              return { ...msg, parts, usage: chatUsage };
-            }
-            return { ...msg, parts };
-          });
+          // sanitizeMessages settles a stopped or failed reply that ends inside a tool call, so it does not show as still running.
+          const enrichedMessages = sanitizeMessages(toSave).map((msg, i) =>
+            msg.role === "assistant" && i === toSave.length - 1 ? { ...msg, usage: chatUsage } : msg);
 
           const title = sessionTitle(enrichedMessages);
           // A stopped or failed reply gets no repair pass. While one is owed the row stays "streaming"; finalizeSession writes "done".
@@ -573,23 +551,15 @@ async function processLLMStream(
           const afterComplete = repair?.afterComplete ?? collected.afterComplete;
           const finish = () => {
             if (!afterComplete) return;
-            let lastUserText = "";
-            let lastAssistantText = "";
-            for (let i = enrichedMessages.length - 1; i >= 0; i--) {
-              const msg = enrichedMessages[i];
-              // The last text part of a reply is its answer; the first can be a note before a tool call.
-              const text = (msg.role === "assistant" ? msg.parts.filter((p: { type: string }) => p.type === "text").at(-1) : msg.parts.find((p: { type: string }) => p.type === "text"));
-              if (msg.role === "assistant" && !lastAssistantText && text) {
-                lastAssistantText = resultRefsToText((text as { text: string }).text);
-              } else if (msg.role === "user" && !lastUserText && text) {
-                lastUserText = (text as { text: string }).text;
-              }
-              if (lastUserText && lastAssistantText) break;
-            }
+            const lastWithText = (role: string) => enrichedMessages.filter((m) => m.role === role && m.parts.some(isTextUIPart)).at(-1);
+            // The last text part of a reply is its answer; the first can be a note before a tool call.
+            const answer = lastWithText("assistant")?.parts.filter(isTextUIPart).at(-1);
+            const question = lastWithText("user")?.parts.find(isTextUIPart);
+            let lastAssistantText = answer ? resultRefsToText(answer.text) : "";
             // The card is the answer; the first text part is only a note before it.
             const finding = findingFromMessages(enrichedMessages.slice(turnStart(enrichedMessages)));
             if (finding) lastAssistantText = findingMarkdown(finding);
-            afterComplete({ lastUserMessage: lastUserText, lastAssistantText, sessionId });
+            afterComplete({ lastUserMessage: question ? question.text : "", lastAssistantText, sessionId });
           };
           // A stopped reply is partial; follow-up work (e.g. a monitor's report) waits for a full run.
           if (!failed && !serverAbort.signal.aborted) {
@@ -737,8 +707,8 @@ async function processLLMStream(
 export async function runChatAgent({
   sessionId, messages: incoming, summary, summaryUpTo, context, collectTools, sessionTitle, retryDelaysMs = [], onFailed, scope, resumed, requireFinding = false,
 }: ChatAgentConfig) {
-  const messages = stampSentTime(incoming, await getCurrentTimeText(context.db));
-  const resolved = await resolveModel(context.db);
+  const [timeText, resolved] = await Promise.all([getCurrentTimeText(context.db), resolveModel(context.db)]);
+  const messages = stampSentTime(incoming, timeText);
   if ("error" in resolved) return { error: resolved.error };
   const { model, provider, modelId, providerOptions } = resolved;
 
@@ -784,6 +754,7 @@ export async function runChatAgent({
   // Start LLM processing in background — completely decoupled from HTTP lifecycle.
   // If the HTTP response is cancelled (client navigates away), this continues running.
   // The session stays active between attempts, so nothing else starts a run on it.
+  const run: RunConfig = { sessionId, context, broadcaster, serverAbort, collectTools, sessionTitle, model, provider, modelId, providerOptions, compaction: { summary, summaryUpTo }, requireFinding };
   (async () => {
     // Each re-run continues from the last saved step of the attempts before it.
     let history = messages;
@@ -799,19 +770,11 @@ export async function runChatAgent({
     };
     for (let attempt = 0; ; attempt++) {
       const final = attempt >= retryDelaysMs.length;
-      const { error, transient, checkpoint, owed } = await processLLMStream(
-        sessionId, history, context, broadcaster, serverAbort,
-        collectTools, sessionTitle, model, provider, modelId, providerOptions,
-        { summary, summaryUpTo }, final, budgetFrom, requireFinding,
-      ).catch(attemptFailed(final));
+      const { error, transient, checkpoint, owed } = await processLLMStream(run, { history, final, budgetFrom }).catch(attemptFailed(final));
       if (error === undefined) {
         if (!owed) break;
         // One extra pass on the saved reply, never repeated.
-        const repaired = await processLLMStream(
-          sessionId, owed.messages, context, broadcaster, serverAbort,
-          collectTools, sessionTitle, model, provider, modelId, providerOptions,
-          { summary, summaryUpTo }, false, 0, requireFinding, owed,
-        ).catch(attemptFailed(false));
+        const repaired = await processLLMStream(run, { history: owed.messages, final: false, budgetFrom: 0, repair: owed }).catch(attemptFailed(false));
         if (repaired.error !== undefined) {
           console.warn(`[chat] Finding pass for ${sessionId} failed:`, repaired.error);
           // Clients drop what the failed pass streamed after the last saved step.

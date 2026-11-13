@@ -47,11 +47,12 @@ export function guardLocalRequests(
     // tRPC percent-decodes the procedure path, so "transfer%2Esend" must match too.
     let path = new URL(req.url).pathname;
     try { path = decodeURIComponent(path); } catch { /* tRPC rejects a malformed path too */ }
-    const ownBrowser = localHost && isLoopbackAddress(env.incoming.socket.remoteAddress) && !FORWARDING_HEADERS.some((h) => req.headers.has(h));
+    const loopbackPeer = isLoopbackAddress(env.incoming.socket.remoteAddress);
+    const ownBrowser = localHost && loopbackPeer && !FORWARDING_HEADERS.some((h) => req.headers.has(h));
     if (!listensOnLoopback && token && !ownBrowser && path.startsWith("/api/") && !tokenMatches(req.headers.get("authorization"), token)) {
       return new Response("Unauthorized", { status: 401 });
     }
-    if (path.startsWith("/api/trpc/") && path.includes("transfer.") && !(localHost && isLoopbackAddress(env.incoming.socket.remoteAddress))) {
+    if (path.startsWith("/api/trpc/") && path.includes("transfer.") && !(localHost && loopbackPeer)) {
       return new Response("Forbidden", { status: 403 });
     }
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {

@@ -15,7 +15,7 @@ function Figures({ entries }: { entries: [string, unknown][] }) {
         ) : (
           <div key={key} className="flex min-w-0 flex-col gap-0.5 border-l border-border pl-3">
             <dt className="text-xs break-words text-muted-foreground">{key}</dt>
-            <dd className="text-xl font-semibold tracking-tight break-words text-foreground tabular-nums">{formatValue(value, key)}</dd>
+            <dd className="text-xl font-semibold tracking-tight break-words text-foreground">{formatValue(value, key)}</dd>
           </div>
         ),
       )}

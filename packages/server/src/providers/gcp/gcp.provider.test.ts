@@ -20,7 +20,7 @@ test("ping fails and clears the token cache when the API rejects the token", asy
     return new Response(JSON.stringify({ error: { message: "reauth related error" } }), { status: 401 });
   }) as typeof fetch;
   try {
-    const provider = new GcpProvider({ command: "x", args: [] } as never, { projectId: "p" });
+    const provider = new GcpProvider({} as never, { projectId: "p" });
     provider.connected = true;
     const result = await provider.ping();
     assert.equal(result.ok, false);

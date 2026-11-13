@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import type { UIMessage } from "ai";
 import { Copy } from "lucide-react";
 import { toast } from "sonner";
-import { ANALYSIS_MARKER, askUserText, CLIENT_TOOL_NAMES, findAnalysisMarker, findingFromMessages, findingMarkdown, resultRefsToText } from "@tracer-sh/shared";
+import { ANALYSIS_MARKER, askUserText, CLIENT_TOOL_NAMES, findingFromMessages, findingMarkdown, resultRefsToText, splitAtAnalysis } from "@tracer-sh/shared";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -47,22 +47,6 @@ export function extractMessageText(parts: UIMessage["parts"]): string {
     }
   }
   return chunks.join("\n\n").trim();
-}
-
-/** The parts after the analysis marker; null when there is none. */
-function analysisParts(parts: UIMessage["parts"]): UIMessage["parts"] | null {
-  const marker = findAnalysisMarker(parts);
-  if (!marker) return null;
-  const out: UIMessage["parts"] = [];
-  for (let i = marker.partIdx; i < parts.length; i++) {
-    const p = parts[i];
-    if (i > marker.partIdx) out.push(p);
-    else if (marker.kind === "text" && p.type === "text") {
-      const after = p.text.slice(marker.charIdx + ANALYSIS_MARKER.length);
-      if (after.trim()) out.push({ type: "text", text: after });
-    }
-  }
-  return out;
 }
 
 /** Copy through a hidden textarea, for contexts where the async clipboard API is missing or refused. */
@@ -119,7 +103,7 @@ export function MessageActions({ parts, hoverOnly = false, children, className }
         icon={<Copy />}
         label="Copy text"
         onClick={() => {
-          const text = extractMessageText(analysisParts(parts) ?? parts);
+          const text = extractMessageText(splitAtAnalysis(parts)?.analysis ?? parts);
           if (text) copyText(text, "Copied as text");
         }}
       />

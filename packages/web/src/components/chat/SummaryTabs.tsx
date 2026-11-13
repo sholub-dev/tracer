@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import type { RefObject } from "react";
 import { cn } from "@/lib/utils";
+import { scrollUnderHeader } from "@/lib/hooks";
 
 const SELECTOR = 'section[aria-label="Analysis"]';
-// Keeps the target clear of the sticky session header.
+// The sticky session header height, so a section under it does not count as visible.
 const TOP_OFFSET = 56;
 
 /** Phone-only tabs on the right edge; each one scrolls the transcript to one analysis summary. */
@@ -55,9 +56,7 @@ export function SummaryTabs({ scrollRef, contentRef }: { scrollRef: RefObject<HT
   const go = (el: HTMLElement) => {
     const root = scrollRef.current;
     if (!root) return;
-    const top = el.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop - TOP_OFFSET;
-    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    root.scrollTo({ top: Math.max(0, top), behavior: reduce ? "instant" : "smooth" });
+    scrollUnderHeader(root, el, window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth");
   };
 
   return (
@@ -70,7 +69,7 @@ export function SummaryTabs({ scrollRef, contentRef }: { scrollRef: RefObject<HT
           aria-current={i === active ? "true" : undefined}
           onClick={() => go(el)}
           className={cn(
-            "flex h-7 w-5 items-center justify-center rounded-l-md border border-r-0 text-[11px] leading-none font-medium tabular-nums shadow-sm",
+            "flex h-7 w-5 items-center justify-center rounded-l-md border border-r-0 text-[11px] leading-none font-medium shadow-sm",
             i === active ? "border-primary bg-primary text-primary-foreground" : "bg-card text-muted-foreground",
           )}
         >

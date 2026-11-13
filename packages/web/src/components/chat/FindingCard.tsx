@@ -32,6 +32,7 @@ export function FindingCard({ card, revising = false, compact = false }: { card:
   return (
     <section
       aria-label={label}
+      data-summary
       className={cn(
         "rounded-[14px] border bg-card px-6 py-5 shadow-[0_1px_2px_rgb(0_0_0/0.05),0_8px_24px_rgb(0_0_0/0.08)] max-sm:px-4",
         compact && "px-4 py-3.5",

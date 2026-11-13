@@ -87,15 +87,12 @@ async function optimize(db: Db, toolName: string, sessionId?: string): Promise<O
       execute: async ({ id, verdict, reason }) => {
         if (verdict === "keep") stats.kept++;
         try {
-          const reviewNote = `[${verdict}] ${reason}`;
           await db.update(toolMemories)
-            .set({ reviewNote })
+            .set({ reviewNote: `[${verdict}] ${reason}` })
             .where(eq(toolMemories.id, id))
             .run();
-          return { reviewed: true, id, verdict };
-        } catch {
-          return { reviewed: true, id, verdict };
-        }
+        } catch { /* a failed note write must not fail the review */ }
+        return { reviewed: true, id, verdict };
       },
     }),
     update_memory: createUpdateMemoryTool(memoryExecute, {
@@ -115,7 +112,7 @@ async function optimize(db: Db, toolName: string, sessionId?: string): Promise<O
     })
     .join("\n");
 
-  const domainKnowledge = await getDomainKnowledge(toolName);
+  const domainKnowledge = getDomainKnowledge(toolName);
   const domainSection = domainKnowledge
     ? `## Provider Domain Knowledge (for reference — only delete memories that say the EXACT same thing)\n${domainKnowledge}\n\n`
     : "";

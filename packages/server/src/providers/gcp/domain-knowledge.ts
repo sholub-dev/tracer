@@ -22,8 +22,7 @@ const GCP_LOGGING_FILTER_SYNTAX = `## Cloud Logging Filter Syntax
 - Resource labels: \`resource.labels.service_name="my-service"\`
 - Log name: \`logName="projects/PROJECT/logs/LOG_ID"\` or \`log_id("LOG_ID")\`
 - Timestamp: \`timestamp >= "2024-01-15T00:00:00Z"\`
-- NEVER use SQL syntax (WHERE, SELECT, FROM) — this is NOT SQL
-- NEVER quote severity values: \`severity >= ERROR\` not \`severity >= "ERROR"\``;
+- NEVER use SQL syntax (WHERE, SELECT, FROM) — this is NOT SQL`;
 
 const GCP_RESOURCE_TYPES = `## Common Resource Types & Labels
 - \`cloud_run_revision\`: labels: service_name, revision_name, location, configuration_name
@@ -54,7 +53,6 @@ const GCP_TOOL_PARAMS = `## Tool Parameter Reference
 \`\`\`
 GOTCHA: \`resourceNames\` is an ARRAY of \`"projects/PROJECT_ID"\` strings, NOT a bare \`"PROJECT_ID"\` and NOT \`projectName\`
 GOTCHA: Always include \`orderBy: "timestamp desc"\` — default is \`timestamp asc\` (oldest first)
-Paging: there is no page token. Repeat the call with \`timestamp < "<oldest timestamp seen>"\` in the filter, or narrow the filter.
 
 ### list_time_series
 \`\`\`json
@@ -112,13 +110,11 @@ const GCP_ANTI_PATTERNS = `## Common Mistakes — AVOID THESE
 12. Cloud Run STDOUT/STDERR loses severity — apps writing plain text to stdout produce \`textPayload\` with \`severity=DEFAULT\`. Only structured JSON output preserves severity levels.
 13. Trace filter syntax: no spaces allowed except between separate filter terms. Misspelled filter keys silently become label filters instead of erroring.
 14. \`source()\` at org/folder level does NOT include child project logs — query each project explicitly.
-15. Query performance: >200 time series buckets degrades response time. Use tighter filters or coarser \`alignmentPeriod\`.
-16. Empty results with no filter adjustments — try: broader time range, remove resource.type filter, or filter by just \`severity>=ERROR\``;
+15. Query performance: >200 time series buckets degrades response time. Use tighter filters or coarser \`alignmentPeriod\`.`;
 
 const GCP_QUERY_DEFAULTS = `## Query Defaults
 - Use a **specific filter**. Filter by severity, resource type, service name, or time window.
 - Choose pageSize so the page shows what you need. Results show what the API returned (up to a text limit). When a result says it shows N of M, narrow the filter or the window, or lower pageSize.
-- There is no page token. For more logs, repeat the call with \`timestamp < "<oldest timestamp seen>"\` added to the filter and \`orderBy: "timestamp desc"\`.
 - For metrics: fetch the metric types the question needs. Avoid broad dumps.`;
 
 const GCP_FIELD_REFERENCE = `## GCP Field Reference & Payload Types
@@ -156,10 +152,8 @@ Cloud Run structured JSON → \`jsonPayload\` with proper severity IF the app wr
 - To search for a specific error message, use \`list_log_entries\` with \`severity>=ERROR\` and \`textPayload:"message"\` or \`jsonPayload.message:"message"\``;
 
 export const GCP_CROSS_SIGNAL = `## Cross-Signal Correlation
-- **Logs → Traces**: Log entries have a \`trace\` field (format: \`"projects/P/traces/TRACE_ID"\`). Extract TRACE_ID and use \`get_trace\`.
 - **Logs → Metrics**: \`resource.type\` + \`resource.labels\` in logs match metric filters — same service in logs = same filter in metrics.
-- **Error Reporting → Logs**: Use the error message from \`list_group_stats\` to filter logs: \`textPayload:"<message>"\`.
-- **Traces → Logs**: Filter logs by trace ID: \`trace="projects/PROJECT/traces/TRACE_ID"\``;
+- **Error Reporting → Logs**: Use the error message from \`list_group_stats\` to filter logs: \`textPayload:"<message>"\`.`;
 
 export const GCP_INSIDE_OUT_DEBUGGING = `## Inside-Out Debugging
 

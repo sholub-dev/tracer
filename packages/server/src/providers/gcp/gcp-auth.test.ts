@@ -29,3 +29,22 @@ test("concurrent getGcpAuth calls share one token exchange", async () => {
     clearGcpAuthCache();
   }
 });
+
+test("a service-account key skips the authorized_user check and the token exchange", async () => {
+  const path = join(mkdtempSync(join(tmpdir(), "gcp-auth-sa-")), "key.json");
+  writeFileSync(path, JSON.stringify({ type: "service_account", client_email: "a@b.iam" }));
+  const savedEnv = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  const savedFetch = globalThis.fetch;
+  process.env.GOOGLE_APPLICATION_CREDENTIALS = path;
+  clearGcpAuthCache();
+  let calls = 0;
+  globalThis.fetch = (async () => { calls++; return new Response("{}"); }) as typeof fetch;
+  try {
+    assert.deepEqual(await getGcpAuth(), { ok: true, token: null });
+    assert.equal(calls, 0);
+  } finally {
+    globalThis.fetch = savedFetch;
+    if (savedEnv === undefined) delete process.env.GOOGLE_APPLICATION_CREDENTIALS; else process.env.GOOGLE_APPLICATION_CREDENTIALS = savedEnv;
+    clearGcpAuthCache();
+  }
+});

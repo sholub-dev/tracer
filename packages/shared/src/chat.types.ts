@@ -1,69 +1,11 @@
-
-/** Progress part types streamed from sub-agents to the client */
-export type ProgressPart =
-  // totalRows: the original row count, set when the saved copy keeps only the first rows.
-  | { type: "query"; query: string; results: unknown; totalRows?: number }
-  | { type: "text"; content: string }
-  | { type: "tool-call"; toolName: string }
-  | { type: "reasoning"; content: string }
-  // Marks where the sub-agent's `begin_analysis` tool fired — everything after it
-  // is the final Analysis (rendered in the distinct Analysis box, like direct mode).
-  | { type: "analysis-start" }
-  // Legacy: older persisted sessions styled the last text part as a summary block.
-  | { type: "summary"; content: string };
-
-/** Folds one streamed sub-agent chunk into the parts received so far. */
-export function mergeProgressPart(
-  prev: readonly ProgressPart[],
-  part: { type: string; [key: string]: unknown },
-): ProgressPart[] {
-  // A retry clears the failed attempt's streamed parts before re-streaming.
-  if (part.type === "reset") return [];
-  const parts = [...prev];
-  if (part.type === "tool-call") {
-    parts.push({ type: "tool-call", toolName: part.toolName as string });
-  } else if (part.type === "text-delta") {
-    const last = parts[parts.length - 1];
-    if (last?.type === "text") {
-      parts[parts.length - 1] = { ...last, content: last.content + (part.delta as string) };
-    } else {
-      parts.push({ type: "text", content: part.delta as string });
-    }
-  } else if (part.type === "reasoning-delta") {
-    const last = parts[parts.length - 1];
-    if (last?.type === "reasoning") {
-      parts[parts.length - 1] = { ...last, content: last.content + (part.delta as string) };
-    } else {
-      parts.push({ type: "reasoning", content: part.delta as string });
-    }
-  } else if (part.type === "query") {
-    let tcIdx = -1;
-    for (let i = parts.length - 1; i >= 0; i--) {
-      if (parts[i].type === "tool-call") { tcIdx = i; break; }
-    }
-    if (tcIdx !== -1) parts.splice(tcIdx, 1);
-    parts.push({ type: "query", query: part.query as string, results: part.results });
-  } else if (part.type === "begin-analysis") {
-    // After begin_analysis, everything the sub-agent writes is its final Analysis.
-    parts.push({ type: "analysis-start" });
-  } else if (part.type === "mark-summary") {
-    // Legacy: older sub-agents marked the last text part as a summary block.
-    for (let i = parts.length - 1; i >= 0; i--) {
-      if (parts[i].type === "text") {
-        parts[i] = { ...parts[i], type: "summary" } as ProgressPart;
-        break;
-      }
-    }
-  }
-  return parts;
-}
-
 /** Tool names as registered on the server */
 export const TOOL_NAMES = {
   SAVE_MONITOR: "save_monitor",
   DELETE_MONITOR: "delete_monitor",
   BEGIN_ANALYSIS: "begin_analysis",
   ASK_USER: "ask_user",
+  FINDING: "report_finding",
+  ALERT_SUMMARY: "report_alert_summary",
 } as const;
 
 /** AI SDK prefixes tool names with "tool-" on the client */
@@ -79,16 +21,10 @@ type MessageLike = { role: string; parts?: ReadonlyArray<{ type: string }> };
 
 /**
  * An analysis (post-mortem) assistant message: contains the begin_analysis
- * tool call, or the legacy text marker.
+ * tool call, the legacy text marker, or a finding card.
  */
 export function isAnalysisMessage(msg: MessageLike): boolean {
-  if (msg.role !== "assistant" || !msg.parts) return false;
-  return msg.parts.some((p) => {
-    if (p.type === CLIENT_TOOL_NAMES.BEGIN_ANALYSIS) return true;
-    if (p.type !== "text") return false;
-    const text = (p as { text?: unknown }).text;
-    return typeof text === "string" && text.includes(ANALYSIS_MARKER);
-  });
+  return msg.role === "assistant" && !!msg.parts && findAnalysisMarker(msg.parts) !== null;
 }
 
 /**
@@ -109,13 +45,15 @@ export function compactionUpTo(messages: ReadonlyArray<MessageLike>, boundaryIdx
 /**
  * Where the analysis section begins in a message's parts: the begin_analysis
  * tool part if present, else the legacy `<analysis>` text marker (with the
- * char offset inside that text part). Single source of truth for analysis-
+ * char offset inside that text part), else the first finding card (a card
+ * written without begin_analysis opens the section). Single source of truth for analysis-
  * boundary detection — splitAtAnalysis, analysisSectionParts, and the web
  * MessageParts renderer all build on it. Returns null when there is none.
  */
 export type AnalysisMarkerPos =
   | { kind: "tool"; partIdx: number }
-  | { kind: "text"; partIdx: number; charIdx: number };
+  | { kind: "text"; partIdx: number; charIdx: number }
+  | { kind: "card"; partIdx: number };
 
 export function findAnalysisMarker(parts: ReadonlyArray<{ type: string }>): AnalysisMarkerPos | null {
   const toolIdx = parts.findIndex((p) => p.type === CLIENT_TOOL_NAMES.BEGIN_ANALYSIS);
@@ -128,13 +66,14 @@ export function findAnalysisMarker(parts: ReadonlyArray<{ type: string }>): Anal
     const idx = text.indexOf(ANALYSIS_MARKER);
     if (idx !== -1) return { kind: "text", partIdx: i, charIdx: idx };
   }
-  return null;
+  const cardIdx = parts.findIndex((p) => p.type === CLIENT_TOOL_NAMES.FINDING);
+  return cardIdx !== -1 ? { kind: "card", partIdx: cardIdx } : null;
 }
 
 /**
  * Split a message's parts at the analysis marker: `before` is the working
  * section (reasoning, tool calls, intermediate text), `analysis` everything
- * after the marker. Returns null when the message has no analysis section.
+ * after the marker; a card marker is the card part itself, so the card stays in the analysis. Returns null when the message has no analysis section.
  */
 export function splitAtAnalysis<P extends { type: string }>(
   parts: ReadonlyArray<P>,
@@ -144,6 +83,7 @@ export function splitAtAnalysis<P extends { type: string }>(
   if (marker.kind === "tool") {
     return { before: parts.slice(0, marker.partIdx), analysis: parts.slice(marker.partIdx + 1) };
   }
+  if (marker.kind === "card") return { before: parts.slice(0, marker.partIdx), analysis: parts.slice(marker.partIdx) };
   const p = parts[marker.partIdx] as P & { text: string };
   const beforeText = p.text.slice(0, marker.charIdx);
   const afterText = p.text.slice(marker.charIdx + ANALYSIS_MARKER.length);
@@ -163,7 +103,7 @@ export function splitAtAnalysis<P extends { type: string }>(
 export function analysisSectionParts<P extends { type: string }>(parts: ReadonlyArray<P>): P[] | null {
   const marker = findAnalysisMarker(parts);
   if (!marker) return null;
-  if (marker.kind === "tool") return parts.slice(marker.partIdx);
+  if (marker.kind !== "text") return parts.slice(marker.partIdx);
   const p = parts[marker.partIdx] as P & { text: string };
   return [{ ...p, text: p.text.slice(marker.charIdx) }, ...parts.slice(marker.partIdx + 1)];
 }

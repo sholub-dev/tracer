@@ -44,7 +44,7 @@ async function main() {
     // If graceful teardown stalls, force-exit — but preserve a non-zero restart
     // code so the launcher still respawns rather than treating it as a crash.
     const timeout = setTimeout(() => process.exit(code === 0 ? 1 : code), CONFIG.shutdownGracePeriodMs);
-    await scheduler?.stop();
+    await scheduler.stop();
     for (const p of providers.getAllProviders()) {
       await p.dispose().catch(() => {});
     }

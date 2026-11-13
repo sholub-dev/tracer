@@ -1,45 +1,34 @@
-import type {
-  ChatMode,
-  ChatToolWriter,
-  ChatToolMemoryContext,
-  ProviderToolKit,
-  PingResult,
-} from "@tracer-sh/shared";
+import type { ChatToolOptions, ProviderToolKit } from "@tracer-sh/shared";
 import { McpProvider } from "../../mcp/mcp-provider.js";
-import type { McpServerDefinition } from "../../mcp/definitions.js";
-import { createGcpDirectTools, buildGcpUnifiedFragment } from "./tools.js";
+import type { McpServerEntry } from "../../mcp/definitions.js";
+import { createGcpDirectTools } from "./tools.js";
+import { buildGcpUnifiedFragment } from "./prompts.js";
+import { toolKit } from "../../tools/provider-tool-helpers.js";
 import { getGcpAuth, clearGcpAuthCache, isReauthError, REAUTH_CMD } from "./gcp-auth.js";
 import { timeoutSignal } from "../../lib/timeout-signal.js";
 import { CONFIG } from "../../config.js";
 
 export class GcpProvider extends McpProvider {
-  constructor(definition: McpServerDefinition, config: Record<string, string>) {
-    super(definition, config, "gcp");
-  }
-
-  /** Clear the token cache before re-testing so fresh credentials are used. */
-  override async testConnection(): Promise<boolean> {
-    clearGcpAuthCache();
-    return super.testConnection();
+  constructor(server: McpServerEntry, config: Record<string, string>) {
+    super(server, config, "gcp");
   }
 
   /**
-   * Override ping to prove API access, not just MCP subprocess liveness. The cached access token
-   * can be valid while the org's reauth policy already rejects it, so one Cloud Logging read
-   * (pageSize 1, the API the log tools use) checks the path queries take.
+   * Proves API access, not just MCP subprocess liveness. The cached access token can be valid while the
+   * org's reauth policy already rejects it, so one Cloud Logging read (pageSize 1, the API the log tools use)
+   * checks the path queries take.
    */
-  override async ping(): Promise<PingResult> {
-    const fail = (error: string): PingResult => {
-      this.connected = false;
-      this.lastChecked = new Date().toISOString();
-      return { ok: false, error };
-    };
+  protected override async probe(): Promise<void> {
     const auth = await getGcpAuth();
-    if (!auth.ok) return fail(auth.message);
+    if (!auth.ok) throw new Error(auth.message);
 
     // The API read and the MCP check are independent; running them together keeps the ping within one timeout.
-    const [apiError, mcp] = await Promise.all([this.checkApiAccess(auth.token), super.ping()]);
-    return apiError ? fail(apiError) : mcp;
+    const [apiError, mcpError] = await Promise.all([
+      auth.token ? this.checkApiAccess(auth.token) : null,
+      super.probe().then(() => null, (err: unknown) => err),
+    ]);
+    if (apiError) throw new Error(apiError);
+    if (mcpError) throw mcpError;
   }
 
   /** The reason the Cloud Logging read was refused, or null when it passed or gave no verdict. */
@@ -66,28 +55,11 @@ export class GcpProvider extends McpProvider {
     }
   }
 
-  override getChatTools(options: {
-    writer?: ChatToolWriter;
-    memoryContext?: ChatToolMemoryContext;
-    db?: unknown;
-    mode?: ChatMode;
-  }): ProviderToolKit {
-    const direct = createGcpDirectTools(
-      this,
-      options.memoryContext,
-      options.db,
-      this.config.projectId,
-    );
-    // When the MCP cache is cold/unavailable, createGcpDirectTools returns no tools. In unified
-    // mode, omit the GCP prompt fragment in that case so the shared prompt never advertises GCP
-    // query tools that aren't actually registered.
+  getChatTools(options: ChatToolOptions): ProviderToolKit {
+    const direct = createGcpDirectTools(this, options.memoryContext, options.db, this.config.projectId);
+    // With a cold MCP cache createGcpDirectTools returns no tools; the unified prompt then omits GCP,
+    // so it never advertises query tools that are not registered.
     const hasTools = Object.keys(direct.tools).length > 0;
-    return {
-      tools: direct.tools,
-      afterComplete: direct.afterComplete,
-      ...(options.mode === "unified"
-        ? (hasTools ? { promptFragments: [buildGcpUnifiedFragment(this.config.projectId)] } : {})
-        : { systemPrompt: direct.systemPrompt }),
-    };
+    return toolKit(direct, options.mode, hasTools ? buildGcpUnifiedFragment(this.config.projectId) : undefined);
   }
 }

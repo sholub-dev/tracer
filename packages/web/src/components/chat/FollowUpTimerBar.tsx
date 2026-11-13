@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { Timer } from "lucide-react";
 import { unixNow } from "@tracer-sh/shared";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
 import { trpc } from "../../lib/trpc";
 import { formatTime } from "../../lib/format";
 
@@ -21,7 +20,7 @@ export function ShrinkingBar({ fireAt, setAt }: { fireAt: number; setAt: number 
 }
 
 /** The session's pending follow-up timer, live. */
-export function FollowUpTimerBar({ sessionId, className }: { sessionId: string; className?: string }) {
+export function FollowUpTimerBar({ sessionId }: { sessionId: string }) {
   const { data: timer } = trpc.sessions.timer.useQuery({ id: sessionId });
   const [now, setNow] = useState(unixNow);
   const left = timer ? Math.max(0, timer.fireAt - now) : 0;
@@ -33,14 +32,14 @@ export function FollowUpTimerBar({ sessionId, className }: { sessionId: string; 
   }, [ticking]);
   if (!timer) return null;
   return (
-    <div role="timer" aria-label={`Follow-up at ${formatTime(timer.fireAt)}: ${timer.note}`} className={cn("flex items-center gap-3 pb-2.5 text-[13px]/[18px] text-ink-2", className)}>
+    <div role="timer" aria-label={`Follow-up at ${formatTime(timer.fireAt)}: ${timer.note}`} className="flex items-center gap-3 pb-2.5 text-[13px]/[18px] text-ink-2">
       <Timer className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
       <Tooltip>
         <TooltipTrigger asChild>
           <span tabIndex={0} className="shrink-0 rounded-sm whitespace-nowrap outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
             {left > 0 ? (
               <>
-                Follow-up in <span className="font-medium text-foreground tabular-nums">{countdown(left)}</span>{" "}
+                Follow-up in <span className="font-medium text-foreground">{countdown(left)}</span>{" "}
                 <span className="text-muted-foreground">({formatTime(timer.fireAt)})</span>
               </>
             ) : (

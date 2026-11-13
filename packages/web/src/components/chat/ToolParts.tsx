@@ -1,11 +1,10 @@
 import { memo, useRef, useState } from "react";
 import { AlertCircle, ClipboardCheck, Copy, History, Send, Timer, type LucideIcon } from "lucide-react";
-import { CLIENT_TOOL_NAMES, isPlainObject, type ProgressPart } from "@tracer-sh/shared";
+import { CLIENT_TOOL_NAMES, isPlainObject } from "@tracer-sh/shared";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { Markdown, type ResultLookup } from "../../lib/markdown";
 import ResultView, { JsonTree } from "../charts/ResultView";
-import { useProgress, type ProgressStore } from "../../lib/progress-store";
 import { hasErrorOutput } from "../../lib/chat-utils";
 import { MonitorSavedCard, type MonitorSavedOutput } from "../monitors/MonitorSavedCard";
 import { FoldTrigger } from "../common/FoldTrigger";
@@ -26,6 +25,15 @@ export interface ToolPart {
   input?: Record<string, unknown>;
 }
 
+/** A saved sub-agent output part. "summary" is from older sessions. */
+type ProgressPart =
+  | { type: "query"; query: string; results: unknown; totalRows?: number }
+  | { type: "text"; content: string }
+  | { type: "tool-call"; toolName: string }
+  | { type: "reasoning"; content: string }
+  | { type: "analysis-start" }
+  | { type: "summary"; content: string };
+
 interface SubAgentOutput {
   analysis?: string;
   queries?: Array<{ query: string; results: unknown; totalRows?: number }>;
@@ -33,13 +41,13 @@ interface SubAgentOutput {
   error?: string;
 }
 
-const SMALL_TOOLS: Record<string, { done: string; loading: string; errorLabel: string; icon: LucideIcon }> = {
-  "tool-read_past_session": { done: "Read a past investigation", loading: "Reading a past investigation", errorLabel: "Past investigation not available", icon: History },
-  "tool-report_issue_status": { done: "Reported alert status", loading: "Reporting alert status", errorLabel: "Alert status not recorded", icon: ClipboardCheck },
-  "tool-report_alert_summary": { done: "Reported alert summary", loading: "Reporting alert summary", errorLabel: "Alert summary not recorded", icon: ClipboardCheck },
-  "tool-dismiss_alert": { done: "Alert already closed, not posted", loading: "Dismissing alert", errorLabel: "Alert not dismissed", icon: ClipboardCheck },
-  "tool-post_slack_message": { done: "Posted to Slack", loading: "Posting to Slack", errorLabel: "Slack post failed", icon: Send },
-  "tool-set_timer": { done: "Follow-up timer set", loading: "Setting follow-up timer", errorLabel: "Follow-up timer not set", icon: Timer },
+const SMALL_TOOLS: Record<string, { done: string; errorLabel: string; icon: LucideIcon }> = {
+  "tool-read_past_session": { done: "Read a past investigation", errorLabel: "Past investigation not available", icon: History },
+  "tool-report_issue_status": { done: "Reported alert status", errorLabel: "Alert status not recorded", icon: ClipboardCheck },
+  "tool-report_alert_summary": { done: "Reported alert summary", errorLabel: "Alert summary not recorded", icon: ClipboardCheck },
+  "tool-dismiss_alert": { done: "Alert already closed, not posted", errorLabel: "Alert not dismissed", icon: ClipboardCheck },
+  "tool-post_slack_message": { done: "Posted to Slack", errorLabel: "Slack post failed", icon: Send },
+  "tool-set_timer": { done: "Follow-up timer set", errorLabel: "Follow-up timer not set", icon: Timer },
 };
 
 const MONITOR_TOOLS = new Set<string>([CLIENT_TOOL_NAMES.SAVE_MONITOR, CLIENT_TOOL_NAMES.DELETE_MONITOR]);
@@ -89,10 +97,9 @@ function legacyToParts(output: SubAgentOutput): ProgressPart[] {
   return parts;
 }
 
-/** Ordered progress parts of a provider tool: live progress first, then the saved output. */
-function stepParts(part: ToolPart, progress: ProgressPart[] | undefined): ProgressPart[] {
+/** Ordered parts of a provider tool's saved output. */
+function stepParts(part: ToolPart): ProgressPart[] {
   const output = part.state === "output-available" ? part.output : undefined;
-  if (progress?.length) return progress;
   if (isSubAgentOutput(output)) return output.parts?.length ? output.parts : legacyToParts(output);
   return [];
 }
@@ -283,8 +290,7 @@ function stepError(part: ToolPart): string | null {
   return isSubAgentOutput(output) && output.error ? output.error : null;
 }
 
-function StepBody({ part, progressStore, isAnimating }: { part: ToolPart; progressStore: ProgressStore; isAnimating: boolean }) {
-  const progress = useProgress(progressStore, part.toolCallId);
+function StepBody({ part, isAnimating }: { part: ToolPart; isAnimating: boolean }) {
   const complete = part.state === "output-available";
   const running = !complete && isAnimating;
   const output = complete ? part.output : undefined;
@@ -310,7 +316,7 @@ function StepBody({ part, progressStore, isAnimating }: { part: ToolPart; progre
     }
   }
 
-  const parts = stepParts(part, progress?.parts);
+  const parts = stepParts(part);
   if (parts.length > 0 || !complete) {
     const query = typeof part.input?.query === "string" ? part.input.query : null;
     return (
@@ -331,11 +337,11 @@ function StepBody({ part, progressStore, isAnimating }: { part: ToolPart; progre
   );
 }
 
-type StepProps = { part: ToolPart; progressStore: ProgressStore; isAnimating: boolean };
+type StepProps = { part: ToolPart; isAnimating: boolean };
 
 // The AI SDK clones the streaming message per chunk, so part identity changes even when nothing read here did.
 function stepPropsEqual(prev: StepProps, next: StepProps): boolean {
-  if (prev.progressStore !== next.progressStore || prev.isAnimating !== next.isAnimating) return false;
+  if (prev.isAnimating !== next.isAnimating) return false;
   const a = prev.part;
   const b = next.part;
   if (a === b) return true;
@@ -375,64 +381,40 @@ export const ResultCard = memo(function ResultCard({ part }: { part: ToolPart })
   );
 });
 
-/** What a running sub-agent does now, shown in its folded row. */
-function liveActivity(parts: ProgressPart[]): string | null {
-  const last = parts.at(-1);
-  if (!last) return null;
-  if (last.type === "tool-call") return `Running ${last.toolName.replace(/_/g, " ")}`;
-  if (last.type === "query") return "Query returned";
-  if (last.type === "reasoning") return "Thinking";
-  if (last.type === "text") return "Summarizing";
-  return null;
-}
-
-// One folded row for the whole life of a step: it never changes shape, so nothing below it moves. The reply shows results in result blocks and under the card.
-export const ProviderStep = memo(function ProviderStep({ part, progressStore, isAnimating }: StepProps) {
-  const [open, setOpen] = useState(false);
-  const progress = useProgress(progressStore, part.toolCallId);
+// A running or failed step is one folded row; a finished step with results shows them in a card.
+export const ProviderStep = memo(function ProviderStep({ part, isAnimating }: StepProps) {
   const provider = providerOf(part.type);
   const settled = part.state === "output-available" || part.state === "output-error";
-  const error = open ? null : stepError(part);
-  const activity = !settled && isAnimating ? liveActivity(progress?.parts ?? []) : null;
+  // A failed step is marked, not explained: the error reads only in the opened row.
+  const failed = !!stepError(part);
+  if (part.state === "output-available" && stepResults(part).length > 0) {
+    return <li className="animate-in fade-in duration-200"><ResultCard part={part} /></li>;
+  }
   return (
     <li className="animate-in fade-in duration-200">
-      <Collapsible open={open} onOpenChange={setOpen}>
+      <Collapsible>
         <FoldTrigger
           chevronEnd
           chevronClassName="text-muted-foreground"
           className="-ml-1.5 flex max-w-full items-center gap-2 rounded-md px-1.5 py-1 text-left hover:text-foreground"
         >
-          <ProviderDot provider={provider} />
-          <span className="sr-only">{providerLabel(provider)}:</span>
-          <span className="min-w-0 truncate text-sm font-medium">{stepTitle(part, provider)}</span>
-          {activity && <span className="min-w-0 truncate text-[13px]/[18px] text-muted-foreground">{activity}</span>}
+          <ProviderDot provider={provider} className={cn(failed && "bg-destructive")} />
+          <span className="sr-only">{providerLabel(provider)}{failed && ", failed"}:</span>
+          <span className={cn("min-w-0 truncate text-sm font-medium", failed && "text-muted-foreground")}>{stepTitle(part, provider)}</span>
           {!settled && !isAnimating && <span className="shrink-0 text-xs text-muted-foreground">Stopped</span>}
         </FoldTrigger>
         <CollapsibleContent className="mt-2 ml-4 space-y-2">
-          <StepBody part={part} progressStore={progressStore} isAnimating={isAnimating} />
+          <StepBody part={part} isAnimating={isAnimating} />
         </CollapsibleContent>
       </Collapsible>
-      {error && <div className="mt-1 ml-4"><ErrorLine>{error}</ErrorLine></div>}
     </li>
   );
 }, stepPropsEqual);
 
-/** What a running tool does, for the indicator at the tail of the reply. */
-export function toolActivity(part: ToolPart): string {
-  if (isProviderTool(part.type)) {
-    const title = stepTitle(part, providerOf(part.type));
-    return title === "Query" ? "Preparing a query" : `Querying ${title}`;
-  }
-  if (part.type === CLIENT_TOOL_NAMES.BEGIN_ANALYSIS) return "Checking the analysis";
-  if (part.type === "tool-report_finding") return part.state === "input-streaming" ? "Writing the summary" : "Checking the summary";
-  if (MONITOR_TOOLS.has(part.type)) return "Working on the monitor";
-  return SMALL_TOOLS[part.type]?.loading ?? "Working";
-}
-
 /** The results a finished step holds, one per query or one for a tool that returns rows. */
 function stepResults(part: ToolPart): Array<{ data: unknown; totalRows?: number }> {
   if (stepError(part)) return [];
-  const queries = stepParts(part, undefined).flatMap((p) => (p.type === "query" ? [{ data: p.results, totalRows: p.totalRows }] : []));
+  const queries = stepParts(part).flatMap((p) => (p.type === "query" ? [{ data: p.results, totalRows: p.totalRows }] : []));
   if (queries.length) return queries;
   const rows = rowsOf(part.output);
   return rows ? [{ data: rows }] : [];

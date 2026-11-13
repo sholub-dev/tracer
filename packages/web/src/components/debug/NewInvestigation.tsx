@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { cn } from "@/lib/utils";
 import { trpc } from "../../lib/trpc";
 import { providerLabel, sortProviders } from "../../lib/providers";
 import { ProviderDot } from "../common/ProviderDot";
@@ -33,17 +34,14 @@ function SourcesLine() {
     <>
     <ul className="mt-3 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[13px]/[18px] text-ink-2" aria-label="Data sources">
       {sortProviders(registered).map((p) =>
-        on.has(p.type) ? (
-          <li key={p.type} className="flex items-center gap-1.5">
+        <li key={p.type} className={cn("flex items-center gap-1.5", !on.has(p.type) && "text-muted-foreground")}>
+          {on.has(p.type) ? (
             <ProviderDot provider={p.type} />
-            {providerLabel(p.type, p.label)} connected
-          </li>
-        ) : (
-          <li key={p.type} className="flex items-center gap-1.5 text-muted-foreground">
+          ) : (
             <span aria-hidden="true" className="size-2 rounded-full border border-muted-foreground/60" />
-            {providerLabel(p.type, p.label)} not connected
-          </li>
-        ),
+          )}
+          {providerLabel(p.type, p.label)} {on.has(p.type) ? "connected" : "not connected"}
+        </li>
       )}
     </ul>
     {connected.length === 0 && (

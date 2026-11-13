@@ -81,8 +81,7 @@ test("a restart returns the kind of a resumable run and lists ended monitor sess
   const old = Math.floor(Date.now() / 1000) - CONFIG.chatResumeMaxAgeSec - 60;
   await db.insert(chatSessions).values({ id: "fresh", title: "t", messages: "[]", kind: "monitor", status: "streaming", runScope: UNIFIED_SCOPE }).run();
   await db.insert(chatSessions).values({ id: "old", title: "t", messages: "[]", kind: "monitor", status: "streaming", runScope: UNIFIED_SCOPE, updatedAt: old }).run();
-  const settled: string[] = [];
-  const runs = await settleInterruptedRuns(db, settled);
+  const { interrupted: runs, settled } = await settleInterruptedRuns(db);
   assert.deepEqual(runs, [{ id: "fresh", scope: UNIFIED_SCOPE, kind: "monitor" }]);
   assert.deepEqual(settled, ["old"]);
 });

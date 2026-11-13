@@ -70,13 +70,13 @@ function MemoryBadge({ sessionId, streaming, onCostDataReady }: { sessionId: str
           <PopoverTrigger asChild>
             <Button variant="ghost" size="sm" aria-label={`Memory: ${displayOps.length} ${displayOps.length === 1 ? "change" : "changes"}`} className="gap-1.5 px-2 text-muted-foreground">
               <Brain />
-              <span className="text-xs tabular-nums">{displayOps.length}</span>
+              <span className="text-xs">{displayOps.length}</span>
             </Button>
           </PopoverTrigger>
         </TooltipTrigger>
         <TooltipContent>{stalled ? "The memory agent did not respond" : "Memory changes from this investigation"}</TooltipContent>
       </Tooltip>
-      <PopoverContent align="end" className="w-80">
+      <PopoverContent align="end" collisionPadding={16} className="w-[min(20rem,calc(100vw-2rem))]">
         <p className="mb-2 text-sm font-semibold">Memory</p>
         <ul className="space-y-2">
           {displayOps.map((op) => {
@@ -112,6 +112,8 @@ interface SessionHeaderProps {
   /** Blocks Post-mortem and Compact (streaming or compacting). */
   busy?: boolean;
   readOnly?: boolean;
+  /** Shows Post-mortem as unavailable when there is no handler. */
+  postMortemDisabled?: boolean;
   onPostMortem?: () => void;
   /** Enters compact-selection mode. Omit to hide Compact. */
   onCompact?: () => void;
@@ -131,6 +133,7 @@ export function SessionHeader({
   streaming = false,
   busy = false,
   readOnly = false,
+  postMortemDisabled = false,
   onPostMortem,
   onCompact,
   onCopyText,
@@ -140,7 +143,8 @@ export function SessionHeader({
   children,
 }: SessionHeaderProps) {
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const postMortemBlocked = busy || streaming;
+  const postMortemBlocked = busy || postMortemDisabled;
+  const showPostMortem = !readOnly && (!!onPostMortem || postMortemDisabled);
 
   return (
     <header data-page-header className="sticky top-0 z-20 border-b bg-background/90 backdrop-blur-md">
@@ -163,18 +167,17 @@ export function SessionHeader({
           </h1>
           <p className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
             <span className="truncate">{meta.join(" · ")}</span>
-            {cost && <span className="shrink-0 tabular-nums sm:hidden">· {cost}</span>}
+            {cost && <span className="shrink-0 sm:hidden">· {cost}</span>}
             {streaming && (
-              <span className="flex shrink-0 items-center gap-1.5 font-medium text-primary">
+              <span className="flex shrink-0 items-center gap-1.5 text-primary">
                 <span aria-hidden="true">·</span>
-                <span className="size-1.5 animate-pulse-dot rounded-full bg-primary" aria-hidden="true" />
-                Running
+                <span role="status" aria-label="Running" className="size-1.5 animate-pulse-dot rounded-full bg-primary" />
               </span>
             )}
           </p>
         </div>
         {!readOnly && <MemoryBadge sessionId={chatId} streaming={streaming} onCostDataReady={onCostDataReady} />}
-        {!readOnly && onPostMortem && (
+        {showPostMortem && (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -182,18 +185,23 @@ export function SessionHeader({
                 size="sm"
                 aria-disabled={postMortemBlocked}
                 onClick={postMortemBlocked ? undefined : onPostMortem}
-                className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-background max-sm:w-8 max-sm:px-0"
+                className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-background max-sm:hidden"
               >
                 <FileText />
-                <span className="max-sm:sr-only">Post-mortem</span>
+                Post-mortem
               </Button>
             </TooltipTrigger>
             <TooltipContent>{postMortemBlocked ? "Available when the run finishes" : "Write a post-mortem"}</TooltipContent>
           </Tooltip>
         )}
         <MoreActionsMenu label="More actions" contentClassName="w-64">
+          {showPostMortem && (
+            <DropdownMenuItem disabled={postMortemBlocked} onSelect={onPostMortem} className="sm:hidden">
+              Write a post-mortem
+            </DropdownMenuItem>
+          )}
           {!readOnly && onCompact && (
-            <DropdownMenuItem disabled={busy || streaming} onSelect={onCompact} className="flex-col items-start gap-0.5">
+            <DropdownMenuItem disabled={busy} onSelect={onCompact} className="flex-col items-start gap-0.5">
               <span>Compact</span>
               <span className="text-xs text-muted-foreground">Summarize older replies to free up context</span>
             </DropdownMenuItem>

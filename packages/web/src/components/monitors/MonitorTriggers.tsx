@@ -1,12 +1,12 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 import { ChevronRight, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { trpc } from "../../lib/trpc";
 import { sinceToSeconds } from "../../lib/monitor-utils";
 import { formatTime } from "../../lib/format";
+import { FoldTrigger } from "../common/FoldTrigger";
 
 const MAX_KEYS_SHOWN = 2;
 
@@ -45,7 +45,7 @@ const TriggerRow = memo(function TriggerRow({ trigger: t, repeatLabels, onNaviga
       <span className="flex w-2 shrink-0 justify-center" aria-hidden="true">
         {unread && <span className="size-1.5 rounded-full bg-primary" />}
       </span>
-      <span className="w-28 shrink-0 text-ink-2 tabular-nums sm:w-36">{formatTime(t.triggeredAt)}</span>
+      <span className="w-28 shrink-0 text-ink-2 sm:w-36">{formatTime(t.triggeredAt)}</span>
       {sessionId ? (
         // The row is one link; its ::after stretches over the row so the Repeat button can sit beside it.
         <button
@@ -115,6 +115,9 @@ export const MonitorTriggers = memo(function MonitorTriggers({ monitorId, lastRu
     return labels;
   }, [triggers]);
 
+  // Same height as the empty line, so the card does not jump when the answer arrives.
+  if (query.isPending) return <div className="h-8" aria-hidden="true" />;
+
   if (triggers.length === 0) {
     return (
       <p className="flex h-8 items-center px-2.5 text-[13px] leading-[18px] text-muted-foreground">
@@ -125,12 +128,9 @@ export const MonitorTriggers = memo(function MonitorTriggers({ monitorId, lastRu
 
   return (
     <Collapsible>
-      <CollapsibleTrigger asChild>
-        <Button variant="ghost" size="sm" className="group/trigger text-ink-2 aria-expanded:bg-transparent aria-expanded:hover:bg-muted">
-          <ChevronRight className="size-3.5 transition-transform duration-200 ease-out group-data-[state=open]/trigger:rotate-90" aria-hidden="true" />
-          Fired {triggers.length === 1 ? "once" : `${triggers.length} times`} in {rangeLabel}
-        </Button>
-      </CollapsibleTrigger>
+      <FoldTrigger className="-ml-1.5 inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[13px] leading-[18px] text-ink-2 transition-colors hover:bg-muted">
+        Fired {triggers.length === 1 ? "once" : `${triggers.length} times`} in {rangeLabel}
+      </FoldTrigger>
       <CollapsibleContent>
         <ul className="mt-1 mb-1 max-h-80 divide-y overflow-y-auto border-t">
           {triggers.map((t) => (

@@ -3,7 +3,6 @@ import { tool } from "ai";
 import { eq, desc } from "drizzle-orm";
 import type { Db } from "../db/driver.js";
 import type { ProviderRegistry } from "../providers/registry.js";
-import type { ChatToolWriter as StreamWriter } from "@tracer-sh/shared";
 import { monitors } from "../db/schema.js";
 import { collectBaseTools } from "./shared-tool-setup.js";
 import { ANALYSIS_TOOL_NAME } from "./analysis-tool.js";
@@ -55,9 +54,9 @@ export async function collectMonitorTools(
   registry: ProviderRegistry,
   db: Db,
   activeStreams: ReadonlyMap<string, unknown>,
-  writer?: StreamWriter,
+  sessionId?: string,
 ) {
-  const { tools, promptFragments, connectedProviders } = await collectBaseTools(registry, db, writer, "unified");
+  const { tools, promptFragments, connectedProviders } = await collectBaseTools(registry, db, sessionId, "unified");
   // A builder offers only the providers that are connected and can host a monitor.
   const monitorProviders = MONITOR_PROVIDERS.filter((p) => connectedProviders.some((c) => c.type === p));
   const queryRules = monitorProviders.map((p) => QUERY_RULES[p]).join("\n\n");
@@ -91,7 +90,7 @@ export async function collectMonitorTools(
           return { error: "A new monitor needs name, query, condition and frequencySeconds" };
         }
         const draft = normalizeDraft({ ...merged, name: merged.name, query: merged.query, condition: merged.condition, frequencySeconds: merged.frequencySeconds });
-        const result = await validateMonitor(registry, draft, { runQuery: true });
+        const result = await validateMonitor(registry, draft);
         if ("error" in result) return { error: result.error };
         await saveMonitor(db, id, draft);
         name = draft.name;
@@ -112,7 +111,7 @@ export async function collectMonitorTools(
     },
   });
 
-  const providerNames = connectedProviders.map((p) => p.name).join(", ");
+  const providerNames = connectedProviders.map((p) => p.type).join(", ");
   const providerContext = connectedProviders.length > 0
     ? `## Available Providers\n${providerNames}`
     : "## Available Providers\nNo observability providers are currently connected.";

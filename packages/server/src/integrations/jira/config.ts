@@ -1,7 +1,5 @@
-import { eq } from "drizzle-orm";
 import type { Db } from "../../db/driver.js";
-import { appSettings } from "../../db/schema.js";
-import { readAppSetting, writeAppSetting } from "../../db/config-reader.js";
+import { deleteAppSetting, readAppSetting, writeAppSetting } from "../../db/config-reader.js";
 import { isJiraDomain, type JiraClientConfig } from "./jira.client.js";
 
 export const JIRA_CONFIG_KEY = "integration:jira";
@@ -16,5 +14,5 @@ export async function writeJiraConfig(db: Db, config: JiraClientConfig): Promise
 }
 
 export async function deleteJiraConfig(db: Db): Promise<void> {
-  await db.delete(appSettings).where(eq(appSettings.key, JIRA_CONFIG_KEY)).run();
+  await deleteAppSetting(db, JIRA_CONFIG_KEY);
 }

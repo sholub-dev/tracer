@@ -7,6 +7,7 @@ import { hasErrorOutput } from "../../lib/chat-utils";
 import type { Threshold } from "./ChartView";
 import { HIDDEN_KEYS, dropFlattenedRowCopies, formatValue, isNumericGroup, isPercentileResult, buildColumns, pivotCompareWith, timelineRows, coerceNumeric, periodLabel, relativeChange, type Column } from "../../lib/result-utils";
 import { KeyFigures } from "./KeyFigures";
+import { LEGEND_RESERVE } from "./legend-reserve";
 
 // Lazy so recharts and react-json-view-lite stay out of the chat entry chunk.
 const LazyTimeseriesChart = lazy(() => import("./ChartView").then((m) => ({ default: m.TimeseriesChart })));
@@ -18,7 +19,7 @@ type ContainerSize = { width: number; height: number };
 // Reserves the chart's rendered height (plot + legend) so loading causes no layout jump.
 function ChartFallback({ containerSize, plotHeight }: { containerSize?: ContainerSize; plotHeight: number }) {
   if (containerSize) return <div style={{ height: Math.max(containerSize.height - 8, 80) }} />;
-  return <div className="my-2" style={{ height: plotHeight + 36 }} />;
+  return <div className="my-2" style={{ height: plotHeight + LEGEND_RESERVE }} />;
 }
 
 function TimeseriesChart(props: ComponentProps<typeof LazyTimeseriesChart>) {
@@ -112,7 +113,7 @@ function CappedRows<T>({ items, colSpan, render, totalRows }: { items: readonly 
 function ResultTable({ head, children }: { head: ReactNode; children: ReactNode }) {
   return (
     <div className="my-2 max-h-[440px] overflow-auto rounded-md border border-border bg-card">
-      <table className="w-full caption-bottom text-[13px] leading-[18px] tabular-nums">
+      <table className="w-full caption-bottom text-[13px] leading-[18px]">
         <TableHeader className="sticky top-0 z-10 bg-card shadow-[inset_0_-1px_0_var(--border)] [&_tr]:border-b-0">
           <TableRow className="hover:bg-transparent">{head}</TableRow>
         </TableHeader>
@@ -180,7 +181,7 @@ function ValueList({ label, items, totalRows }: { label: string; items: readonly
   );
 }
 
-export default memo(function ResultView({ data, containerSize, threshold, chartType, totalRows, provider }: { data: unknown; containerSize?: ContainerSize; threshold?: Threshold; chartType?: string; totalRows?: number; provider?: string }) {
+export default memo(function ResultView({ data, containerSize, threshold, totalRows, provider }: { data: unknown; containerSize?: ContainerSize; threshold?: Threshold; totalRows?: number; provider?: string }) {
   // One array per result, so charts keep their memos and an expanded table stays expanded when the view re-renders.
   const normalized = useMemo(
     () => dropFlattenedRowCopies(data, provider),
@@ -220,17 +221,6 @@ export default memo(function ResultView({ data, containerSize, threshold, chartT
   // A series with no value in any bucket would draw axes with no line and no hint why.
   if ("beginTimeSeconds" in rows[0] && !rows.some((r) => Object.entries(r).some(([k, v]) => !HIDDEN_KEYS.has(k) && v != null && typeof v !== "string"))) {
     return <p className="text-[13px] leading-[18px] text-muted-foreground">No data: every bucket in the window is empty.</p>;
-  }
-
-  // chartType override: when explicitly set, skip auto-detection
-  if (chartType && chartType !== "auto") {
-    if (chartType === "timeseries") return <TimeseriesChart rows={rows} containerSize={containerSize} threshold={threshold} />;
-    if (chartType === "histogram" && rows.length >= 1) return <HistogramChart row={rows[0]} containerSize={containerSize} />;
-    if (chartType === "scalar") {
-      const columns = buildColumns([rows[0]]);
-      return <KeyFigures columns={columns.filter((c) => !c.key.startsWith("facet"))} row={rows[0]} />;
-    }
-    if (chartType === "table") return <DataTable columns={buildColumns(rows)} rows={rows} totalRows={totalRows} />;
   }
 
   const hasTimeKeys = "beginTimeSeconds" in rows[0];

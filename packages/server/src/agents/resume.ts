@@ -26,19 +26,20 @@ async function markDone(db: Db, id: string): Promise<void> {
 /**
  * Settles the sessions a restart interrupted: each ends as done, except a run that was not
  * resumed before, has a scope to rebuild from and was saved recently. Those are returned.
- * The ids of ended monitor sessions are added to `settled`, for resumeRuns to close out.
+ * `settled` holds the ids of ended monitor sessions, for resumeRuns to close out.
  */
-export async function settleInterruptedRuns(db: Db, settled: string[] = []): Promise<InterruptedRun[]> {
+export async function settleInterruptedRuns(db: Db): Promise<{ interrupted: InterruptedRun[]; settled: string[] }> {
   const rows = await db
     .select({ id: chatSessions.id, kind: chatSessions.kind, scope: chatSessions.runScope, resumed: chatSessions.resumed, updatedAt: chatSessions.updatedAt })
     .from(chatSessions)
     .where(eq(chatSessions.status, "streaming"))
     .all();
-  const runs: InterruptedRun[] = [];
+  const interrupted: InterruptedRun[] = [];
+  const settled: string[] = [];
   const cutoff = unixNow() - CONFIG.chatResumeMaxAgeSec;
   for (const { id, kind, scope, resumed, updatedAt } of rows) {
     if (scope && !resumed && updatedAt >= cutoff) {
-      runs.push({ id, scope, kind });
+      interrupted.push({ id, scope, kind });
       pendingResume.add(id);
     }
     else {
@@ -46,7 +47,7 @@ export async function settleInterruptedRuns(db: Db, settled: string[] = []): Pro
       if (kind === SESSION_KIND.MONITOR) settled.push(id);
     }
   }
-  return runs;
+  return { interrupted, settled };
 }
 
 /** Continues each run from its last saved step, with no new user message. Needs the providers for the tools. */

@@ -1,5 +1,6 @@
 import type { SyncCounts, SyncMode, SyncSession } from "@tracer-sh/shared";
 import type { Db } from "../db/driver.js";
+import { localDeviceId } from "../db/config-reader.js";
 import { MAX_BODY_BYTES, OldFormError, seal, TooLargeError, unseal } from "./crypto.js";
 import { getMark, getSetting, recordSync, setMark } from "./peer.js";
 import { FORMAT, importSnapshot, type Snapshot } from "./snapshot.js";
@@ -16,13 +17,18 @@ const POLL_INTERVAL_MS = 1000;
 // The computer shows the progress of the transfer; twice a second is enough.
 const REPORT_INTERVAL_MS = 500;
 
-export type { SyncMode };
-
 // Only addresses on the local network: a link from elsewhere must not pull data from the internet.
 const PRIVATE_IPV4 = /^(10\.\d{1,3}|172\.(1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3}$/;
 
+/** Untrusted text that is shown to the user: no control characters, bounded length. */
+export const cleanText = (text: string, max: number) => text.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, "").trim().slice(0, max);
+
+export const total = (counts: Record<string, number>) => Object.values(counts).reduce((a, b) => a + b, 0);
+
+type CopyLink = { from: URL; key: string; name?: string; device?: string };
+
 /** Reads a copy link from a QR code. Throws when it is not one. */
-export function parseCopyLink(link: string): { from: URL; key: string; name?: string; device?: string } {
+export function parseCopyLink(link: string): CopyLink {
   if (!link.startsWith(`${COPY_LINK_PREFIX}?`)) throw new Error("This is not a Tracer copy code.");
   const params = new URLSearchParams(link.slice(COPY_LINK_PREFIX.length + 1));
   let from: URL | null = null;
@@ -32,17 +38,20 @@ export function parseCopyLink(link: string): { from: URL; key: string; name?: st
   if (from?.protocol !== "http:" || !PRIVATE_IPV4.test(from.hostname) || !key) {
     throw new Error("This is not a Tracer copy code.");
   }
-  // Shown to the user, so it is untrusted text: no control characters, bounded length.
-  const name = (params.get("name") ?? "").replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, "").trim().slice(0, MAX_NAME_LENGTH);
+  const name = cleanText(params.get("name") ?? "", MAX_NAME_LENGTH);
   const device = params.get("device") ?? "";
   return { from, key, ...(name && { name }), ...(DEVICE_ID.test(device) && { device }) };
 }
 
-/** Decides what a scan does: sync with the computer this phone synced with before, otherwise replace. */
+/** Sync with the computer this phone synced with before, otherwise replace. */
+async function modeFor(db: Db, device: string | undefined): Promise<SyncMode> {
+  return device && device === (await getSetting(db, "sync_peer_id")) ? "merge" : "replace";
+}
+
+/** Decides what a scan does. */
 export async function inspectCopy(db: Db, link: string): Promise<{ mode: SyncMode; name: string; address: string }> {
   const { from, name, device } = parseCopyLink(link);
-  const mode = device && device === (await getSetting(db, "sync_peer_id")) ? "merge" : "replace";
-  return { mode, name: name ?? "", address: from.hostname };
+  return { mode: await modeFor(db, device), name: name ?? "", address: from.hostname };
 }
 
 const UNREACHABLE = "The computer does not answer. Make sure the phone and the computer use the same Wi-Fi. If iOS asks for Local Network access, allow it. Then scan the code again.";
@@ -130,6 +139,8 @@ type OwnPhase = "approval" | "transfer" | "apply" | "done" | "failed" | "cancell
 
 /** What this phone knows about the running sync; the computer's last answer fills in the rest. */
 interface Job {
+  copy: CopyLink;
+  deviceId: string;
   abort: AbortController;
   mode: SyncMode;
   computerName: string;
@@ -208,11 +219,8 @@ async function awaitApproval(current: Job, url: URL, options: CallOptions): Prom
   }
 }
 
-const total = (counts: Record<string, number>) => Object.values(counts).reduce((a, b) => a + b, 0);
-
-async function run(db: Db, link: string, current: Job, beforeImport?: () => void): Promise<{ mode: SyncMode; counts: Record<string, number> }> {
-  const { from, key, name, device } = parseCopyLink(link);
-  const { mode, abort: { signal }, own } = current;
+async function run(db: Db, current: Job, beforeImport?: () => void): Promise<{ mode: SyncMode; counts: Record<string, number> }> {
+  const { copy: { from, key, name, device }, deviceId, mode, abort: { signal }, own } = current;
   const at = (suffix: string) => new URL(from.pathname + suffix, from);
   const stopped = () => { if (signal.aborted) throw new Error(CANCELLED); };
   // A cancel on the computer does not cut a transfer under way, so the phone asks before it writes anything.
@@ -233,7 +241,6 @@ async function run(db: Db, link: string, current: Job, beforeImport?: () => void
 
   try {
     checkVersion(await readStatus(current, at("/status"), { signal }));
-    const deviceId = (await getSetting(db, "device_id")) ?? "";
     const request = await seal(JSON.stringify({ deviceId, name: current.phoneName, mode, format: FORMAT }), key);
     check(await call(at("/request"), { method: "POST", body: request }, { signal }));
     await awaitApproval(current, at("/status"), { signal });
@@ -257,8 +264,7 @@ async function run(db: Db, link: string, current: Job, beforeImport?: () => void
       void report({ phase: "apply", bytes: own.bytes });
       const { at: theirs, snapshot } = await open<{ at: number; snapshot: Snapshot }>(text, key);
       beforeImport?.();
-      // The computer keeps its follow-up timers; the same re-check must not run on both devices.
-      counts = await importSnapshot(db, snapshot, { dropTimers: true });
+      counts = await importSnapshot(db, snapshot);
       result = { applied: total(counts), deleted: 0 };
       // The import wrote the whole change log just now; the next merge needs to send none of it back.
       if (device) await setMark(db, device, { mine: Date.now(), theirs });
@@ -311,24 +317,26 @@ async function run(db: Db, link: string, current: Job, beforeImport?: () => void
  * so it can refuse when work started in the meantime.
  */
 export async function startReceive(db: Db, link: string, beforeImport?: () => void): Promise<{ done: Promise<{ mode: SyncMode; counts: Record<string, number> }>; session: SyncSession }> {
-  const { name } = parseCopyLink(link);
-  const { mode } = await inspectCopy(db, link);
-  const deviceId = (await getSetting(db, "device_id")) ?? "";
+  const copy = parseCopyLink(link);
+  const mode = await modeFor(db, copy.device);
+  const deviceId = await localDeviceId(db);
   // Checked after the reads: no await may sit between the check and the claim of `job`.
   if (job && !finished(job)) {
     throw new Error("A sync is already running on this phone.");
   }
   const current: Job = {
+    copy,
+    deviceId,
     abort: new AbortController(),
     mode,
-    computerName: name ?? "",
+    computerName: copy.name ?? "",
     phoneName: `iPhone ${deviceId.slice(-4)}`,
     expiresAt: Date.now() + APPROVAL_WINDOW_MS,
     own: { phase: "approval" },
     reports: Promise.resolve(),
   };
   job = current;
-  const done = run(db, link, current, beforeImport);
+  const done = run(db, current, beforeImport);
   return { done, session: receiveStatus()! };
 }
 

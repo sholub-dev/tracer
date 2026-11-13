@@ -1,19 +1,6 @@
 import type { UIMessage } from "ai";
 import { CLIENT_TOOL_NAMES, findingFromMessages } from "@tracer-sh/shared";
-import { lastTurnMessage } from "../../lib/message-queue";
-import { isAskPart, isProviderTool, toolActivity, type ToolPart } from "./ToolParts";
-
-const settled = (state?: string) => state === "output-available" || state === "output-error";
-
-/** What a running reply does now, for the indicator at its tail; null while its own text streams. */
-export function activityLabel(messages: UIMessage[]): string | null {
-  const reply = lastTurnMessage(messages);
-  if (reply?.role !== "assistant") return "Thinking";
-  const running = reply.parts.findLast((p) => p.type.startsWith("tool-") && !isAskPart(p.type) && !settled((p as ToolPart).state));
-  if (running) return toolActivity(running as ToolPart);
-  const last = reply.parts.findLast((p) => p.type !== "step-start");
-  return last?.type === "text" && last.state === "streaming" ? null : "Thinking";
-}
+import { isProviderTool } from "./ToolParts";
 
 /**
  * Whether a saved reply that ends on a finished tool call holds its answer. A tool can follow the answer (a timer, a

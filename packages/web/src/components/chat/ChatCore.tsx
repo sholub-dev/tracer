@@ -4,6 +4,7 @@ import {
   useEffect,
   useMemo,
   useCallback,
+  useLayoutEffect,
   useImperativeHandle,
   forwardRef,
   startTransition,
@@ -15,9 +16,8 @@ import { CLIENT_TOOL_NAMES, readAskUser } from "@tracer-sh/shared";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { ProgressStore } from "../../lib/progress-store";
 import { openSettings, useChatScroll, useEscapeToStop, useFileDrop } from "../../lib/hooks";
-import { handleProgressData, parseMessages, steerChat, stopChat, useCompactedMessages } from "../../lib/chat-utils";
+import { parseMessages, steerChat, stopChat, useCompactedMessages } from "../../lib/chat-utils";
 import { isSteered } from "@tracer-sh/shared";
 import { appendKept, canSendQueued, lastTurnMessage, splitSteered } from "../../lib/message-queue";
 import { anchorOf, placeSteered, withAnchor } from "../../lib/steer-thread";
@@ -28,7 +28,7 @@ import { serverFetch } from "../../lib/server-fetch";
 import { IS_IOS } from "../../lib/platform";
 import { preloadResultChunks } from "../charts/ResultView";
 import { ActivityLine } from "./ChatIndicators";
-import { activityLabel, endsAnswered } from "./activity";
+import { endsAnswered } from "./activity";
 import { Composer, STEER_PLACEHOLDER, type Attachment } from "./Composer";
 import { QueuedMessages, type QueuedMessage } from "./QueuedMessages";
 import { FollowUpTimerBar } from "./FollowUpTimerBar";
@@ -49,13 +49,11 @@ interface ChatCoreProps {
   apiEndpoint: string;
   placeholder?: string;
   extraBody?: Record<string, unknown>;
-  onData?: (part: { type: string; data: unknown }) => void;
   initialMessages?: UIMessage[];
   onStatusChange?: (status: string, messages: UIMessage[]) => void;
   initialInput?: string;
   variant?: "full" | "panel";
 
-  header?: ReactNode;
   /** Rendered first inside the scroll container (e.g. the sticky session header). */
   scrollHeader?: ReactNode;
   /** Rendered above the message list (e.g. the compaction summary). */
@@ -123,12 +121,10 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
     apiEndpoint,
     placeholder = "Send a message",
     extraBody,
-    onData,
     initialMessages,
     onStatusChange,
     initialInput = "",
     variant = "full",
-    header,
     scrollHeader,
     beforeMessages,
     collapseCount = 0,
@@ -148,7 +144,6 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
 ) {
   const [input, setInput] = useState(initialInput);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const progressStore = useRef(new ProgressStore()).current;
   const compact = variant === "panel";
   const rootRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -209,8 +204,6 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const onDataRef = useRef(onData);
-  onDataRef.current = onData;
   const extraBodyRef = useRef(extraBody);
   extraBodyRef.current = extraBody;
 
@@ -228,15 +221,11 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
           }),
         }),
         onData: (part) => {
-          if (part.type === "data-provider-part") {
-            handleProgressData(progressStore, part.data as { toolCallId: string; part: { type: string; [key: string]: unknown } });
-          }
           if (part.type === "data-steer-seen") {
             const { ids, anchor } = part.data as { ids: string[]; anchor: number };
             ids.forEach((id) => seenSteerIds.current.set(id, anchor));
             setSteered((prev) => prev.map((m) => (ids.includes(m.id) ? withAnchor(m, anchor) : m)));
           }
-          onDataRef.current?.(part as { type: string; data: unknown });
         },
       }),
   );
@@ -251,7 +240,11 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
 
   const isLoading = status === "submitted" || status === "streaming";
   const showEmptyState = !!emptyState && messages.length === 0 && status !== "submitted";
-  const { scrollRef, contentRef, isAtBottom, scrollToBottom, scrollToTop } = useChatScroll(showEmptyState);
+  const { scrollRef, contentRef, isAtBottom, scrollToBottom, scrollToTop, scrollToLastMessage } = useChatScroll(showEmptyState);
+  // An opened chat starts where its last answer begins, not at the bottom of a long reply.
+  useLayoutEffect(() => {
+    if (messagesRef.current.length > 0) scrollToLastMessage();
+  }, [scrollToLastMessage]);
 
   const { collapse, analysisOnlyMsg } = useCompactedMessages(messages, collapseCount, analysisOnlyIndex);
   const rows = useMemo(
@@ -272,7 +265,6 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   useEffect(() => {
     if (prevStatus.current !== status) {
       if (status === "ready") {
-        progressStore.clear();
         // Don't steal focus from elsewhere on the page (sidebar, settings, another input).
         const active = document.activeElement;
         if (!IS_IOS && (!active || active === document.body || rootRef.current?.contains(active))) textareaRef.current?.focus();
@@ -297,7 +289,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
 
   // A failed reply keeps its saved tool work, so the run continues from it instead of starting over.
   const hasPartialReply = lastMessage?.role === "assistant" && lastMessage.parts.some((p) => p.type !== "step-start");
-  const lastId = status === "streaming" ? lastMessage?.id : null;
+  const streamingIdx = status === "streaming" ? messages.findLastIndex((m) => !isSteered(m)) : -1;
   const canRetry = !readOnly && !inputDisabled && !isLoading;
 
   const handleStop = () => {
@@ -521,8 +513,6 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
   return (
     <div ref={rootRef} className={cn("relative flex h-full flex-col", className)} {...dropProps}>
       {dropOverlay}
-      {header}
-
       <Transcript
         scrollRef={scrollRef}
         contentRef={contentRef}
@@ -546,8 +536,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
             key={key}
             msg={msg}
             msgIndex={index}
-            isAnimating={last && msg.id === lastId}
-            progressStore={progressStore}
+            isAnimating={last && index === streamingIdx}
             compact={compact}
             // The pieces before a steered message have no actions of their own; a pending steered message has none yet.
             renderMessage={last && index < messages.length ? renderMessage : undefined}
@@ -556,7 +545,7 @@ export const ChatCore = forwardRef<ChatCoreRef, ChatCoreProps>(function ChatCore
             onAsk={canAnswer ? handleAsk : undefined}
           />
         ))}
-        {isLoading && <ActivityLine label={activityLabel(messages)} />}
+        <ActivityLine active={isLoading} />
         {!readOnly && !inputDisabled && needsContinue && (
           <NoticeRow action={<Button variant="outline" size="sm" onClick={handleContinue}>Continue</Button>}>
             The reply was interrupted.

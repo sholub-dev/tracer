@@ -6,19 +6,21 @@ import type { Context } from "../trpc/context.js";
 import type { Db } from "../db/driver.js";
 import { alertIssues, monitors, monitorTriggers, sessionTimers } from "../db/schema.js";
 import { CONFIG, SETTINGS_KEYS } from "../config.js";
-import { localDeviceId, readAppSetting } from "../db/config-reader.js";
+import { readAppSetting } from "../db/config-reader.js";
 import { NewRelicProvider } from "../providers/newrelic/newrelic.provider.js";
 import type { AiIssue } from "../providers/newrelic/nerdgraph.client.js";
 import { buildIssueActionTool } from "../providers/newrelic/tools.js";
-import { clip, postSlack, readSlackConfig, triageUpdate } from "../integrations/slack.js";
+import { clip, readSlackConfig, triageUpdate } from "../integrations/slack.js";
 import { hasPendingTimer } from "../tools/timer-tool.js";
 import { MONITOR_ROLE, reportAlertSummaryTool, SEVERITIES, SLACK_RULE, summaryInstruction } from "./alert-summary.js";
-import { ensureFollowUp, postEnd, postRecheck } from "./follow-up.js";
+import { ensureFollowUp, postEnd, postRecheck, postToSlack } from "./follow-up.js";
 import { outcomeSummary, readOutcome, saveOutcome } from "./repeats.js";
+import { LOCAL_DEVICE, triggerOf } from "./store.js";
+import { incidentQuery } from "./window.js";
 import { withTimeout } from "../lib/with-timeout.js";
 
 const ISSUE_STATUSES = ["stopped", "ongoing", "recurring", "unknown"] as const;
-export type IssueStatus = (typeof ISSUE_STATUSES)[number];
+type IssueStatus = (typeof ISSUE_STATUSES)[number];
 
 type Monitor = typeof monitors.$inferSelect;
 type IssueRow = typeof alertIssues.$inferSelect;
@@ -35,19 +37,6 @@ export const TERMINAL_STATES = ["closed", "nr_closed", "left_open"];
 /** Settings switch, off by default: when off, monitors only post their analysis. */
 export async function triageEnabled(db: Db): Promise<boolean> {
   return await readAppSetting<boolean>(db, SETTINGS_KEYS.alertTriage) === true;
-}
-
-export const ingestLagSeconds = (query: string) =>
-  incidentQuery(query) ? CONFIG.monitorIncidentLagSeconds : CONFIG.monitorIngestLagSeconds;
-
-const SELECT_FROM_INCIDENT = /^\s*SELECT\s+[\s\S]+?\s+FROM\s+NrAiIncident\b/i;
-
-/** The monitor query listing its incident, policy and condition ids; null when it is not on NrAiIncident. */
-export function incidentQuery(query: string): string | null {
-  if (!SELECT_FROM_INCIDENT.test(query)) return null;
-  return query
-    .replace(SELECT_FROM_INCIDENT, "SELECT uniques(incidentId), uniques(policyId), uniques(conditionId) FROM NrAiIncident")
-    .replace(/\s+TIMESERIES(\s+(\d+\s+[a-z]+|AUTO|MAX))?(\s+SLIDE\s+BY\s+(\d+\s+[a-z]+|AUTO|MAX))?\b/i, "");
 }
 
 export function incidentRefs(rows: unknown): { incidentIds: Set<string>; policyIds: number[]; conditionIds: number[] } {
@@ -192,7 +181,7 @@ export interface DecideInput {
   closeError?: string | null;
 }
 
-export type Decision = { outcome: "watching" | "nr_closed" | "left_open"; ping: boolean; reason?: string };
+type Decision = { outcome: "watching" | "nr_closed" | "left_open"; ping: boolean; reason?: string };
 
 /** What happens to an issue the agent did not close. */
 export function decide(i: DecideInput): Decision {
@@ -218,24 +207,24 @@ function actionLine(state: string, title: string, reason?: string, why?: string 
   return `${single ? label : `${label}: ${clip(title, TITLE_MAX_CHARS)}`}${state === "closed" && why ? `. Why: ${why}` : ""}`;
 }
 
-// Counts earlier firings, not sibling issues of this one.
-async function recentCloses(db: Db, monitorId: string, conditionName: string, sessionId: string, now: number): Promise<number> {
-  return (await db.select({ n: countDistinct(alertIssues.sessionId) }).from(alertIssues).where(and(
+/** Per issue id: how often Tracer closed its condition on earlier firings of the monitor within the loop window. Counts earlier firings, not sibling issues of this one. */
+export async function closeCounts(db: Db, monitorId: string, sessionId: string, issues: { issueId: string; conditionName: string }[]): Promise<Map<string, number>> {
+  if (issues.length === 0) return new Map();
+  const now = unixNow();
+  const rows = await db.select({ name: alertIssues.conditionName, n: countDistinct(alertIssues.sessionId) }).from(alertIssues).where(and(
     eq(alertIssues.monitorId, monitorId),
-    eq(alertIssues.conditionName, conditionName),
+    inArray(alertIssues.conditionName, issues.map((i) => i.conditionName)),
     eq(alertIssues.state, "closed"),
     gte(alertIssues.updatedAt, now - CONFIG.triageLoopWindowSeconds),
     ne(alertIssues.sessionId, sessionId),
-  )).get())?.n ?? 0;
+  )).groupBy(alertIssues.conditionName).all();
+  const counts = new Map(rows.map((r) => [r.name, r.n]));
+  return new Map(issues.map((i) => [i.issueId, counts.get(i.conditionName) ?? 0]));
 }
 
-/** Per issue id: how often Tracer closed its condition on earlier firings of the monitor within the loop window. */
-export async function closeCounts(db: Db, monitorId: string, sessionId: string, issues: { issueId: string; conditionName: string }[]): Promise<Map<string, number>> {
-  const now = unixNow();
-  return new Map(await Promise.all(issues.map(async (i) => [i.issueId, await recentCloses(db, monitorId, i.conditionName, sessionId, now)] as const)));
-}
+type FreshStates = Map<string, AiIssue> | null;
 
-async function freshStates(context: Context, rows: IssueRow[]): Promise<Map<string, AiIssue> | null> {
+async function freshStates(context: Context, rows: IssueRow[]): Promise<FreshStates> {
   const nr = newRelic(context);
   if (!nr || rows.length === 0) return null;
   const trigger = await context.db.select({ windowStart: monitorTriggers.windowStart }).from(monitorTriggers)
@@ -248,6 +237,11 @@ async function freshStates(context: Context, rows: IssueRow[]): Promise<Map<stri
     console.warn("[triage] issue state check failed:", errorText(err));
     return null;
   }
+}
+
+/** The New Relic state of every issue of the session, read once for the triage and the ack after its run. */
+export async function sessionStates(context: Context, sessionId: string): Promise<FreshStates> {
+  return freshStates(context, await context.db.select().from(alertIssues).where(eq(alertIssues.sessionId, sessionId)).all());
 }
 
 // Ack first so New Relic and JSM record it as handled, then close; a failed ack does not block the close.
@@ -285,8 +279,8 @@ export function monitorIssueTools(context: Context, issueIds: string[], sessionI
   };
 }
 
-/** Records what happened to the session's issues (the agent acts itself); returns the Slack action and whether to ping. `ids` limits a re-check to the issues it covered. */
-export async function applyTriage(context: Context, sessionId: string, recheck: boolean, ids?: string[]): Promise<Triage | null> {
+/** Records what happened to the session's issues (the agent acts itself); returns the Slack action and whether to ping. `ids` limits a re-check to the issues it covered; `known` are the New Relic states when the caller read them. */
+export async function applyTriage(context: Context, sessionId: string, recheck: boolean, ids?: string[], known?: FreshStates): Promise<Triage | null> {
   const { db } = context;
   const states = recheck ? ["pending"] : ["pending", "nr_closed", "closed"];
   const rows = await db.select().from(alertIssues)
@@ -294,9 +288,9 @@ export async function applyTriage(context: Context, sessionId: string, recheck: 
   if (rows.length === 0) return null;
   const enabled = await triageEnabled(db);
   const pending = rows.filter((r) => r.state === "pending");
-  const fresh = await freshStates(context, pending);
+  const fresh = known === undefined ? await freshStates(context, pending) : known;
   // Both 24h limits count from the firing, so the issue and the follow-up expire together.
-  const fired = await db.select({ triggeredAt: monitorTriggers.triggeredAt }).from(monitorTriggers).where(eq(monitorTriggers.sessionId, sessionId)).get();
+  const fired = await triggerOf(db, sessionId);
   const followUp = await hasPendingTimer(db, sessionId);
   const lines: string[] = [];
   let ping = false;
@@ -343,13 +337,13 @@ export async function forgetReports(db: Db, sessionId: string): Promise<void> {
 }
 
 /** The Slack action for a finished firing investigation; never throws. Without `found` (a re-run) it acts on the recorded issues only. */
-export async function triageAfterRun(context: Context, sessionId: string, found?: FoundIssues | null): Promise<Triage | undefined> {
+export async function triageAfterRun(context: Context, sessionId: string, found: FoundIssues | null | undefined, states: FreshStates): Promise<Triage | undefined> {
   if (found && "error" in found) {
     console.warn("[triage] could not read the New Relic issues:", found.error);
     return { action: "Triage skipped: could not read the New Relic issues", ping: true };
   }
   try {
-    const triage = await applyTriage(context, sessionId, false);
+    const triage = await applyTriage(context, sessionId, false, undefined, states);
     if (triage || !found) return triage ?? undefined;
     // Found issues with no rows here were recorded first by a concurrent firing.
     return found.tracked + found.open.length + found.closed.length > 0
@@ -361,14 +355,12 @@ export async function triageAfterRun(context: Context, sessionId: string, found?
   }
 }
 
-/** Acks the session's issues still open and unacked in New Relic, so another Tracer app skips them. Never throws. */
-export async function ackRemaining(context: Context, sessionId: string): Promise<void> {
+/** Acks the issues of `states` still open and unacked in New Relic, so another Tracer app skips them. Never throws. */
+export async function ackRemaining(context: Context, states: FreshStates): Promise<void> {
   try {
     const nr = newRelic(context);
     if (!nr || !await triageEnabled(context.db)) return;
-    const rows = await context.db.select().from(alertIssues).where(eq(alertIssues.sessionId, sessionId)).all();
-    const fresh = await freshStates(context, rows);
-    for (const issue of fresh?.values() ?? []) {
+    for (const issue of states?.values() ?? []) {
       if (issue.state === "CLOSED" || issue.acknowledgedAt) continue;
       const ack = await nr.ackIssue(issue.issueId);
       if ("error" in ack) console.warn(`[triage] ack of ${issue.issueId} failed:`, ack.error);
@@ -384,17 +376,10 @@ async function postUpdate(context: Context, ref: AlertRef, triage: Triage | null
   if (!triage?.action) return;
   const { db } = context;
   const name = await monitorName(db, ref.monitorId);
-  try {
-    const slack = await readSlackConfig(db);
-    if (!slack) return;
-    const result = await postSlack(slack.webhookUrl, triageUpdate({
-      name, ...triage, mentions: slack.mentions,
-      alert: outcomeSummary(await readOutcome(db, ref.sessionId)),
-    }));
-    if ("error" in result) console.warn(`[triage] "${name}" Slack post failed:`, result.error);
-  } catch (err) {
-    console.warn(`[triage] "${name}" Slack post failed:`, errorText(err));
-  }
+  await postToSlack(db, `"${name}"`, async (slack) => triageUpdate({
+    name, ...triage, mentions: slack.mentions,
+    alert: outcomeSummary(await readOutcome(db, ref.sessionId)),
+  }));
 }
 
 async function setRows(db: Db, rows: IssueRow[], fields: Partial<IssueRow>): Promise<void> {
@@ -473,13 +458,13 @@ export async function wakeupFailed(context: Context, sessionId: string): Promise
   const { report, latestReport } = await readOutcome(db, sessionId);
   // A re-check that failed before it reported leaves the alert open, so a person takes it over.
   const end = await ensureFollowUp(context, sessionId, latestReport ?? (report && { severity: report.severity, state: "ongoing" }));
-  if (end) await postEnd(context, sessionId, end);
+  if (end) await postEnd(context, sessionId, end, latestReport?.state);
 }
 
 /** Turns a follow-up timer wake-up of a monitor session into a re-check: role lines, alert report, and the triage re-check of watched issues. */
 export async function wakeupExtras(context: Context, sessionId: string): Promise<Wakeup> {
   const { db } = context;
-  const trigger = await db.select({ monitorId: monitorTriggers.monitorId }).from(monitorTriggers).where(eq(monitorTriggers.sessionId, sessionId)).get();
+  const trigger = await triggerOf(db, sessionId);
   if (!trigger) return { lines: [] };
   const watched = await watchedIssues(context, sessionId);
   const slack = await readSlackConfig(db) !== null;
@@ -498,22 +483,21 @@ export async function wakeupExtras(context: Context, sessionId: string): Promise
         // Later firings read the stored outcome, so it follows each re-check.
         await saveOutcome(db, sessionId, outcome);
         const end = await ensureFollowUp(context, sessionId, outcome.latestReport);
-        await postRecheck(context, sessionId, await watched.triage?.() ?? null, end);
+        await postRecheck(context, sessionId, await watched.triage?.() ?? null, end, outcome);
       })().catch((err) => console.error("[triage] follow-up failed:", errorText(err)));
     },
     revert: watched.revert,
   };
 }
 
-/** Runs each scheduler tick: sweeps stale pending issues, watched issues left without a follow-up, and old rows. */
+/** Runs each scheduler tick that has issues in progress: sweeps stale pending issues and watched issues left without a follow-up. */
 export async function checkWatches(context: Context): Promise<void> {
   const { db } = context;
   const now = unixNow();
-  await db.delete(alertIssues).where(and(inArray(alertIssues.state, TERMINAL_STATES), lt(alertIssues.updatedAt, now - CONFIG.triageRetentionSeconds))).run();
   // Synced rows of another device are not ours: that device settles its own runs.
   const stale = (await db.select({ row: alertIssues }).from(alertIssues)
     .innerJoin(monitorTriggers, eq(monitorTriggers.id, alertIssues.triggerId))
-    .where(and(eq(alertIssues.state, "pending"), lt(alertIssues.updatedAt, now - PENDING_STALE_SECONDS), eq(monitorTriggers.deviceId, await localDeviceId(db)))).all()).map((r) => r.row);
+    .where(and(eq(alertIssues.state, "pending"), lt(alertIssues.updatedAt, now - PENDING_STALE_SECONDS), eq(monitorTriggers.deviceId, LOCAL_DEVICE))).all()).map((r) => r.row);
   for (const sessionId of new Set(stale.map((r) => r.sessionId))) {
     if (context.activeStreams.has(sessionId)) continue;
     try {
@@ -535,7 +519,7 @@ export async function checkWatches(context: Context): Promise<void> {
   const orphaned = (await db.select({ row: alertIssues }).from(alertIssues)
     .innerJoin(monitorTriggers, eq(monitorTriggers.id, alertIssues.triggerId))
     .leftJoin(sessionTimers, and(eq(sessionTimers.sessionId, alertIssues.sessionId), isNotNull(sessionTimers.fireAt)))
-    .where(and(eq(alertIssues.state, "watching"), eq(monitorTriggers.deviceId, await localDeviceId(db)), isNull(sessionTimers.sessionId))).all()).map((r) => r.row);
+    .where(and(eq(alertIssues.state, "watching"), eq(monitorTriggers.deviceId, LOCAL_DEVICE), isNull(sessionTimers.sessionId))).all()).map((r) => r.row);
   for (const sessionId of new Set(orphaned.map((r) => r.sessionId))) {
     try {
       await leaveOpen(context, orphaned.filter((r) => r.sessionId === sessionId), "no re-check set");

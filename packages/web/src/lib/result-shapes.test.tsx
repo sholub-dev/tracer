@@ -1,28 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
-import { dropFlattenedCopies, dropFlattenedResultCopies, mainMemberKey, normalizeNewRelicRows } from "@tracer-sh/shared";
+import { dropFlattenedResultCopies, mainMemberKey, normalizeNewRelicRows } from "@tracer-sh/shared";
 import { buildColumns, coerceNumeric, dropFlattenedRowCopies, expandObjectColumns, formatValue, isNumericGroup, mainMemberColumns } from "./result-utils";
 import { getMetricKeys } from "../components/charts/ChartView";
 import { KeyFigures } from "../components/charts/KeyFigures";
 
 const apdexRow = { "apdex.x": { count: 676, f: 2, s: 638, score: 0.97, t: 36 }, count: 676, f: 2, s: 638, score: 0.97, t: 36 };
-
-test("drops members copied next to their object, in query order", () => {
-  assert.deepEqual(Object.keys(dropFlattenedCopies(apdexRow)), ["apdex.x"]);
-});
-
-test("keeps every key when only some members match a real column", () => {
-  const row = { n: 1, "apdex.x": { count: 676, score: 0.97 }, count: 676, score: 0.5 };
-  assert.deepEqual(dropFlattenedCopies(row), row);
-  const plain = { a: 1 };
-  assert.equal(dropFlattenedCopies(plain), plain);
-});
-
-test("a real column equal to one member stays when the set is not complete", () => {
-  const row = { "apdex.x": { count: 676, score: 0.97 }, count: 676 };
-  assert.deepEqual(dropFlattenedCopies(row), row);
-});
 
 test("cleans flattened copies only for New Relic results", () => {
   assert.deepEqual(Object.keys((dropFlattenedRowCopies([apdexRow], "newrelic") as object[])[0]), ["apdex.x"]);
@@ -42,13 +26,8 @@ test("expands object columns into one column per member, in order", () => {
   assert.equal(expandObjectColumns([{ a: 1 }])[0].a, 1);
 });
 
-test("leaves arrays and null values alone", () => {
-  const row = { a: [1, 2], b: null, c: { x: 1 }, x: null };
-  assert.deepEqual(dropFlattenedCopies(row), row);
-});
-
 test("columns of a normalized row show the object once", () => {
-  assert.deepEqual(buildColumns([dropFlattenedCopies(apdexRow)]).map((c) => c.key), ["apdex.x"]);
+  assert.deepEqual(buildColumns(dropFlattenedResultCopies([apdexRow])).map((c) => c.key), ["apdex.x"]);
 });
 
 test("formats arrays of objects as JSON, not [object Object]", () => {
@@ -56,7 +35,7 @@ test("formats arrays of objects as JSON, not [object Object]", () => {
 });
 
 test("key figures render an object as one group of tiles", () => {
-  const row = dropFlattenedCopies(apdexRow);
+  const [row] = dropFlattenedResultCopies([apdexRow]);
   const html = renderToStaticMarkup(<KeyFigures columns={buildColumns([row])} row={row} />);
   assert.equal(html.split("apdex.x").length - 1, 1);
   assert.ok(!html.includes("{&quot;"));

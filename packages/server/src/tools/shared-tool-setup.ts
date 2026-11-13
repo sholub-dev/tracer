@@ -1,10 +1,10 @@
 import type { Db } from "../db/driver.js";
 import type { ProviderRegistry } from "../providers/registry.js";
-import type { ChatToolWriter as StreamWriter, AfterCompleteParams, ChatMode, MemoryInjection } from "@tracer-sh/shared";
+import type { AfterCompleteParams, ChatMode, MemoryInjection } from "@tracer-sh/shared";
 import { toolMemories } from "../db/schema.js";
 import { combineSets, memorySetFor } from "./memory-notes.js";
 import { applyStepBudget, buildNoProviderPrompt, buildUnifiedModePrompt } from "../lib/shared-prompts.js";
-import { injectMemories } from "../agents/chat/sub-agent.js";
+import { injectMemories } from "../agents/chat/query-records.js";
 import { getJiraChatTools } from "../integrations/jira/tools.js";
 import { readSlackConfig } from "../integrations/slack.js";
 import { postSlackMessageTool, SLACK_PROMPT_FRAGMENT } from "./slack-tool.js";
@@ -26,20 +26,21 @@ export interface BaseToolSetup {
 export async function collectBaseTools(
   registry: ProviderRegistry,
   db: Db,
-  writer?: StreamWriter,
+  sessionId?: string,
   mode?: ChatMode,
   activeProvider?: string,
   includeIntegrations = false,
 ): Promise<BaseToolSetup> {
-  const memories = await db.select().from(toolMemories).all();
-  const sessionId = writer?.sessionId;
+  const [memories, savedMaxSteps] = await Promise.all([
+    db.select().from(toolMemories).all(),
+    readAppSetting<number>(db, SETTINGS_KEYS.directModeMaxSteps),
+    registry.whenLoaded().then(() => registry.reconnectDisconnected()),
+  ]);
   const tools: Record<string, unknown> = {};
   const promptFragments: string[] = [];
   const systemPrompts: string[] = [];
-  const maxSteps = (await readAppSetting<number>(db, SETTINGS_KEYS.directModeMaxSteps)) ?? DEFAULTS.directModeMaxSteps;
+  const maxSteps = savedMaxSteps ?? DEFAULTS.directModeMaxSteps;
   const afterCompleteCallbacks: Array<(params: AfterCompleteParams) => void> = [];
-  await registry.whenLoaded();
-  await registry.reconnectDisconnected();
   let connectedProviders = registry.getAllProviders().filter((p) => p.connected);
 
   // Filter to active provider if specified (exclusive toggle)
@@ -60,7 +61,6 @@ export async function collectBaseTools(
     if (provider.getChatTools) {
       try {
         const kit = provider.getChatTools({
-          writer,
           memoryContext: {
             toolName: provider.type,
             existingMemories: memories.filter((m) => m.toolName === provider.type),
@@ -75,7 +75,7 @@ export async function collectBaseTools(
         if (kit.systemPrompt) systemPrompts.push(kit.systemPrompt);
         if (kit.afterComplete) afterCompleteCallbacks.push(kit.afterComplete);
       } catch (err) {
-        console.warn(`[chat-tools] Failed to load tools for ${provider.name}:`, err);
+        console.warn(`[chat-tools] Failed to load tools for ${provider.type}:`, err);
       }
     }
   }
@@ -86,14 +86,15 @@ export async function collectBaseTools(
   // Jira is a non-observability integration: when enabled (chat only — not the monitor
   // builder) its tools are always-on, independent of the active-provider filter above, so they're
   // available alongside whatever provider is selected.
-  const jiraKit = includeIntegrations ? await getJiraChatTools(db) : null;
+  const [jiraKit, slackConfig] = includeIntegrations
+    ? await Promise.all([getJiraChatTools(db), readSlackConfig(db)])
+    : [null, null];
   if (jiraKit) {
     Object.assign(tools, jiraKit.tools);
     promptFragments.push(jiraKit.promptFragment);
   }
 
-  const slackOn = includeIntegrations && await readSlackConfig(db) !== null;
-  if (slackOn) {
+  if (slackConfig !== null) {
     tools.post_slack_message = postSlackMessageTool(db);
     promptFragments.push(SLACK_PROMPT_FRAGMENT);
   }

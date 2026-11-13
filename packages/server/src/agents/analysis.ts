@@ -93,7 +93,7 @@ export function extractAnalysis(messages: UIMessage[]): { analysis: string; quer
     for (const p of m.parts as MessagePart[]) assistantParts.push(p);
   }
 
-  // The first marker of the last message that has one, as findAnalysisMarker picks it for compaction.
+  // The begin_analysis call of the last message that has one; a card without it is added from the finding below.
   let markerIdx = -1;
   let offset = 0;
   for (const m of turn) {

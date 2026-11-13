@@ -39,7 +39,6 @@ interface ComposerProps {
   textareaRef?: RefObject<HTMLTextAreaElement | null>;
   autoFocus?: boolean;
   compact?: boolean;
-  className?: string;
 }
 
 export function Composer({
@@ -62,7 +61,6 @@ export function Composer({
   textareaRef,
   autoFocus,
   compact = false,
-  className,
 }: ComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const ownTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -87,10 +85,7 @@ export function Composer({
         e.preventDefault();
         onSubmit();
       }}
-      className={cn(
-        "rounded-xl border border-input bg-card shadow-xs transition-[border-color,box-shadow] duration-150 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/25",
-        className,
-      )}
+      className="rounded-xl border border-input bg-card shadow-xs transition-[border-color,box-shadow] duration-150 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/25"
     >
       {attachments.length > 0 && (
         <ul className="flex flex-wrap gap-2 px-3 pt-3" aria-label="Attachments">
@@ -166,7 +161,8 @@ export function Composer({
             </IconButton>
           </>
         )}
-        <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto no-scrollbar">{sources}</div>
+        {/* On a phone the steer buttons need the row; the source picker returns when the reply ends. */}
+        <div className={cn("flex min-w-0 items-center gap-1.5 overflow-x-auto no-scrollbar", streaming && onSteer && "max-sm:hidden")}>{sources}</div>
         <span className="flex-1" />
         {cost}
         {streaming && onSteer && (

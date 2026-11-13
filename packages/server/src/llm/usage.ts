@@ -25,12 +25,11 @@ export function recordEachCall(db: Db, sessionId: string, agentType: string, mod
 }
 
 /** Record a single LLM call's token usage in the agent_runs table. Best-effort. */
-export async function recordAgentRun(db: Db, opts: {
+async function recordAgentRun(db: Db, opts: {
   sessionId: string;
   agentType: string;
   model: string;
   usage: TokenUsage;
-  durationMs?: number;
 }): Promise<void> {
   try {
     await db.insert(agentRuns).values({
@@ -43,7 +42,6 @@ export async function recordAgentRun(db: Db, opts: {
       cachedInputTokens: opts.usage.cachedInputTokens,
       reasoningTokens: opts.usage.reasoningTokens,
       cacheWriteTokens: opts.usage.cacheWriteTokens,
-      durationMs: opts.durationMs,
     }).run();
     sessionChanged(opts.sessionId);
   } catch (err) {

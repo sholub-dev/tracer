@@ -1,21 +1,11 @@
 /** NerdGraph API response wrapper */
-export interface NerdGraphResponse<T = NrqlQueryResult> {
+export interface NerdGraphResponse {
   data?: {
     actor: {
       account: {
-        nrql: T;
+        nrql: NrqlQueryResult;
       };
     };
-  };
-  errors?: NerdGraphError[];
-}
-
-/** NerdGraph error */
-export interface NerdGraphError {
-  message: string;
-  extensions?: {
-    errorClass?: string;
-    code?: string;
   };
 }
 

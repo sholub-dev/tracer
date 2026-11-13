@@ -71,14 +71,14 @@ test("a call that hits the limit leaves the clients open while another call stil
   config.mcpToolCallTimeoutMs = 30;
   try {
     await withAuth(async () => {
-      const p = new McpProvider({ label: "X", servers: [] } as never, {}, "x");
+      const p = new McpProvider({} as never, {}, "x");
       let closed = 0;
       const tools = {
         hung: { description: "d", inputSchema: z.object({}), execute: () => new Promise(() => {}) },
         slow: { description: "d", inputSchema: z.object({}), execute: async () => { await new Promise((r) => setTimeout(r, 25)); return { content: [{ type: "text", text: "late" }] }; } },
       };
-      (p as any).clients = [{ tools: async () => tools, close: async () => { closed++; } }];
-      await p.getMcpTools();
+      (p as any).client = { tools: async () => tools, close: async () => { closed++; } };
+      await (p as any).discoverTools();
       p.connected = true;
       const kit = createGcpDirectTools(p, undefined, undefined, "p").tools as Record<string, { execute: (i: unknown, o?: unknown) => Promise<{ error?: string }> }>;
       const hungCall = kit.hung.execute({}, {});

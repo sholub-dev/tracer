@@ -1,6 +1,5 @@
 import { memo, type ReactNode } from "react";
 import type { UIMessage } from "ai";
-import type { ProgressStore } from "../../lib/progress-store";
 import type { AskState } from "../../lib/ask-card";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { MessageView, type MessageViewOptions } from "./MessageView";
@@ -13,7 +12,6 @@ export const MessageRow = memo(function MessageRow({
   msg,
   msgIndex,
   isAnimating,
-  progressStore,
   compact,
   renderMessage,
   piece,
@@ -23,7 +21,6 @@ export const MessageRow = memo(function MessageRow({
   msg: UIMessage;
   msgIndex: number;
   isAnimating: boolean;
-  progressStore: ProgressStore;
   compact: boolean;
   renderMessage?: (msg: UIMessage, index: number, view: RenderView) => ReactNode;
   /** A piece of a reply that a steered message cut apart, not its last one. */
@@ -32,7 +29,7 @@ export const MessageRow = memo(function MessageRow({
   onAsk?: (label: string) => void;
 }) {
   const view: RenderView = (options) => (
-    <MessageView msg={msg} isAnimating={isAnimating} progressStore={progressStore} compact={compact} ask={ask} onAsk={onAsk} showActions={piece ? false : undefined} {...options} />
+    <MessageView msg={msg} isAnimating={isAnimating} compact={compact} ask={ask} onAsk={onAsk} showActions={piece ? false : undefined} {...options} />
   );
   // No content-visibility here: a skipped reply takes its real height only as it scrolls into view, and that moves the view under the reader.
   return (

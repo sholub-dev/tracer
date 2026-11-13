@@ -1,12 +1,13 @@
 import { z } from "zod";
-import { eq } from "drizzle-orm";
 import { publicProcedure, router } from "../trpc.js";
 import type { Db } from "../../db/driver.js";
-import { providerConfigs } from "../../db/schema.js";
-import { readProviderConfig, readAppSetting, readAppSettings, writeAppSetting } from "../../db/config-reader.js";
+import { readProviderConfig, writeProviderConfig, deleteProviderConfig, readAppSetting, readAppSettings, writeAppSetting } from "../../db/config-reader.js";
+import { maskSecret } from "../../lib/mask-secret.js";
 import { getTimezone, isValidTimezone } from "../../lib/current-context.js";
 import { ANTHROPIC_MIN_THINKING_BUDGET } from "../../llm/resolve.js";
 import { CONFIG, DEFAULTS, SETTINGS_KEYS, type ModelConfig } from "../../config.js";
+
+const apiKeyType = z.enum(["anthropic", "google"]);
 
 const agentConfigInput = z.object({
   timezone: z.string().refine(isValidTimezone, "Invalid time zone").optional(),
@@ -32,44 +33,29 @@ async function readStepAndBudgetSettings(db: Db) {
 
 export const settingsRouter = router({
   getApiKey: publicProcedure
-    .input(z.string())
+    .input(apiKeyType)
     .query(async ({ ctx, input }) => {
       const config = await readProviderConfig(ctx.db, input);
       if (!config?.apiKey) return null;
-      const masked =
-        config.apiKey.length <= 4
-          ? "••••"
-          : "••••••••" + config.apiKey.slice(-4);
-      return { type: input, maskedApiKey: masked };
+      return { type: input, maskedApiKey: maskSecret(config.apiKey) };
     }),
 
   saveApiKey: publicProcedure
     .input(
       z.object({
-        type: z.enum(["anthropic", "google"]),
+        type: apiKeyType,
         apiKey: z.string().trim().min(1),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const configJson = JSON.stringify({ apiKey: input.apiKey });
-      await ctx.db
-        .insert(providerConfigs)
-        .values({ type: input.type, config: configJson })
-        .onConflictDoUpdate({
-          target: providerConfigs.type,
-          set: { config: configJson },
-        })
-        .run();
+      await writeProviderConfig(ctx.db, input.type, { apiKey: input.apiKey });
       return { success: true };
     }),
 
   removeApiKey: publicProcedure
-    .input(z.string())
+    .input(apiKeyType)
     .mutation(async ({ ctx, input }) => {
-      await ctx.db
-        .delete(providerConfigs)
-        .where(eq(providerConfigs.type, input))
-        .run();
+      await deleteProviderConfig(ctx.db, input);
       return { success: true };
     }),
 
@@ -95,23 +81,15 @@ export const settingsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const existing = await readProviderConfig(ctx.db, "google-vertex") ?? {};
-      const configJson = JSON.stringify({
+      await writeProviderConfig(ctx.db, "google-vertex", {
         projectId: input.projectId ?? existing.projectId ?? "",
         location: input.location ?? existing.location ?? "global",
       });
-      await ctx.db
-        .insert(providerConfigs)
-        .values({ type: "google-vertex", config: configJson })
-        .onConflictDoUpdate({
-          target: providerConfigs.type,
-          set: { config: configJson },
-        })
-        .run();
       return { success: true };
     }),
 
   removeVertexConfig: publicProcedure.mutation(async ({ ctx }) => {
-    await ctx.db.delete(providerConfigs).where(eq(providerConfigs.type, "google-vertex")).run();
+    await deleteProviderConfig(ctx.db, "google-vertex");
     return { success: true };
   }),
 

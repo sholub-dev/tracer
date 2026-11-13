@@ -4,8 +4,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { diffBanners, remainingSeconds, type PendingFiring } from "../../lib/firing-confirm";
 import { trpc } from "../../lib/trpc";
+import { TOASTER_ID } from "./AlertBanner";
 
-const TOASTER_ID = "alerts";
 const toastId = (id: string) => `firing-${id}`;
 
 interface FiringBannerProps {
@@ -18,7 +18,7 @@ function FiringBanner({ firing, receivedAt, onDecide }: FiringBannerProps) {
   const [now, setNow] = useState(Date.now());
   const [decided, setDecided] = useState(false);
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 250);
+    const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
   const seconds = remainingSeconds(firing.remainingMs, receivedAt, now);
@@ -32,7 +32,7 @@ function FiringBanner({ firing, receivedAt, onDecide }: FiringBannerProps) {
       </div>
       <p className="line-clamp-2 text-sm text-muted-foreground">{firing.detail}</p>
       <div className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 text-sm text-muted-foreground tabular-nums" aria-live="off">
+        <span className="min-w-0 flex-1 text-sm text-muted-foreground" aria-live="off">
           {seconds > 0 ? `Investigating in ${seconds}s` : "Starting…"}
         </span>
         <Button size="sm" variant="outline" disabled={decided} onClick={() => decide(false)}>No</Button>

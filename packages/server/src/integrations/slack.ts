@@ -1,11 +1,9 @@
-import { eq } from "drizzle-orm";
 import type { Db } from "../db/driver.js";
-import { appSettings } from "../db/schema.js";
-import { fetchWithRetry } from "../lib/fetch-retry.js";
+import { fetchText } from "../lib/fetch-retry.js";
 import { formatLocalTime } from "../lib/current-context.js";
 import { resultRefsToText, type Finding } from "@tracer-sh/shared";
 import { type AlertSummary } from "../monitors/alert-summary.js";
-import { readAppSetting, writeAppSetting } from "../db/config-reader.js";
+import { deleteAppSetting, readAppSetting, writeAppSetting } from "../db/config-reader.js";
 
 export const SLACK_CONFIG_KEY = "integration:slack";
 
@@ -24,7 +22,7 @@ export async function writeSlackConfig(db: Db, config: SlackConfig): Promise<voi
 }
 
 export async function deleteSlackConfig(db: Db): Promise<void> {
-  await db.delete(appSettings).where(eq(appSettings.key, SLACK_CONFIG_KEY)).run();
+  await deleteAppSetting(db, SLACK_CONFIG_KEY);
 }
 
 // Only Slack's webhook host, so a saved URL can't make the server post elsewhere.
@@ -41,12 +39,12 @@ export async function postSlack(webhookUrl: string, payload: SlackPayload): Prom
   if (!isSlackWebhook(webhookUrl)) return { error: "Webhook URL must start with https://hooks.slack.com/services/" };
   try {
     // A retry after a lost response can post twice; that beats a lost alert.
-    const res = await fetchWithRetry(webhookUrl, {
+    const res = await fetchText(webhookUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     }, { timeoutMs: 10_000 });
-    if (!res.ok) return { error: `Slack returned ${res.status}: ${(await res.text()).slice(0, 200)}` };
+    if (!res.ok) return { error: `Slack returned ${res.status}: ${res.text.slice(0, 200)}` };
     return { ok: true };
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };
@@ -54,8 +52,6 @@ export async function postSlack(webhookUrl: string, payload: SlackPayload): Prom
 }
 
 const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-const SUMMARY_MAX_CHARS = 300;
 
 // Slack is outside Tracer's access controls and a post must not point anywhere: ids, links and step citations are removed, and personal data is masked.
 export function redact(text: string): string {
@@ -140,8 +136,8 @@ export function verdictOf(summary: AlertSummary | null, finding: Finding | null)
   const field = (s: string, max?: number) => known(tidy(s, max));
   const card = finding?.kind === "root_cause" ? finding : null;
   const head = {
-    summary: finding ? tidy(finding.answer, SUMMARY_MAX_CHARS) : "",
-    title: finding ? tidy(finding.title, SUMMARY_MAX_CHARS) : "",
+    summary: finding ? tidy(finding.answer, DETAIL_MAX_CHARS) : "",
+    title: finding ? tidy(finding.title, DETAIL_MAX_CHARS) : "",
     verdict: card?.verdict?.replace("_", " ") ?? "",
     confidence: card?.verdict ? card.confidence ?? "unverified" : "",
   };
@@ -174,6 +170,9 @@ export interface MonitorAlert {
   ping?: boolean;
 }
 
+const section = (text: string) => ({ type: "section", text: { type: "mrkdwn", text } });
+const post = (text: string): SlackPayload => ({ text, blocks: [section(text)] });
+
 function mentionsFor(raw: string | undefined, ping: boolean | undefined): string {
   if (ping === false) return "";
   const parsed = parseMentions(raw ?? "");
@@ -184,6 +183,8 @@ function mentionsFor(raw: string | undefined, ping: boolean | undefined): string
 export const routeOf = (endpoint: string) => endpoint
   .replace(/^(?:WebTransaction\/)?(?:[A-Za-z]+\/)?(?:GET|POST|PUT|PATCH|DELETE)\/+/i, "/")
   .replace(/\/([^/]+)\/\1$/, "/$1");
+
+const headOf = (name: string, mentions: string | undefined, ping: boolean | undefined) => `${mentionsFor(mentions, ping)}*${escape(redact(name))}*`;
 
 function issueLine([service = "", rawEndpoint = "", error = "", experience = ""]: string[]): string {
   const endpoint = routeOf(rawEndpoint);
@@ -216,7 +217,7 @@ export function monitorAlert(a: MonitorAlert): Required<SlackPayload> {
   return {
     text,
     blocks: [
-      { type: "section", text: { type: "mrkdwn", text: lines.join("\n") } },
+      section(lines.join("\n")),
       { type: "context", elements: [{ type: "mrkdwn", text: escape(`monitor "${name}" · ${time}`) }] },
     ],
   };
@@ -224,26 +225,26 @@ export function monitorAlert(a: MonitorAlert): Required<SlackPayload> {
 
 /** Post for a triage outcome; `alert` is the headline of the alert it covers. */
 export function triageUpdate(u: { name: string; action: string; ping: boolean; mentions?: string; alert?: string }): SlackPayload {
-  const head = `${mentionsFor(u.mentions, u.ping)}*${escape(redact(u.name))}*`;
-  const alert = u.alert ? escape(tidy(u.alert, SUMMARY_MAX_CHARS)) : "";
+  const head = headOf(u.name, u.mentions, u.ping);
+  const alert = u.alert ? escape(tidy(u.alert, DETAIL_MAX_CHARS)) : "";
   const prefix = [head, alert, "*Action:* "].filter(Boolean).join("\n");
   // Clip after escaping: entities lengthen the text past Slack's section limit.
   const text = prefix + clip(escape(redact(u.action)), SECTION_MAX_CHARS - prefix.length);
-  return { text, blocks: [{ type: "section", text: { type: "mrkdwn", text } }] };
+  return post(text);
 }
 
 /** Post for free text from the agent: redacted and escaped, so it carries no link, id or mention. */
 export function messagePost(text: string): SlackPayload | null {
   const body = clip(escape(redact(resultRefsToText(text))), SECTION_MAX_CHARS);
-  return body ? { text: body, blocks: [{ type: "section", text: { type: "mrkdwn", text: body } }] } : null;
+  return body ? post(body) : null;
 }
 
 /** Post for a re-check of an alert; the text names no earlier post. */
 export function recheckUpdate(u: { name: string; headline: string; state?: string; action?: string; ping: boolean; mentions?: string }): SlackPayload {
-  const head = `${mentionsFor(u.mentions, u.ping)}*${escape(redact(u.name))}*`;
-  const headline = u.headline ? escape(tidy(u.headline, SUMMARY_MAX_CHARS)) : "";
+  const head = headOf(u.name, u.mentions, u.ping);
+  const headline = u.headline ? escape(tidy(u.headline, DETAIL_MAX_CHARS)) : "";
   const check = `${[`Re-check${headline ? `: ${headline.replace(/[.\s]+$/, "")}` : ""}`, u.state && `State: ${u.state}`].filter(Boolean).join(". ")}.`;
   const lines = [head, check, u.action && `*Action:* ${escape(redact(u.action))}`].filter(Boolean) as string[];
   const text = clip(lines.join("\n"), SECTION_MAX_CHARS);
-  return { text, blocks: [{ type: "section", text: { type: "mrkdwn", text } }] };
+  return post(text);
 }

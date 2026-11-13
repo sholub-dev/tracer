@@ -8,12 +8,14 @@ import { CONFIG } from "../config.js";
 import { applyMiddleware } from "./middleware.js";
 import { registerChatRoutes } from "./routes/chat.js";
 
+const compression = compress();
+
 export function createApp(context: Context) {
   const app = new Hono();
 
   app.use("*", async (c, next) => {
     if (c.req.path.startsWith("/api/chat")) return next();
-    return compress()(c, next);
+    return compression(c, next);
   });
   applyMiddleware(app);
   app.use("/api/*", bodyLimit({ maxSize: CONFIG.maxRequestBodyBytes, onError: (c) => c.text("Payload Too Large", 413) }));

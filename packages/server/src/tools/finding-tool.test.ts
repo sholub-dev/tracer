@@ -133,44 +133,6 @@ test("a number in the answer must be in a cited result", async () => {
   assert.doesNotMatch(out.problems, /answer: 56/);
 });
 
-test("a number from the answer is not repeated in a statement", async () => {
-  const card = { ...valid, answer: "The pool held 50 of 50 connections, with 1,193 retries.", explanation: [{ statement: "Pool usage hit 50 of 50 connections.", source: "Pool usage" }, valid.explanation[1]] };
-  const messages = [...turn(), ...query("c", "Retry count", "retries\n1193")];
-  const out = await ask(card, messages);
-  assert.equal(out.recorded, false);
-  assert.match(out.problems, /statement 1 repeats 50 from the answer: state each number once; keep it in the answer and give the statement a new fact\./);
-  const normalized = await ask({ ...card, answer: "There were 1,193 retries.", explanation: [{ statement: "Retries reached 1193 in total.", source: "Retry count" }] }, messages);
-  assert.match(normalized.problems, /statement 1 repeats 1193 from the answer/);
-});
-
-test("a number is not stated in two statements", async () => {
-  const card = { ...valid, explanation: [valid.explanation[0], { statement: "Retries rose while usage held 50 connections.", source: "Pool usage" }] };
-  const out = await ask(card, turn());
-  assert.equal(out.recorded, false);
-  assert.match(out.problems, /statements 1 and 2 both state 50: state each number once\./);
-});
-
-test("an id in any text field is sent back", async () => {
-  for (const [field, text] of [["answer", "Error in 3f2b1c9e-1a2b-4c3d-9e8f-0a1b2c3d4e5f."], ["title", "Trace 4bf92f3577b34da6a3ce929d0e0e4736 failed"], ["unknown", "Owner of 0123456789abcdef0123"]] as const) {
-    const out = await ask({ ...valid, [field]: text }, turn());
-    assert.equal(out.recorded, false, field);
-    assert.match(out.problems, new RegExp(`The ${field} holds an id\\. Name the service, endpoint or condition instead of the id\\.`));
-  }
-  const statement = { statement: "Pool held 50 of 50 for 3f2b1c9e-1a2b-4c3d-9e8f-0a1b2c3d4e5f.", source: "Pool usage" };
-  assert.match((await ask({ ...valid, explanation: [statement] }, turn())).problems, /The statement 1 holds an id/);
-  assert.deepEqual(await ask({ ...valid, answer: "Build deadbeef failed." }, turn()), { recorded: true });
-});
-
-test("an action with no system change in the turn is sent back", async () => {
-  for (const action of ["", "None", "Omit action as no operational action was performed."]) {
-    const out = await ask({ ...valid, action }, turn());
-    assert.equal(out.recorded, false, action);
-    assert.match(out.problems, /Omit action: no tool changed a system in this turn\./);
-  }
-  const closed = { role: "tool" as const, content: [{ type: "tool-result" as const, toolCallId: "c", toolName: "close_nr_issue", output: { type: "json" as const, value: { ok: true } } }] };
-  assert.deepEqual(await ask({ ...valid, action: "Closed the issue" }, [...turn(), closed]), { recorded: true });
-});
-
 test("findingFromMessages reads a root cause without confidence as unverified", () => {
   const { confidence: _c, unknown: _u, ...bare } = valid;
   assert.deepEqual(findingFromMessages(msgs(call(bare))), { ...bare, confidence: "unverified" });
@@ -224,12 +186,6 @@ test("a card saved in the old headline shape still parses", () => {
   });
 });
 
-test("a number with more than two decimals is sent back", async () => {
-  const out = await ask({ ...valid, explanation: [{ statement: "Retries rose to 56.330 per second.", source: "Retry rate" }] }, turn());
-  assert.equal(out.recorded, false);
-  assert.match(out.problems, /writes 56\.330: round it to at most two decimals/);
-});
-
 test("the first card is sent back with the ledger challenges when no query ran after them", async () => {
   const reviewed = (challenges: string[]) => [
     { role: "assistant" as const, content: [{ type: "tool-call" as const, toolCallId: "ba", toolName: "begin_analysis", input: {} }] },
@@ -261,11 +217,6 @@ test("a card that calls traffic a bot is sent back unless the ledger grounds it"
   assert.equal((await askWith(bot, [...turn(), ...ungrounded])).recorded, false, "an indicator with ungrounded numbers does not back it");
 });
 
-test("a large number without thousands separators is sent back", async () => {
-  const out = await ask({ ...valid, explanation: [{ statement: "Requests reached 1102458.", source: "Retry rate" }] }, turn());
-  assert.match(out.problems, /writes 1102458: write it with thousands separators \(1,102,458\)/);
-});
-
 test("a card recorded with failing checks reads as unverified with a note", () => {
   const summary = { ...valid, kind: "summary" as const };
   const f = findingFromMessages([{ parts: [{ type: "tool-report_finding", toolCallId: "x", state: "output-available", input: valid, output: { recorded: true, unchecked: "x" } } as never] }]);
@@ -273,15 +224,12 @@ test("a card recorded with failing checks reads as unverified with a note", () =
   assert.equal(findingFromMessages([{ parts: [{ type: "tool-report_finding", toolCallId: "x", state: "output-available", input: summary, output: { recorded: true, unchecked: "x" } } as never] }])?.unknown, `Who sent the retries. ${UNCHECKED_NOTE}`);
 });
 
-test("the last step and the repair pass need no ledger, and style problems alone do not mark a card unchecked", async () => {
+test("the last step and the repair pass need no ledger", async () => {
   const final = (card: unknown, messages: unknown[]) => (reportFindingTool(new Map(), () => 0, () => true, () => true) as any).execute(card, { messages, toolCallId: "t" });
   assert.deepEqual(await final(valid, turn()), { recorded: true });
-  const repeated = { ...valid, answer: "The pool held 50 of 50 connections.", explanation: [{ statement: "Pool usage hit 50 connections.", source: "Pool usage" }] };
-  assert.deepEqual(await ask(repeated, [...turn(), sentBack(), sentBack("q")]), { recorded: true });
 });
 
-test("an id in a code span is allowed, and a query of the same step is a source", async () => {
-  assert.deepEqual(await ask({ ...valid, unknown: "Account `3f2b1c9e-1a2b-4c3d-9e8f-0a1b2c3d4e5f` sent the retries." }, turn()), { recorded: true });
+test("a query of the same step is a source", async () => {
   const step = reportFindingTool(new Map(), () => 0, () => false, () => false, () => [{ toolName: "execute_nrql", input: { title: "Retry rate" }, text: "perSecond\n56.33" }]) as any;
   const first = [{ role: "user" as const, content: "why?" }, ...query("a", "Pool usage", "used,max\n50,50")];
   assert.deepEqual(await step.execute(valid, { messages: first, toolCallId: "t" }), { recorded: true });
@@ -305,10 +253,8 @@ test("a card sent back over a challenge and resent unchanged is sent back again,
   assert.match((await ask(summary, [...turn(), ...reviewed, ...resent(summary, "p"), ...resent(summary, "q")])).unchecked, /Exceptions doubled/);
 });
 
-test("a bot word the user asked about needs no ledger proof, and a stray action never marks a card unchecked", async () => {
+test("a bot word the user asked about needs no ledger proof", async () => {
   const bot = { ...valid, kind: "summary" as const, title: "Bot requests held steady" };
   const asked = [{ role: "user" as const, content: "how many bot requests yesterday?" }, ...turn().slice(1)];
   assert.deepEqual(await askWith(bot, asked), { recorded: true });
-  const third = await ask({ ...valid, action: "None" }, [...turn(), sentBack(), sentBack("q")]);
-  assert.deepEqual(third, { recorded: true });
 });

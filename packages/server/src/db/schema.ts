@@ -41,7 +41,7 @@ export const chatSessions = sqliteTable("chat_sessions", {
   title: text("title").notNull(),
   messages: text("messages").notNull(),
   status: text("status").notNull().default("idle"),
-  /** Null for normal sessions. "imported" for legacy sessions created from an analysis image. */
+  /** Null for normal sessions. "imported" marks legacy rows from the removed PNG import; the kind stays for them. */
   kind: text("kind"),
   /** Compaction: LLM-generated (possibly user-edited) summary of the first summaryUpTo messages. */
   summary: text("summary"),
@@ -98,7 +98,7 @@ export const monitorTriggers = sqliteTable("monitor_triggers", {
   value: real("value").notNull(),
   windowStart: integer("window_start").notNull(),
   windowEnd: integer("window_end").notNull(),
-  status: text("status").notNull(), // "pending" (waits for a Yes or No) | "investigating" | "repeat" | "muted" | "skipped" | "closed"
+  status: text("status").notNull(), // "pending" (waits for a Yes or No) | "investigating" | "muted" | "skipped" | "closed"
   groups: text("groups").notNull(),
   sessionId: text("session_id"),
   /** Null until the session's run is reported to Slack; "failed" when every attempt failed, "done" after a finished run. */
@@ -168,7 +168,6 @@ export const agentRuns = sqliteTable("agent_runs", {
   cachedInputTokens: integer("cached_input_tokens").notNull().default(0),
   reasoningTokens: integer("reasoning_tokens").notNull().default(0),
   cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
-  durationMs: integer("duration_ms"),
   createdAt: integer("created_at")
     .notNull()
     .$defaultFn(() => unixNow()),

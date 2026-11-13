@@ -8,8 +8,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRelative, formatShortDate } from "../../lib/format";
+import { navigate } from "../../lib/hooks";
 import { providerLabel } from "../../lib/providers";
 import { trpc } from "../../lib/trpc";
 import { ProviderDot } from "../common/ProviderDot";
@@ -32,8 +32,7 @@ type Memory = {
 };
 
 function openSession(id: string) {
-  window.history.pushState(null, "", `/debug/${id}`);
-  window.dispatchEvent(new PopStateEvent("popstate"));
+  navigate(`/debug/${id}`);
 }
 
 function Provenance({ memory }: { memory: Memory }) {
@@ -94,7 +93,6 @@ export function MemorySettings() {
   const start = current * PAGE;
   const rows = pool.slice(start, start + PAGE);
   const optimizing = optimize.isPending;
-  const canOptimize = filter !== ALL && pool.length > 0 && !optimizing;
 
   return (
     <Section title="Memory" description="Lessons the agents saved while querying. They read them before every question.">
@@ -110,29 +108,19 @@ export function MemorySettings() {
             value: key,
             label: (
               <>
-                {key === ALL ? "All" : labelOf(key)} <span className="tabular-nums">{n}</span>
+                {key === ALL ? "All" : labelOf(key)} <span>{n}</span>
               </>
             ),
           }))}
           className="max-w-full overflow-x-auto"
         />
         <span className="flex-1" />
-        <Tooltip>
-          <TooltipTrigger asChild>
-            {/* aria-disabled keeps the button focusable so its tooltip can explain why. */}
-            <Button
-              variant="outline"
-              size="sm"
-              aria-disabled={!canOptimize}
-              onClick={() => canOptimize && optimize.mutate({ toolName: filter })}
-              className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-background"
-            >
-              {optimizing ? <Loader2 className="animate-spin" /> : <Sparkles />}
-              {optimizing ? "Optimizing" : "Optimize"}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>{filter === ALL ? "Pick one source to optimize" : "Merge duplicates and drop stale lessons"}</TooltipContent>
-        </Tooltip>
+        {filter !== ALL && (
+          <Button variant="outline" size="sm" disabled={pool.length === 0 || optimizing} onClick={() => optimize.mutate({ toolName: filter })}>
+            {optimizing ? <Loader2 className="animate-spin" /> : <Sparkles />}
+            {optimizing ? "Optimizing" : "Optimize"}
+          </Button>
+        )}
         <Button size="sm" onClick={() => setAdding(true)}>
           <Plus />
           Add memory
@@ -157,17 +145,19 @@ export function MemorySettings() {
             ))}
           </ul>
         )}
-        <div className="flex items-center gap-2 border-t px-4 py-2.5">
-          <p className="flex-1 text-[13px]/[18px] text-muted-foreground tabular-nums">
-            Showing {rows.length ? `${start + 1}–${start + rows.length}` : "0"} of {pool.length.toLocaleString()}
-          </p>
-          <Button variant="outline" size="sm" disabled={current === 0} onClick={() => setPage(current - 1)}>
-            Previous
-          </Button>
-          <Button variant="outline" size="sm" disabled={current >= pages - 1} onClick={() => setPage(current + 1)}>
-            Next
-          </Button>
-        </div>
+        {pool.length > 0 && (
+          <div className="flex items-center gap-2 border-t px-4 py-2.5">
+            <p className="flex-1 text-[13px]/[18px] text-muted-foreground">
+              Showing {start + 1}–{start + rows.length} of {pool.length.toLocaleString()}
+            </p>
+            <Button variant="outline" size="sm" disabled={current === 0} onClick={() => setPage(current - 1)}>
+              Previous
+            </Button>
+            <Button variant="outline" size="sm" disabled={current >= pages - 1} onClick={() => setPage(current + 1)}>
+              Next
+            </Button>
+          </div>
+        )}
       </div>
 
       <Dialog open={adding} onOpenChange={setAdding}>

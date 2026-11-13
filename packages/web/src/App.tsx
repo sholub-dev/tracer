@@ -1,5 +1,4 @@
 import { type ComponentType, type CSSProperties, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
-import { FEATURES } from "@tracer-sh/shared";
 import { Loader2 } from "lucide-react";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Shell } from "./components/layout/Shell";
@@ -10,6 +9,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { CopyFromComputerDialog } from "@/components/settings/CopyFromComputerDialog";
 import { AppUpdateOffer } from "./components/layout/AppUpdateOffer";
 import { IS_IOS } from "./lib/platform";
+import { navigate } from "./lib/hooks";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 // Pages load lazily, then all of them are fetched in the background. A page already fetched renders
@@ -27,19 +27,15 @@ function lazyPage<P extends object>(load: () => Promise<ComponentType<P>>) {
 
 const Debug = lazyPage(() => import("./pages/Debug").then((m) => m.Debug));
 const Settings = lazyPage(() => import("./pages/Settings").then((m) => m.Settings));
-const Monitors = FEATURES.monitors ? lazyPage(() => import("./pages/Monitors").then((m) => m.Monitors)) : null;
+const Monitors = lazyPage(() => import("./pages/Monitors").then((m) => m.Monitors));
 
 function preloadPages() {
-  const load = () => [Debug, Settings, Monitors].forEach((p) => p?.preload());
+  const load = () => [Debug, Settings, Monitors].forEach((p) => p.preload());
   if ("requestIdleCallback" in window) window.requestIdleCallback(load, { timeout: 3000 });
   else setTimeout(load, 1000);
 }
 
-const validPages = new Set<string>([
-  "debug",
-  "settings",
-  ...(FEATURES.monitors ? ["monitors"] : []),
-]);
+const validPages = new Set<string>(["debug", "settings", "monitors"]);
 
 interface RouteState {
   page: Page;
@@ -73,12 +69,6 @@ function subscribe(cb: () => void) {
   return () => window.removeEventListener("popstate", cb);
 }
 
-function pushPath(path: string, replace = false) {
-  if (replace) window.history.replaceState(null, "", path);
-  else window.history.pushState(null, "", path);
-  window.dispatchEvent(new PopStateEvent("popstate"));
-}
-
 const PageFallback = () => (
   <div role="status" aria-label="Loading" className="flex h-full items-center justify-center">
     <Loader2 className="size-5 animate-spin text-muted-foreground" />
@@ -94,12 +84,12 @@ export function App() {
 
   useEffect(preloadPages, []);
 
-  const navigate = useCallback((page: Page) => {
-    pushPath(page === "debug" ? "/" : `/${page}`);
+  const goToPage = useCallback((page: Page) => {
+    navigate(page === "debug" ? "/" : `/${page}`);
   }, []);
 
   const selectSession = useCallback((id: string) => {
-    pushPath(`/debug/${id}`);
+    navigate(`/debug/${id}`);
   }, []);
 
   // A brand-new chat skips loading a session that doesn't exist yet; any later visit loads it.
@@ -107,13 +97,11 @@ export function App() {
   const startNewSession = useCallback((replace = false) => {
     const id = crypto.randomUUID();
     setNewSessionId(id);
-    pushPath(`/debug/${id}`, replace);
+    navigate(`/debug/${id}`, replace);
   }, []);
   useEffect(() => {
     if (newSessionId && currentSessionId !== newSessionId) setNewSessionId(null);
   }, [currentSessionId, newSessionId]);
-
-  const newSession = useCallback(() => startNewSession(), [startNewSession]);
 
   // A bare /debug (or /) visit gets its id before paint, so Debug mounts once.
   const needsSessionId = currentPage === "debug" && !currentSessionId;
@@ -122,11 +110,11 @@ export function App() {
   }, [needsSessionId, startNewSession]);
 
   const closeBuilderChat = useCallback(() => {
-    pushPath("/monitors");
+    navigate("/monitors");
   }, []);
 
   const openBuilderChat = useCallback((sessionId: string) => {
-    pushPath(`/monitors/chat/${sessionId}`);
+    navigate(`/monitors/chat/${sessionId}`);
   }, []);
 
   return (
@@ -135,34 +123,34 @@ export function App() {
         sidebar={
           <AppSidebar
             currentPage={currentPage}
-            onNavigate={navigate}
+            onNavigate={goToPage}
             currentSessionId={currentSessionId}
             onSelectSession={selectSession}
-            onNewSession={newSession}
+            onNewSession={startNewSession}
           />
         }
       >
         <ErrorBoundary resetKey={window.location.pathname}>
-        <Suspense fallback={<PageFallback />}>
-          {currentPage === "debug" && currentSessionId && (
-            <Debug key={currentSessionId} sessionId={currentSessionId} isNew={currentSessionId === newSessionId} onDeleted={() => startNewSession(true)} />
-          )}
-          {Monitors && currentPage === "monitors" && (
-            <Monitors
-              builderSessionId={currentBuilderSessionId ?? undefined}
-              onNavigate={selectSession}
-              onOpenBuilder={openBuilderChat}
-              onCloseBuilder={closeBuilderChat}
-            />
-          )}
-          {currentPage === "settings" && <Settings />}
-        </Suspense>
+          <Suspense fallback={<PageFallback />}>
+            {currentPage === "debug" && currentSessionId && (
+              <Debug key={currentSessionId} sessionId={currentSessionId} isNew={currentSessionId === newSessionId} onDeleted={() => startNewSession(true)} />
+            )}
+            {currentPage === "monitors" && (
+              <Monitors
+                builderSessionId={currentBuilderSessionId ?? undefined}
+                onNavigate={selectSession}
+                onOpenBuilder={openBuilderChat}
+                onCloseBuilder={closeBuilderChat}
+              />
+            )}
+            {currentPage === "settings" && <Settings />}
+          </Suspense>
         </ErrorBoundary>
       </Shell>
       {IS_IOS && <CopyFromComputerDialog />}
       {IS_IOS && <AppUpdateOffer />}
       <AlertToaster />
-      {FEATURES.monitors && <FiringConfirms />}
+      <FiringConfirms />
       <Toaster
         position="bottom-center"
         theme="dark"

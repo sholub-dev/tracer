@@ -1,5 +1,5 @@
 import { generateText, type UIMessage } from "ai";
-import { cardRejected } from "@tracer-sh/shared";
+import { cardRejected, TOOL_NAMES } from "@tracer-sh/shared";
 import { resolveModel } from "../../llm/resolve.js";
 import { recordEachCall } from "../../llm/usage.js";
 import type { Db } from "../../db/driver.js";
@@ -102,7 +102,7 @@ export function serializeMessagesForSummary(messages: UIMessage[]): string {
       if (p.toolCallId) {
         const name = p.type.startsWith("tool-") ? p.type.slice(5) : p.type;
         // A card the review sent back was never shown; the card that replaced it is the answer.
-        if (name === "report_finding" && cardRejected(p.output)) continue;
+        if (name === TOOL_NAMES.FINDING && cardRejected(p.output)) continue;
         // Failed tool calls (state "output-error") carry the failure in
         // errorText, not output — keep the exact error so dead ends survive.
         // The formatted `analysis` CSV is what the model read; raw `parts` come first in the

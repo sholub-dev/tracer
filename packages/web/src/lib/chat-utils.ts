@@ -1,16 +1,7 @@
 import { useMemo } from "react";
 import type { UIMessage } from "ai";
-import type { ProgressStore } from "./progress-store";
 import { serverFetch } from "./server-fetch";
-import { analysisSectionParts, mergeProgressPart } from "@tracer-sh/shared";
-
-/** Shared onData handler for progress store updates (ChatCore and LiveStreamView). */
-export function handleProgressData(
-  progressStore: ProgressStore,
-  data: { toolCallId: string; part: { type: string; [key: string]: unknown } },
-) {
-  progressStore.update(data.toolCallId, (prev) => ({ parts: mergeProgressPart(prev?.parts ?? [], data.part) }));
-}
+import { analysisSectionParts } from "@tracer-sh/shared";
 
 /** A tool result the server rejected comes back as `{ error }`. */
 export function hasErrorOutput(output: unknown): output is { error: unknown } {

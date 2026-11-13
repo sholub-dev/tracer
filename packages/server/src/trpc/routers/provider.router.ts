@@ -1,11 +1,11 @@
 import { z } from "zod";
-import { eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { KNOWN_MODEL_IDS } from "@tracer-sh/shared";
 import { publicProcedure, router } from "../trpc.js";
 import { providerConfigs } from "../../db/schema.js";
-import { readProviderConfig } from "../../db/config-reader.js";
+import { readProviderConfig, writeProviderConfig, deleteProviderConfig } from "../../db/config-reader.js";
 import { toChartRows } from "../../providers/posthog/posthog-formatter.js";
+import { maskSecret } from "../../lib/mask-secret.js";
 import { timeoutSignal } from "../../lib/timeout-signal.js";
 
 // Loaded on demand: it reads gcloud credentials from disk, which only the desktop server can do.
@@ -32,13 +32,13 @@ export const providerRouter = router({
     const results = await Promise.allSettled(
       providers.map(async (p) => {
         const result = await p.ping();
-        return { name: p.name, type: p.type, ...result };
+        return { type: p.type, ...result };
       }),
     );
     return results.map((r) =>
       r.status === "fulfilled"
         ? r.value
-        : { name: "unknown", type: "unknown", ok: false as const, error: "Ping failed" },
+        : { type: "unknown", ok: false as const, error: "Ping failed" },
     );
   }),
 
@@ -64,11 +64,7 @@ export const providerRouter = router({
       for (const [key, value] of Object.entries(config)) {
         const declared = fields?.find((f) => f.key === key);
         const secret = declared ? declared.type === "password" : /key|secret/i.test(key);
-        if (secret) {
-          masked[key] = value.length <= 4 ? "••••" : "••••••••" + value.slice(-4);
-        } else {
-          masked[key] = value;
-        }
+        masked[key] = secret ? maskSecret(value) : value;
       }
       configs.push({ type: row.type, config: masked });
     }
@@ -91,16 +87,8 @@ export const providerRouter = router({
       }
 
       const config = Object.fromEntries(Object.entries(input.config).map(([key, value]) => [key, value.trim()]));
-      const configJson = JSON.stringify(config);
 
-      await ctx.db
-        .insert(providerConfigs)
-        .values({ type: input.type, config: configJson })
-        .onConflictDoUpdate({
-          target: providerConfigs.type,
-          set: { config: configJson },
-        })
-        .run();
+      await writeProviderConfig(ctx.db, input.type, config);
 
       // The swap has no await in it: register disposes the provider it replaces, so concurrent saves leak none.
       const provider = ctx.providers.createFromFactory(input.type, config);
@@ -122,10 +110,7 @@ export const providerRouter = router({
   removeConfig: publicProcedure
     .input(z.string())
     .mutation(async ({ ctx, input }) => {
-      await ctx.db
-        .delete(providerConfigs)
-        .where(eq(providerConfigs.type, input))
-        .run();
+      await deleteProviderConfig(ctx.db, input);
       await ctx.providers.unregister(input);
       return { success: true };
     }),
@@ -152,17 +137,19 @@ export const providerRouter = router({
     const auth = await getGcpAuth();
     return auth.ok
       ? { ok: true as const }
-      : { ok: false as const, code: auth.code, message: auth.message };
+      : { ok: false as const, message: auth.message };
   }),
 
   listGcpProjects: publicProcedure.query(async () => {
     try {
       const auth = await getGcpAuth();
       if (!auth.ok) {
-        console.warn(`[gcp] listGcpProjects: ${auth.code} — ${auth.message}`);
+        console.warn(`[gcp] listGcpProjects: ${auth.message}`);
         return [];
       }
+      // A service-account key has no token here, so the projects are not listed.
       const accessToken = auth.token;
+      if (!accessToken) return [];
 
       const all: Array<{ projectId: string; name: string }> = [];
       let pageToken: string | undefined;
@@ -216,8 +203,8 @@ export const providerRouter = router({
 
     try {
       const auth = await getGcpAuth();
-      if (!auth.ok) {
-        console.warn(`[vertex] listVertexModels: ${auth.code} — ${auth.message}`);
+      if (!auth.ok || !auth.token) {
+        console.warn(`[vertex] listVertexModels: ${auth.ok ? "a service-account key gives no token here" : auth.message}`);
         return fallback;
       }
       const host = location === "global"

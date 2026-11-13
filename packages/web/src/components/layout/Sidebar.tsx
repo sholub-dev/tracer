@@ -1,6 +1,5 @@
 import { useCallback, useState } from "react";
 import { Activity, CircleCheck, Plus, Settings } from "lucide-react";
-import { FEATURES } from "@tracer-sh/shared";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,7 +14,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { useSessionLiveUpdates } from "../../lib/hooks";
+import { navigate, useSessionLiveUpdates } from "../../lib/hooks";
 import { trpc } from "../../lib/trpc";
 import { WEB_CONFIG } from "../../lib/config";
 import { IS_IOS } from "../../lib/platform";
@@ -44,7 +43,7 @@ export function AppSidebar({
   onNewSession,
 }: AppSidebarProps) {
   const { setOpenMobile } = useSidebar();
-  const monitorsQuery = trpc.monitors.list.useQuery(undefined, { enabled: FEATURES.monitors });
+  const monitorsQuery = trpc.monitors.list.useQuery();
   useSessionLiveUpdates();
 
   const go = (fn: () => void) => {
@@ -55,8 +54,7 @@ export function AppSidebar({
   const onDeleted = useCallback((id: string) => {
     // Replace the deleted session's history entry: Back must not return to it. A bare "/" gets a fresh session id.
     if (id === currentSessionId) {
-      window.history.replaceState(null, "", "/");
-      window.dispatchEvent(new PopStateEvent("popstate"));
+      navigate("/", true);
     }
   }, [currentSessionId]);
 
@@ -83,17 +81,15 @@ export function AppSidebar({
       <SidebarContent>
         <SidebarGroup className="px-3 py-1">
           <SidebarMenu>
-            {FEATURES.monitors && (
-              <SidebarMenuItem>
-                <SidebarMenuButton isActive={currentPage === "monitors"} onClick={() => go(() => onNavigate("monitors"))}>
-                  <Activity />
-                  <span>Monitors</span>
-                </SidebarMenuButton>
-                {monitorsQuery.data && (
-                  <SidebarMenuBadge className="text-muted-foreground tabular-nums">{monitorsQuery.data.length}</SidebarMenuBadge>
-                )}
-              </SidebarMenuItem>
-            )}
+            <SidebarMenuItem>
+              <SidebarMenuButton isActive={currentPage === "monitors"} onClick={() => go(() => onNavigate("monitors"))}>
+                <Activity />
+                <span>Monitors</span>
+              </SidebarMenuButton>
+              {monitorsQuery.data && (
+                <SidebarMenuBadge className="text-muted-foreground">{monitorsQuery.data.length}</SidebarMenuBadge>
+              )}
+            </SidebarMenuItem>
           </SidebarMenu>
         </SidebarGroup>
 
@@ -131,37 +127,23 @@ function VersionStatus() {
   const version = updateCheck.data?.currentVersion ?? __APP_VERSION__;
 
   // "unknown": the server could not read its version, and a reload does not change that.
-  if (updateCheck.data && updateCheck.data.currentVersion !== "unknown" && updateCheck.data.currentVersion !== __APP_VERSION__) {
-    return (
-      <button
-        type="button"
-        onClick={() => window.location.reload()}
-        className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
-      >
-        <span className="flex size-3.5 shrink-0 items-center justify-center" aria-hidden="true">
-          <span className="size-1.5 rounded-full bg-primary animate-pulse-dot" />
-        </span>
-        <span className="truncate text-primary">Reload to finish updating</span>
-      </button>
-    );
-  }
-
-  if (updateCheck.data?.available) {
+  const reloadNeeded = !!updateCheck.data && updateCheck.data.currentVersion !== "unknown" && updateCheck.data.currentVersion !== __APP_VERSION__;
+  if (reloadNeeded || updateCheck.data?.available) {
     return (
       <>
         <button
           type="button"
-          onClick={() => setShowUpdateModal(true)}
+          onClick={reloadNeeded ? () => window.location.reload() : () => setShowUpdateModal(true)}
           className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
         >
           <span className="flex size-3.5 shrink-0 items-center justify-center" aria-hidden="true">
-            <span className="size-1.5 rounded-full bg-primary animate-pulse-dot" />
+            <span className="size-1.5 rounded-full bg-primary" />
           </span>
           <span className="truncate">
-            Tracer {version} · <span className="text-primary">update available</span>
+            {reloadNeeded ? <span className="text-primary">Reload to finish updating</span> : <>Tracer {version} · <span className="text-primary">update available</span></>}
           </span>
         </button>
-        <UpdateModal open={showUpdateModal} onClose={() => setShowUpdateModal(false)} />
+        {!reloadNeeded && <UpdateModal open={showUpdateModal} onClose={() => setShowUpdateModal(false)} />}
       </>
     );
   }
@@ -169,7 +151,7 @@ function VersionStatus() {
   return (
     <>
       {updateCheck.data && <CircleCheck className="size-3.5 shrink-0 text-success" aria-hidden="true" />}
-      <span className="flex-1 truncate text-xs text-muted-foreground tabular-nums">
+      <span className="flex-1 truncate text-xs text-muted-foreground">
         Tracer {version}{updateCheck.data && " · up to date"}
       </span>
     </>

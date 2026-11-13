@@ -42,10 +42,7 @@ const NRQL_QUICK_REFERENCE = `## NRQL Reference
 **Discovery:** \`keyset() FROM EventType\` — list all attributes. \`SHOW EVENT TYPES\` — list all event types.
 
 ### Case Sensitivity
-- **Event types**: case-sensitive (\`Transaction\`, not \`transaction\`).
-- **Attribute names**: case-sensitive (\`appName\`, not \`appname\`).
-- **NRQL keywords/functions**: case-insensitive (\`SELECT\`, \`select\`, \`Count()\` all work).
-- **\`=\` and \`LIKE\`**: case-sensitive. For case-insensitive matching, use \`RLIKE '(?i)pattern'\` or normalize with \`lower()\`.`;
+- Event types, attribute names (\`appName\`, not \`appname\`), \`=\` and \`LIKE\` are case-sensitive. NRQL keywords and functions are not. For case-insensitive matching, use \`RLIKE '(?i)pattern'\` or normalize with \`lower()\`.`;
 
 const NR_ANTI_PATTERNS = `## Common Mistakes — AVOID THESE
 - No \`DISTINCT\` keyword — use \`uniques(field)\` or \`FACET field\`.
@@ -55,7 +52,6 @@ const NR_ANTI_PATTERNS = `## Common Mistakes — AVOID THESE
 - A FACET can return a group for rows where the attribute is null. It shows as "(none)".
 - \`count(*)\` counts all rows. \`count(attr)\` counts non-null values only.
 - \`SELECT *\` over long ranges is slow — always aggregate for > 1 hour.
-- \`Span\` data is sampled — never use for aggregate metrics (counts, averages). Use \`Transaction\` or \`Metric\` instead.
 - RLIKE is slower than LIKE — use LIKE when wildcards suffice.
 - \`COMPARE WITH\` + \`percentile()\` returns a JSON object (\`{"99": 0.984375}\`) instead of a plain number. To compare percentile values across periods, run two separate queries with explicit \`SINCE\`/\`UNTIL\` ranges rather than using \`COMPARE WITH\`.`;
 
@@ -102,10 +98,10 @@ Judge health per entity type from its signals against a normal window. Find whic
 - If you cannot evaluate a signal, mark it N/A and give the reason.
 
 ### Reporting Format
-Do not write a separate verdict line. Give the overall verdict first, then each signal's current value against its baseline: in the finding card when the check is a multi-query investigation, otherwise in a short text answer. Show the signals that matter most with queries (for example \`COMPARE WITH 1 week ago\` for current against baseline).`;
+Do not write a separate verdict line. Give the overall verdict first, then each signal's current value against its baseline. Show the signals that matter most with queries (for example \`COMPARE WITH 1 week ago\` for current against baseline).`;
 
 const NR_QUERY_DEFAULTS = `## Query Defaults
-- Always include \`SINCE\`. Match the window to the question. Look wider than the incident, to find its onset and a normal baseline.
+- Always include \`SINCE\`. Match the window to the question.
 - Use a \`LIMIT\` that shows the whole distribution you reason about. Raise it when a facet may hide the cause.
 - A FACET result keeps the facets with the highest value of the first function. For the lowest values (the worst Apdex) or the biggest change (\`COMPARE WITH\`), use \`LIMIT MAX\`, so that every candidate is in the result. You see every row the query returns, up to a text budget per result. A note tells you when rows are cut.
 - To rank all candidates by a spike or a drop, take each one's worst interval against its own normal level, counted in requests. Put a TIMESERIES per candidate in a subquery and aggregate it outside, for example \`SELECT max(n) - average(n), max(n), average(n) FROM (SELECT filter(count(*), WHERE error IS TRUE) AS n FROM Transaction FACET appName TIMESERIES 5 minutes LIMIT MAX) FACET appName SINCE 1 day ago LIMIT 10\`. For latency or Apdex, count slow requests instead: \`WHERE apdexPerfZone = 'F'\`. SINCE goes on the outer query only.`;
@@ -151,8 +147,7 @@ Fields: \`cpuPercent\`, \`memoryUsedPercent\`, \`diskUsedPercent\`, \`hostname\`
 
 const NR_CROSS_SIGNAL = `## Cross-Signal Correlation
 - **Transaction → TransactionError**: Same \`traceId\`. Transaction has boolean \`error\`; TransactionError has \`error.message\`/\`error.class\`.
-- **Transaction → Log**: \`traceId\` (Transaction) = \`trace.id\` (Log, backtick-quoted). \`appName\` (Transaction) = \`entity.name\` (Log).
-- **Transaction → Span**: Same \`traceId\`. Use Span to follow one request: which child call took the time and which service it went to. Take totals from Transaction or Metric (Span is sampled).
+- **Transaction → Span**: Same \`traceId\`.
 - **Any → Metric**: When event counts seem low, compare: \`FROM Transaction SELECT count(*)\` vs \`FROM Metric SELECT rate(count(apm.service.transaction.duration), 1 minute)\`. If Metric is significantly higher, events are sampled — add \`EXTRAPOLATE\`.
 - **\`entity.guid\`**: Universal cross-type linker across Transaction, Span, Log, Metric, Infrastructure.
 - **Diagnostic shortcut**: Health → Transaction | Error cause → TransactionError | Slow or Apdex drop? → the "Slow responses or an Apdex drop" flow | Which service? → Transaction WHERE traceId | Infra → SystemSample WHERE hostname = '...'`;

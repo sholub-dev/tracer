@@ -10,7 +10,6 @@ export const KNOWN_MODEL_IDS = [
 export type KnownModelId = (typeof KNOWN_MODEL_IDS)[number];
 
 export const DEFAULT_SESSION_TITLE = "New chat";
-export const DEFAULT_CHAT_MODE = "direct" as const;
 
 /**
  * Sentinel `activeProvider` value that selects the cross-provider Unified mode

@@ -1,4 +1,3 @@
-import { FEATURES } from "@tracer-sh/shared";
 import type { Db, SetupDriver } from "./db/driver.js";
 import { runSetup } from "./db/setup.js";
 import { repairChats } from "./db/repair-chats.js";
@@ -20,8 +19,7 @@ export async function startRuntime(
   await repairChats(db, setupDriver);
   void maintainMemories(db);
 
-  const settled: string[] = [];
-  const interrupted = await settleInterruptedRuns(db, settled);
+  const { interrupted, settled } = await settleInterruptedRuns(db);
 
   const providers = new ProviderRegistry();
   registerDefaultProviders(providers, registerPlatformProviders);
@@ -30,14 +28,14 @@ export async function startRuntime(
 
   // Non-blocking — don't delay server startup for provider connections; resumed runs need the provider tools
   const ready = providers.initializeFromDb(db).then(() => {
-    console.log("Providers initialized:", providers.getAllProviders().map((p) => p.name));
+    console.log("Providers initialized:", providers.getAllProviders().map((p) => p.type));
   }).catch((err) => {
     console.warn("Provider initialization error:", err);
   }).then(() => resumeRuns(context, interrupted, settled));
   const app = createApp(context);
 
-  const scheduler = FEATURES.monitors ? new MonitorScheduler(context) : null;
-  scheduler?.start();
+  const scheduler = new MonitorScheduler(context);
+  scheduler.start();
 
   return { providers, context, app, scheduler, ready };
 }

@@ -6,7 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { trpc } from "../../lib/trpc";
 import { IS_IOS } from "../../lib/platform";
-import { ConnectionRow, Group, Row, Section, Status, type ConfigField } from "./parts";
+import { ConnectionRow, Group, Row, Section, SkeletonRows, Status, type ConfigField } from "./parts";
 import { JIRA_NOTE, SLACK_NOTE } from "./notes";
 
 // Classic Atlassian API token: it uses the account's Jira permissions; Tracer limits actions at the tool layer.
@@ -40,12 +40,7 @@ export function IntegrationsSettings() {
     <Section title="Integrations" description="Where Tracer posts its findings and files follow-up work.">
       <Group>
         {slack.isLoading || jira.isLoading ? (
-          [0, 1].map((i) => (
-            <div key={i} className="flex min-h-14 items-center gap-4 px-4 py-3">
-              <Skeleton className="h-4 w-40" />
-              <Skeleton className="ml-auto h-8 w-24" />
-            </div>
-          ))
+          <SkeletonRows count={2} />
         ) : (
           <>
             <ConnectionRow
@@ -62,6 +57,7 @@ export function IntegrationsSettings() {
               onSave={(v) => saveSlack.mutateAsync({ webhookUrl: v.webhookUrl ?? "", mentions: v.mentions ?? "" })}
               remove={{
                 label: "Disconnect",
+                past: "disconnected",
                 title: "Disconnect Slack?",
                 description: "Monitors stop posting their findings to Slack.",
                 onConfirm: () => removeSlack.mutateAsync(),
@@ -81,6 +77,7 @@ export function IntegrationsSettings() {
               onSave={(v) => saveJira.mutateAsync({ domain: v.domain ?? "", email: v.email ?? "", apiToken: v.apiToken ?? "" })}
               remove={{
                 label: "Disconnect",
+                past: "disconnected",
                 title: "Disconnect Jira?",
                 description: "The agent can no longer read issues or post comments.",
                 onConfirm: () => removeJira.mutateAsync(),
@@ -100,46 +97,51 @@ function AlertTriageRow() {
   const { data: enabled } = trpc.settings.getAlertTriage.useQuery();
   const { data: providers } = trpc.provider.list.useQuery();
   const save = trpc.settings.setAlertTriage.useMutation({ onSettled: () => utils.settings.getAlertTriage.invalidate() });
-  if (enabled === undefined || !providers?.some((p) => p.type === "newrelic" && p.connected)) return null;
+  if (enabled === undefined || !providers) return <SkeletonRows count={1} />;
+  if (!providers.some((p) => p.type === "newrelic" && p.connected)) return null;
   return (
-    <div className="flex items-start gap-4 px-4 py-3">
-      <div className="min-w-0 flex-1 text-[13px]/[18px] text-muted-foreground">
-        <label htmlFor="alert-triage" className="text-sm font-medium text-foreground">
-          Alert triage
-        </label>
-        <p className="mt-0.5">
-          <strong className="font-semibold text-ink-2">Off:</strong> monitors post their analysis as usual.
-          Nothing changes in New Relic.
-        </p>
-        <p>
-          <strong className="font-semibold text-ink-2">On:</strong> Tracer acts on the New Relic issue behind each alert
-          of monitors on NrAiIncident. Notifications go to Slack when it is connected.
-        </p>
-        <ul className="mt-1 ml-4 list-disc space-y-0.5">
-          <li>Stopped: acks, then closes it (JSM closes its alert). Notifies you if severity is high.</li>
-          <li>
-            Ongoing or recurring: no ack, no close, so JSM keeps escalating. Notifies you; the agent sets its own follow-up
-            timer and acks and closes it once it stops.
-          </li>
-          <li>Status unknown or close failed: leaves it open, notifies you.</li>
-          <li>Closed 3 times in 24h and it keeps coming back: stops closing, notifies you.</li>
-          <li>Still ongoing after 24h: stops following up, notifies you.</li>
-        </ul>
-      </div>
-      <Switch
-        id="alert-triage"
-        checked={enabled}
-        disabled={save.isPending}
-        onCheckedChange={(v) => {
-          utils.settings.getAlertTriage.setData(undefined, v);
-          save.mutate({ enabled: v }, {
-            onSuccess: () => toast(v ? "Alert triage is on" : "Alert triage is off"),
-            onError: (e) => toast.error(e.message),
-          });
-        }}
-        className="mt-0.5"
-      />
-    </div>
+    <Row
+      htmlFor="alert-triage"
+      label="Alert triage"
+      className="items-start"
+      description={
+        <>
+          <p>
+            <strong className="font-semibold text-ink-2">Off:</strong> monitors post their analysis as usual.
+            Nothing changes in New Relic.
+          </p>
+          <p>
+            <strong className="font-semibold text-ink-2">On:</strong> Tracer acts on the New Relic issue behind each alert
+            of monitors on NrAiIncident. Notifications go to Slack when it is connected.
+          </p>
+          <ul className="mt-1 ml-4 list-disc space-y-0.5">
+            <li>Stopped: acks, then closes it (JSM closes its alert). Notifies you if severity is high.</li>
+            <li>
+              Ongoing or recurring: no ack, no close, so JSM keeps escalating. Notifies you; the agent sets its own follow-up
+              timer and acks and closes it once it stops.
+            </li>
+            <li>Status unknown or close failed: leaves it open, notifies you.</li>
+            <li>Closed 3 times in 24h and it keeps coming back: stops closing, notifies you.</li>
+            <li>Still ongoing after 24h: stops following up, notifies you.</li>
+          </ul>
+        </>
+      }
+      control={
+        <Switch
+          id="alert-triage"
+          checked={enabled}
+          disabled={save.isPending}
+          onCheckedChange={(v) => {
+            utils.settings.getAlertTriage.setData(undefined, v);
+            save.mutate({ enabled: v }, {
+              onSuccess: () => toast(v ? "Alert triage is on" : "Alert triage is off"),
+              onError: (e) => toast.error(e.message),
+            });
+          }}
+          className="mt-0.5"
+        />
+      }
+    />
   );
 }
 

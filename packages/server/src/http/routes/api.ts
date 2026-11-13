@@ -5,6 +5,7 @@ import type { UIMessage } from "ai";
 import { SESSION_KIND, unixNow } from "@tracer-sh/shared";
 import type { Context } from "../../trpc/context.js";
 import { agentRuns, chatSessions } from "../../db/schema.js";
+import { SESSION_BUSY } from "../../agents/base-agent.js";
 import { startAgentSession } from "../../agents/start-session.js";
 import { extractAnalysis } from "../../agents/analysis.js";
 import { decodeMessages } from "../../lib/messages-codec.js";
@@ -44,7 +45,7 @@ export function registerApiRoutes(app: Hono, context: Context): void {
     });
 
     if ("error" in result) {
-      const status = result.error === "Session is already processing a response" ? 409 : 400;
+      const status = result.error === SESSION_BUSY ? 409 : 400;
       return c.json({ sessionId, status: "error", error: result.error }, status);
     }
 

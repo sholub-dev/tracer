@@ -28,5 +28,5 @@ test("saveAgentConfig writes only changed fields", async () => {
   const current = await api.getAgentConfig();
   await api.saveAgentConfig({ ...current, directModeMaxSteps: 7 });
   const keys = (await db.select().from(appSettings).all()).map((r) => r.key);
-  assert.deepEqual(keys.filter((k) => !["model_reset_0_3_7", "device_id"].includes(k)), ["direct_mode_max_steps"]);
+  assert.deepEqual(keys.filter((k) => k !== "device_id"), ["direct_mode_max_steps"]);
 });

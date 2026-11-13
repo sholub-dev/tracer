@@ -1,8 +1,7 @@
 import { toast } from "sonner";
-import { Skeleton } from "@/components/ui/skeleton";
 import { trpc } from "../../lib/trpc";
 import { useGcpAuthStatus, useInvalidateProviders, useProviderPings } from "../../lib/hooks";
-import { ConnectionRow, Group, Section } from "./parts";
+import { ConnectionRow, Group, Section, SkeletonRows } from "./parts";
 import { PROVIDER_NOTES } from "./notes";
 import { GcloudHint, GcpProjectField } from "./GcpProjectField";
 
@@ -27,12 +26,7 @@ export function DataSourcesSettings() {
     <Section title="Data sources" description="Where the agent runs its queries. One agent queries them all.">
       <Group>
         {configsLoading || typesLoading
-          ? [0, 1, 2].map((i) => (
-              <div key={i} className="flex min-h-14 items-center gap-4 px-4 py-3">
-                <Skeleton className="h-4 w-40" />
-                <Skeleton className="ml-auto h-8 w-24" />
-              </div>
-            ))
+          ? <SkeletonRows count={3} />
           : (types ?? []).map(({ type, label, configFields }) => {
               const config = configs?.find((c) => c.type === type)?.config;
               const ping = pings?.find((p) => p.type === type);
@@ -61,6 +55,7 @@ export function DataSourcesSettings() {
                   onConnect={configFields.length ? undefined : () => saveConfig.mutateAsync({ type, config: {} })}
                   remove={{
                     label: "Disconnect",
+                    past: "disconnected",
                     title: `Disconnect ${label}?`,
                     description: "The agent stops querying it. Monitors that use it pause.",
                     onConfirm: () => removeConfig.mutateAsync(type),

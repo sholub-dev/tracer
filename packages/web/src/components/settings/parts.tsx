@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "../common/ConfirmDialog";
 import { ProviderDot } from "../common/ProviderDot";
@@ -49,6 +50,16 @@ export function Row({ label, description, control, htmlFor, className }: RowProp
       {control}
     </div>
   );
+}
+
+/** Placeholder rows the height of a Row, so a list does not jump when it loads. */
+export function SkeletonRows({ count }: { count: number }) {
+  return Array.from({ length: count }, (_, i) => (
+    <div key={i} className="flex min-h-14 items-center gap-4 px-4 py-3">
+      <Skeleton className="h-4 w-40" />
+      <Skeleton className="ml-auto h-8 w-24" />
+    </div>
+  ));
 }
 
 type Tone = "ok" | "warn" | "off";
@@ -124,7 +135,8 @@ export function ConfirmButton({ title, description, action, onConfirm, disabled,
 export type ConfigField = { key: string; label: string; type: string; required?: boolean; placeholder?: string };
 type SaveResult = { success: boolean; error?: string };
 
-type RemoveSpec = { label: string; title: string; description: string; onConfirm: () => Promise<unknown> };
+/** `label` is the button verb; `past` is its past tense for the toast. */
+type RemoveSpec = { label: string; past: string; title: string; description: string; onConfirm: () => Promise<unknown> };
 
 type ConnectionProps = {
   name: string;
@@ -178,30 +190,28 @@ export function ConnectionRow({
   const id = useId();
   const [open, setOpen] = useState(false);
   const [values, setValues] = useState<Record<string, string>>({});
-  const [result, setResult] = useState<SaveResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const openForm = () => {
     setValues(Object.fromEntries(fields.map((f) => [f.key, existingConfig?.[f.key] ?? ""])));
-    setResult(null);
+    setError(null);
     setOpen(true);
-  };
-
-  const report = (r: SaveResult) => {
-    setResult(r);
-    if (r.success) toast.success(`${name}: ${successText}`);
-    else toast.error(`${name}: ${r.error || "Connection failed"}`);
   };
 
   const run = async (fn: () => Promise<SaveResult>, closeOnSuccess: boolean) => {
     setSaving(true);
-    setResult(null);
+    setError(null);
     try {
       const r = await fn();
-      report(r);
-      if (r.success && closeOnSuccess) setOpen(false);
-    } catch {
-      report({ success: false, error: "Failed to save configuration" });
+      if (r.success) {
+        toast.success(`${name}: ${successText}`);
+        if (closeOnSuccess) setOpen(false);
+      } else {
+        setError(r.error || "Connection failed");
+      }
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : "Failed to save configuration");
     } finally {
       setSaving(false);
     }
@@ -216,9 +226,9 @@ export function ConnectionRow({
   const busy = saving || !!pending;
   const showForm = fields.length > 0 && !!onSave;
 
-  const inlineResult = result && (
-    <p role="status" className={cn("text-[13px]/[18px]", result.success ? "text-success" : "text-destructive")}>
-      {result.success ? successText : result.error || "Connection failed"}
+  const inlineError = error && (
+    <p role="alert" className="text-[13px]/[18px] text-destructive">
+      {error}
     </p>
   );
 
@@ -232,11 +242,11 @@ export function ConnectionRow({
           </span>
         }
         description={
-          (detail || warning || (!open && result)) && (
+          (detail || warning || (!open && error)) && (
             <>
               {detail}
               {warning && <span className="mt-0.5 block text-warning">{warning}</span>}
-              {!open && inlineResult && <span className="mt-0.5 block">{inlineResult}</span>}
+              {!open && inlineError && <span className="mt-0.5 block">{inlineError}</span>}
             </>
           )
         }
@@ -303,10 +313,10 @@ export function ConnectionRow({
             </div>
           )}
           {extra}
-          {showForm && blockedBySecret && !saving && !result && (
+          {showForm && blockedBySecret && !saving && !error && (
             <p className="text-[13px]/[18px] text-warning">Re-enter highlighted fields to save</p>
           )}
-          {inlineResult}
+          {inlineError}
           <div className="flex flex-wrap items-center gap-2">
             {showForm && (
               <Button type="submit" size="sm" disabled={busy || emptyRequired || blockedBySecret}>
@@ -326,16 +336,15 @@ export function ConnectionRow({
                   action={remove.label}
                   disabled={busy}
                   onConfirm={async () => {
-                    const removing = remove.label === "Remove";
                     try {
                       await remove.onConfirm();
                     } catch (err) {
-                      toast.error(`Couldn't ${removing ? "remove" : "disconnect"} ${name}`, { description: err instanceof Error ? err.message : undefined });
+                      toast.error(`Couldn't ${remove.label.toLowerCase()} ${name}`, { description: err instanceof Error ? err.message : undefined });
                       return;
                     }
                     setOpen(false);
-                    setResult(null);
-                    toast(`${name} ${removing ? "removed" : "disconnected"}`);
+                    setError(null);
+                    toast(`${name} ${remove.past}`);
                   }}
                 />
               </span>

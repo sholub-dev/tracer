@@ -1,4 +1,4 @@
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { computeCost, formatCost } from "../../lib/models";
 
 interface AgentCost {
@@ -44,18 +44,18 @@ export function costLabel(breakdown: CostBreakdown): string {
 
 export function CostDisplay({ breakdown }: { breakdown: CostBreakdown }) {
   return (
-    <HoverCard openDelay={150} closeDelay={100}>
-      <HoverCardTrigger asChild>
+    <Popover>
+      <PopoverTrigger asChild>
         <button
           type="button"
-          className="hidden h-7 shrink-0 rounded-md px-1.5 text-xs text-muted-foreground tabular-nums transition-colors outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 sm:inline-flex sm:items-center"
+          className="hidden h-7 shrink-0 rounded-md px-1.5 text-xs text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 sm:inline-flex sm:items-center"
         >
           {costLabel(breakdown)}
         </button>
-      </HoverCardTrigger>
-      <HoverCardContent side="top" align="end" className="w-80">
+      </PopoverTrigger>
+      <PopoverContent side="top" align="end" className="block w-80">
         <p className="mb-3 text-sm font-semibold">Cost for this investigation</p>
-        <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1.5 text-[13px]/[18px] tabular-nums">
+        <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1.5 text-[13px]/[18px]">
           {breakdown.agents.map((a, i) => (
             <div key={i} className="contents">
               <dt className="min-w-0 truncate text-ink-2">
@@ -70,12 +70,12 @@ export function CostDisplay({ breakdown }: { breakdown: CostBreakdown }) {
             <dd className="mt-1 border-t pt-2 text-right">{formatCost(breakdown.totalCost)}</dd>
           </div>
         </dl>
-        <p className="mt-3 text-xs text-muted-foreground tabular-nums">
+        <p className="mt-3 text-xs text-muted-foreground">
           {breakdown.totalInput.toLocaleString()} in · {breakdown.totalOutput.toLocaleString()} out
           {breakdown.totalCached > 0 && <> · {breakdown.totalCached.toLocaleString()} cached</>}
           {breakdown.totalCostWithoutCache > breakdown.totalCost && <> · saved {formatCost(breakdown.totalCostWithoutCache - breakdown.totalCost)}</>}
         </p>
-      </HoverCardContent>
-    </HoverCard>
+      </PopoverContent>
+    </Popover>
   );
 }

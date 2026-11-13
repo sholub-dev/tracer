@@ -5,6 +5,7 @@ import { withTimeout } from "../lib/with-timeout.js";
 import { requireTimeRangePlaceholders } from "../tools/query-validation.js";
 import { toChartRows } from "../providers/posthog/posthog-formatter.js";
 import { evaluateGroups, extractGroups, isNoData, parseCondition, type Condition, type Group } from "./condition.js";
+import { ingestLagSeconds, openWindow } from "./window.js";
 
 export const MONITOR_PROVIDERS = ["newrelic", "posthog"] as const;
 export type MonitorProvider = (typeof MONITOR_PROVIDERS)[number];
@@ -28,11 +29,11 @@ export function normalizeDraft<T extends MonitorDraft>(draft: T): T & { chartQue
   };
 }
 
-export interface ValidationResult {
+interface ValidationResult {
   condition: Condition;
-  sampleValue?: number;
-  groups?: Group[];
-  wouldTrigger?: boolean;
+  sampleValue: number;
+  groups: Group[];
+  wouldTrigger: boolean;
 }
 
 const BANNED_CLAUSES: Array<[RegExp, string]> = [
@@ -62,11 +63,8 @@ async function validateChartQuery(
   return null;
 }
 
-export async function validateMonitor(
-  providers: ProviderRegistry,
-  draft: MonitorDraft,
-  opts: { runQuery?: boolean } = {},
-): Promise<ValidationResult | { error: string }> {
+/** The rules a draft must meet before any query runs. */
+export function checkDraft(draft: MonitorDraft): { condition: Condition } | { error: string } {
   if (!(MONITOR_PROVIDERS as readonly string[]).includes(draft.provider)) {
     return { error: `Unsupported monitor provider "${draft.provider}". Use one of: ${MONITOR_PROVIDERS.join(", ")}.` };
   }
@@ -90,14 +88,17 @@ export async function validateMonitor(
   if (!Number.isFinite(draft.frequencySeconds) || draft.frequencySeconds < CONFIG.monitorMinFrequencySeconds) {
     return { error: `Frequency must be at least ${CONFIG.monitorMinFrequencySeconds} seconds.` };
   }
-  if (!opts.runQuery) return { condition };
+  return { condition };
+}
 
+/** Runs the query over the window a real check would use, and tells what the condition makes of it. */
+export async function sampleDraft(providers: ProviderRegistry, draft: MonitorDraft, condition: Condition): Promise<ValidationResult | { error: string }> {
+  const providerName = draft.provider as MonitorProvider;
   await providers.whenLoaded();
   const provider = providers.getProvider(providerName);
   if (!provider?.connected) return { error: `${PROVIDER_LABELS[providerName]} is not connected.` };
 
-  const end = unixNow() - CONFIG.monitorIngestLagSeconds;
-  const start = end - draft.frequencySeconds;
+  const { start, end } = openWindow(null, draft.frequencySeconds, unixNow(), ingestLagSeconds(draft.query))!;
   let result: unknown;
   try {
     result = await withTimeout(
@@ -116,4 +117,9 @@ export async function validateMonitor(
   const evaluation = evaluateGroups(condition, groups);
   const wouldTrigger = !isNoData(result, groups) && evaluation.fires;
   return { condition, sampleValue: evaluation.value, groups: wouldTrigger && evaluation.groups.length > 0 ? evaluation.groups : groups, wouldTrigger };
+}
+
+export async function validateMonitor(providers: ProviderRegistry, draft: MonitorDraft): Promise<ValidationResult | { error: string }> {
+  const checked = checkDraft(draft);
+  return "error" in checked ? checked : sampleDraft(providers, draft, checked.condition);
 }

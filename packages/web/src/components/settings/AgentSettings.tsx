@@ -1,12 +1,11 @@
-import { useEffect, useRef, useState } from "react";
-import { Check, Loader2 } from "lucide-react";
+import { useState } from "react";
+import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { syncEdits } from "../../lib/agent-config";
 import { trpc } from "../../lib/trpc";
 import { Group, Row, Section } from "./parts";
 
@@ -66,30 +65,18 @@ export function AgentSettings() {
   const save = trpc.settings.saveAgentConfig.useMutation({
     onSuccess: () => {
       utils.settings.getAgentConfig.invalidate();
-      setJustSaved(true);
       toast.success("Agent settings saved");
     },
     onError: (e) => toast.error(e.message),
   });
-  const [values, setValues] = useState<Values | null>(null);
-  const [justSaved, setJustSaved] = useState(false);
-
-  const synced = useRef<Values | null>(null);
-  useEffect(() => {
-    if (!config) return;
-    // A refetch after a save must not wipe what the user typed meanwhile.
-    // Read before the ref moves on: React may run the updater after the next line.
-    const lastSynced = synced.current;
-    setValues((v) => (v ? syncEdits(v, lastSynced, config) : { ...config }));
-    synced.current = { ...config };
-  }, [config]);
+  // Edits sit over the saved config, so a refetch never wipes what the user typed meanwhile.
+  const [edits, setEdits] = useState<Partial<Values>>({});
+  const values: Values | null = config ? { ...config, ...edits } : null;
+  const errors = values && Object.fromEntries(LIMITS.map((l) => [l.key, limitError(l, values[l.key])]));
 
   const dirty = !!config && !!values && (Object.keys(values) as (keyof Values)[]).some((k) => values[k] !== config[k]);
-  const invalid = !!values && LIMITS.some((l) => limitError(l, values[l.key]));
-  const set = <K extends keyof Values>(key: K, value: Values[K]) => {
-    setValues((v) => v && { ...v, [key]: value });
-    setJustSaved(false);
-  };
+  const invalid = !!errors && Object.values(errors).some(Boolean);
+  const set = <K extends keyof Values>(key: K, value: Values[K]) => setEdits((e) => ({ ...e, [key]: value }));
 
   const zones = values && !TIMEZONES.includes(values.timezone) ? [...TIMEZONES, values.timezone] : TIMEZONES;
 
@@ -143,10 +130,10 @@ export function AgentSettings() {
                       max={l.max}
                       value={values[l.key]}
                       onChange={(e) => set(l.key, e.target.value === "" ? "" : Number(e.target.value))}
-                      aria-invalid={!!limitError(l, values[l.key]) || undefined}
-                      className="w-28 bg-card text-right tabular-nums"
+                      aria-invalid={!!errors?.[l.key] || undefined}
+                      className="w-28 bg-card text-right"
                     />
-                    {limitError(l, values[l.key]) && <p role="alert" className="text-xs text-destructive">{limitError(l, values[l.key])}</p>}
+                    {errors?.[l.key] && <p role="alert" className="text-xs text-destructive">{errors[l.key]}</p>}
                   </div>
                 ) : (
                   <Skeleton className="h-9 w-28" />
@@ -156,12 +143,6 @@ export function AgentSettings() {
           ))}
         </Group>
         <div className="flex items-center justify-end gap-3">
-          {justSaved && !dirty && (
-            <span role="status" className="flex items-center gap-1.5 text-[13px]/[18px] text-success animate-in fade-in duration-200">
-              <Check className="size-4" aria-hidden="true" />
-              Saved
-            </span>
-          )}
           <Button type="submit" disabled={!dirty || invalid || save.isPending}>
             {save.isPending && <Loader2 className="animate-spin" />}
             {save.isPending ? "Saving" : "Save changes"}

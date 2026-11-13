@@ -4,13 +4,14 @@ import type { AddressInfo } from "node:net";
 import { hostname, networkInterfaces } from "node:os";
 import { getTableColumns, sql } from "drizzle-orm";
 import QRCode from "qrcode";
-import type { SyncCounts, SyncPhase, SyncSession } from "@tracer-sh/shared";
+import type { SyncCounts, SyncMode, SyncPhase, SyncSession } from "@tracer-sh/shared";
 import type { Db } from "../db/driver.js";
 import { limits, MAX_BODY_BYTES, MAX_SYNC_BYTES, OldFormError, randomSecret, seal, TooLargeError, unseal } from "./crypto.js";
-import { getSetting, recordSync } from "./peer.js";
+import { localDeviceId } from "../db/config-reader.js";
+import { recordSync } from "./peer.js";
 import { exportSnapshot, FORMAT, TABLES } from "./snapshot.js";
 import { exportSyncPayload, mergeSyncPayload, type SyncPayload } from "./sync.js";
-import { APPROVAL_WINDOW_MS, COPY_LINK_PREFIX, DEVICE_ID, MAX_NAME_LENGTH, type SyncMode } from "./receive.js";
+import { APPROVAL_WINDOW_MS, cleanText, COPY_LINK_PREFIX, DEVICE_ID, MAX_NAME_LENGTH, total } from "./receive.js";
 
 // A large upload on a slow Wi-Fi needs minutes.
 const BODY_TIMEOUT_MS = 300_000;
@@ -197,7 +198,7 @@ function parseProgress(text: string): { phase: "transfer" | "apply" | "done" | "
   if (b && count(b.done) !== null && count(b.total) !== null) out.bytes = { done: count(b.done)!, total: count(b.total)! };
   const r = result as { applied?: unknown; deleted?: unknown } | undefined;
   if (r && count(r.applied) !== null && count(r.deleted) !== null) out.result = { applied: count(r.applied)!, deleted: count(r.deleted)! };
-  if (typeof error === "string") out.error = error.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, "").trim().slice(0, 500);
+  if (typeof error === "string") out.error = cleanText(error, 500);
   return out;
 }
 
@@ -209,8 +210,7 @@ function parseRequest(text: string): NonNullable<Session["request"]> {
   if (typeof deviceId !== "string" || !DEVICE_ID.test(deviceId) || typeof name !== "string" || (mode !== "merge" && mode !== "replace")) {
     throw new HttpError(400);
   }
-  // Shown to the user, so it is untrusted text: no control characters, bounded length.
-  return { deviceId, name: name.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, "").trim().slice(0, MAX_NAME_LENGTH) || "iPhone", mode };
+  return { deviceId, name: cleanText(name, MAX_NAME_LENGTH) || "iPhone", mode };
 }
 
 /**
@@ -231,7 +231,7 @@ export async function startSend(
   const token = randomSecret();
   const key = randomSecret();
   const expected = Buffer.from(`/${token}`);
-  const deviceId = (await getSetting(db, "device_id")) ?? "";
+  const deviceId = await localDeviceId(db);
   const fullCopy = await measureFullCopy(db);
 
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
@@ -314,7 +314,6 @@ export async function startSend(
           sealed = await seal(JSON.stringify({ at, payload: await exportSyncPayload(db, since) }), key);
           const { applied, deleted } = await mergeSyncPayload(db, remote);
           await afterMerge?.(applied.provider_configs + deleted.provider_configs > 0);
-          const total = (counts: Record<string, number>) => Object.values(counts).reduce((a, b) => a + b, 0);
           session.view.result = { computer: { applied: total(applied), deleted: total(deleted) } };
         } else {
           // A running investigation has not saved its answer yet, so the copy would miss it.

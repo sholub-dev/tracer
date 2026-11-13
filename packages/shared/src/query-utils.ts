@@ -1,11 +1,7 @@
-export function substituteTimeRange(query: string, since: string, until = "NOW"): string {
-  return query.replace(/\{\{SINCE\}\}/g, since).replace(/\{\{UNTIL\}\}/g, until);
-}
-
 /** Fill {{SINCE}}/{{UNTIL}} with a window in the provider's format: PostHog epoch seconds, New Relic epoch ms. */
 export function substituteWindow(provider: string, query: string, startSec: number, endSec: number): string {
   const fmt = (s: number) => String(provider === "posthog" ? s : s * 1000);
-  return substituteTimeRange(query, fmt(startSec), fmt(endSec));
+  return query.replace(/\{\{SINCE\}\}/g, fmt(startSec)).replace(/\{\{UNTIL\}\}/g, fmt(endSec));
 }
 
 // ── Timestamp utilities ──
@@ -123,9 +119,4 @@ export function dropFlattenedResultCopies<T extends Row>(rows: T[]): T[] {
   }
   const drop = new Set([...copies.values()].flatMap((s) => [...s]));
   return rows.map((row) => Object.fromEntries(Object.entries(row).filter(([k]) => !drop.has(k))) as T);
-}
-
-export function dropFlattenedCopies<T extends Row>(row: T): T {
-  const [out] = dropFlattenedResultCopies([row]);
-  return out;
 }

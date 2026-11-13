@@ -1,23 +1,22 @@
 import { deflateSync, inflateSync, strFromU8, strToU8 } from "fflate";
 import type { UIMessage } from "ai";
+import { isPlainObject } from "@tracer-sh/shared";
 import { fromBase64Url, toBase64Url } from "./base64.js";
 
 export const PACKED_PREFIX = "z1:";
 /** Rows kept per query result; the chat table shows the same number before "Show all". */
 export const MAX_SAVED_ROWS = 100;
 
-const isRecord = (v: unknown): v is Record<string, unknown> => v != null && typeof v === "object" && !Array.isArray(v);
-
 /** True when the chat UI draws the rows as a table or list, and not as a chart that needs every row. */
 function isCappable(rows: unknown[]): boolean {
   const first = rows[0];
-  if (!isRecord(first)) return rows.every((r) => !isRecord(r) && !Array.isArray(r));
+  if (!isPlainObject(first)) return rows.every((r) => !isPlainObject(r) && !Array.isArray(r));
   return !("beginTimeSeconds" in first) && !("comparison" in first);
 }
 
 /** Caps one query result the way a saved chat does. */
 export function capQuery<T>(query: T): T {
-  if (!isRecord(query) || !Array.isArray(query.results) || query.results.length <= MAX_SAVED_ROWS || !isCappable(query.results)) return query;
+  if (!isPlainObject(query) || !Array.isArray(query.results) || query.results.length <= MAX_SAVED_ROWS || !isCappable(query.results)) return query;
   const totalRows = typeof query.totalRows === "number" ? query.totalRows : query.results.length;
   return { ...query, results: query.results.slice(0, MAX_SAVED_ROWS), totalRows };
 }
@@ -29,7 +28,7 @@ function capList(list: unknown): unknown {
 }
 
 function capPart(part: unknown): unknown {
-  if (!isRecord(part) || !isRecord(part.output)) return part;
+  if (!isPlainObject(part) || !isPlainObject(part.output)) return part;
   const { parts, queries } = part.output;
   const nextParts = capList(parts);
   const nextQueries = capList(queries);

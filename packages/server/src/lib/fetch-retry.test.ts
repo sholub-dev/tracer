@@ -1,7 +1,7 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { CONFIG } from "../config.js";
-import { fetchWithRetry } from "./fetch-retry.js";
+import { fetchText, fetchWithRetry } from "./fetch-retry.js";
 
 const realFetch = globalThis.fetch;
 const realDelays = CONFIG.fetchRetryDelaysMs;
@@ -69,4 +69,12 @@ test("times out a request that ignores its signal, then repeats it", async () =>
   globalThis.fetch = (() => { calls++; return new Promise<Response>(() => {}); }) as typeof fetch;
   await assert.rejects(fetchWithRetry("https://x.test", {}, { timeoutMs: 20 }), { name: "TimeoutError" });
   assert.equal(calls, 2);
+});
+
+test("fetchText returns the body and ends the caller link", async () => {
+  script(new Response("body", { status: 404, statusText: "Not Found" }));
+  const ctrl = new AbortController();
+  const out = await fetchText("https://x.test", { signal: ctrl.signal }, { timeoutMs: 1000, retry: false });
+  assert.deepEqual(out, { ok: false, status: 404, statusText: "Not Found", text: "body" });
+  ctrl.abort();
 });

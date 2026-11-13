@@ -162,16 +162,7 @@ export async function runSetup(sqlite: SetupDriver): Promise<void> {
 
   // Back-compat: columns added after initial release. Checked first, because the iOS
   // SQLite plugin logs every failed statement as an error.
-  const known = new Map<string, Set<string>>();
-  const columns = async (table: string) => {
-    let names = known.get(table);
-    if (!names) {
-      names = new Set((await sqlite.all(`PRAGMA table_info(${table})`) as { name: string }[]).map((c) => c.name));
-      known.set(table, names);
-    }
-    return names;
-  };
-  const claimFirings = !(await columns("monitor_triggers")).has("device_id");
+  const claimFirings = !(await columns(sqlite, "monitor_triggers")).has("device_id");
   for (const [table, column, type] of [
     ["tool_memories", "review_note", "TEXT"],
     ["tool_memories", "source_session_id", "TEXT"],
@@ -193,17 +184,11 @@ export async function runSetup(sqlite: SetupDriver): Promise<void> {
     ["monitor_triggers", "device_id", "TEXT"],
     ["monitor_triggers", "outcome", "TEXT"],
   ]) {
-    const names = await columns(table);
-    if (names.has(column)) continue;
+    if ((await columns(sqlite, table)).has(column)) continue;
     await sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
-    names.add(column);
-  }
-  // Drops the short-lived id-based boundary column (never shipped in a release).
-  if ((await columns("chat_sessions")).has("summary_up_to_id")) {
-    await sqlite.exec(`ALTER TABLE chat_sessions DROP COLUMN summary_up_to_id`);
   }
   // Firings from before this column were all reported already.
-  if (!(await columns("monitor_triggers")).has("reported")) {
+  if (!(await columns(sqlite, "monitor_triggers")).has("reported")) {
     await sqlite.exec(`ALTER TABLE monitor_triggers ADD COLUMN reported TEXT`);
     await sqlite.exec(`UPDATE monitor_triggers SET reported = 'done'`);
   }
@@ -216,20 +201,17 @@ export async function runSetup(sqlite: SetupDriver): Promise<void> {
     DROP INDEX IF EXISTS idx_agent_runs_type;
   `);
 
-  // 0.3.7: one model setting for everything — clear old per-provider overrides and
-  // reset any saved chat model once, so every install starts on the new default.
-  const marked = await sqlite.all(`INSERT OR IGNORE INTO app_settings (key, value) VALUES ('model_reset_0_3_7', 'true') RETURNING key`);
-  if (marked.length > 0) {
-    await sqlite.exec(`DELETE FROM app_settings WHERE key = 'chat_model' OR key LIKE 'sub_agent_model:%';`);
-  }
-
   await setupSync(sqlite, claimFirings);
+}
+
+/** Not cached: setup adds columns between reads. */
+async function columns(sqlite: SetupDriver, table: string): Promise<Set<string>> {
+  return new Set((await sqlite.all(`PRAGMA table_info(${table})`) as { name: string }[]).map((c) => c.name));
 }
 
 async function setupSync(sqlite: SetupDriver, claimFirings: boolean): Promise<void> {
   for (const table of ["tool_memories", "memory_operations"]) {
-    const names = (await sqlite.all(`PRAGMA table_info(${table})`) as { name: string }[]).map((c) => c.name);
-    if (!names.includes("uid")) await sqlite.exec(`ALTER TABLE ${table} ADD COLUMN uid TEXT`);
+    if (!(await columns(sqlite, table)).has("uid")) await sqlite.exec(`ALTER TABLE ${table} ADD COLUMN uid TEXT`);
   }
   await sqlite.exec(`
     CREATE TABLE IF NOT EXISTS sync_rows (
@@ -256,18 +238,15 @@ async function setupSync(sqlite: SetupDriver, claimFirings: boolean): Promise<vo
   if (claimFirings) await sqlite.exec(`UPDATE monitor_triggers SET device_id = (SELECT value FROM app_settings WHERE key = 'device_id') WHERE device_id IS NULL`);
 
   // local_at is this device's own clock for the change; changed_at can carry another device's time after a merge.
-  const logColumns = (await sqlite.all(`PRAGMA table_info(sync_rows)`) as { name: string }[]).map((c) => c.name);
-  if (!logColumns.includes("local_at")) {
+  if (!(await columns(sqlite, "sync_rows")).has("local_at")) {
     await sqlite.exec(`ALTER TABLE sync_rows ADD COLUMN local_at INTEGER NOT NULL DEFAULT 0`);
     await sqlite.exec(`UPDATE sync_rows SET local_at = changed_at`);
   }
   await sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_sync_rows_local ON sync_rows(local_at)`);
 
   const local = LOCAL_SETTING_KEYS.map((k) => `'${k}'`).join(", ");
-  const columns = new Map<string, string[]>();
-  for (const table of Object.keys(SYNC_KEYS)) {
-    columns.set(table, (await sqlite.all(`PRAGMA table_info(${table})`) as { name: string }[]).map((c) => c.name));
-  }
+  const tableColumns = new Map<string, Set<string>>();
+  for (const table of Object.keys(SYNC_KEYS)) tableColumns.set(table, await columns(sqlite, table));
   // Dropped and rebuilt each start, so a changed definition replaces the old one.
   const statements: string[] = [];
   for (const [table, { key, time }] of Object.entries(SYNC_KEYS)) {
@@ -282,7 +261,7 @@ async function setupSync(sqlite: SetupDriver, claimFirings: boolean): Promise<vo
     };
     const unsynced = UNSYNCED_COLUMNS[table];
     const updateOf = unsynced
-      ? ` OF ${columns.get(table)!.filter((c) => !unsynced.includes(c)).join(", ")}`
+      ? ` OF ${[...tableColumns.get(table)!].filter((c) => !unsynced.includes(c)).join(", ")}`
       : "";
     statements.push(
       `DROP TRIGGER IF EXISTS sync_${table}_ins;`,

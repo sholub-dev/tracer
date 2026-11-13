@@ -14,7 +14,6 @@ function fakeDb(types: string[]): Db {
 function slowProvider(type: string) {
   let connect = () => {};
   const provider = {
-    name: type,
     type,
     connected: false,
     lastChecked: null,
@@ -71,8 +70,8 @@ test("a status read during a reload waits for the new providers", async () => {
 test("reconnectDisconnected pings a disconnected provider once per cooldown and survives a failed ping", async () => {
   const registry = new ProviderRegistry();
   let pings = 0;
-  const down = { name: "down", type: "down", connected: false, ping: async () => { pings++; throw new Error("boom"); } };
-  const up = { name: "up", type: "up", connected: true, ping: async () => { pings += 100; return { ok: true }; } };
+  const down = { type: "down", connected: false, ping: async () => { pings++; throw new Error("boom"); } };
+  const up = { type: "up", connected: true, ping: async () => { pings += 100; return { ok: true }; } };
   registry.register(down as unknown as IProvider);
   registry.register(up as unknown as IProvider);
   await registry.reconnectDisconnected();
@@ -87,7 +86,6 @@ test("reconnectDisconnected stops waiting after the limit and the ping still upd
     const registry = new ProviderRegistry();
     let finish = () => {};
     const provider = {
-      name: "newrelic",
       type: "newrelic",
       connected: false,
       lastChecked: null,
@@ -112,7 +110,7 @@ test("reconnectDisconnected stops waiting after the limit and the ping still upd
 test("register disposes the provider it replaces", () => {
   const registry = new ProviderRegistry();
   let disposed = 0;
-  const make = () => ({ name: "gcp", type: "gcp", connected: true, lastChecked: null, dispose: async () => { disposed++; } }) as unknown as IProvider;
+  const make = () => ({ type: "gcp", connected: true, lastChecked: null, dispose: async () => { disposed++; } }) as unknown as IProvider;
   const first = make();
   registry.register(first);
   registry.register(make());

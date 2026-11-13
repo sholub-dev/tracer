@@ -1,9 +1,8 @@
 import { tool, type ModelMessage, type Tool } from "ai";
-import { cardRejected, findingSchema, type Finding } from "@tracer-sh/shared";
+import { cardRejected, findingSchema, TOOL_NAMES, type Finding } from "@tracer-sh/shared";
 import { claimedNumbers, derived, groundingProblems, queryResults, resultNumbers, shown, key } from "./grounding.js";
 import type { StepResult } from "../agents/utility/review.js";
 import { ANALYSIS_TOOL_NAME, AUTOMATED, type Ledger } from "./analysis-tool.js";
-import { WRITE_TOOLS } from "./tool-gate.js";
 
 type FindingOutput = { recorded: true; unchecked?: string } | { recorded: false; problems: string; next: string };
 
@@ -13,13 +12,8 @@ export const MAX_SEND_BACKS = 2;
 
 const label = (statement: string) => `"${statement.trim().split(/\s+/).slice(0, 6).join(" ")}..."`;
 
-const ID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b|\b[0-9a-f]{16,}\b/i;
-const NOT_ACTIONS = new Set(["report_finding", "report_alert_summary", ANALYSIS_TOOL_NAME, "ask_user"]);
-
 const succeeded = (messages: ModelMessage[], is: (toolName: string) => boolean) =>
   messages.some((m) => m.role === "tool" && m.content.some((p) => p.type === "tool-result" && is(p.toolName) && !String((p.output as { type?: unknown } | null)?.type).startsWith("error")));
-
-const acted = (messages: ModelMessage[]) => succeeded(messages, (name) => WRITE_TOOLS.has(name) && !NOT_ACTIONS.has(name));
 
 // A dismissed firing is answered without an investigation, so it needs no ledger.
 const analysisRan = (messages: ModelMessage[]) => succeeded(messages, (name) => name === ANALYSIS_TOOL_NAME || name === "dismiss_alert");
@@ -46,21 +40,18 @@ function actorBacked(turn: ModelMessage[]): boolean {
   return !!ledger?.actor?.indicator?.statement?.trim() && !!ledger.actor.holdsChange?.statement?.trim() && !challenges.some((c) => /actor\./.test(c));
 }
 
-const withoutCode = (text: string) => text.replace(/`[^`]*`/g, " ");
-
 const said = (c: Partial<Finding>) => JSON.stringify([c.title, c.answer, c.explanation?.map((e) => e.statement)]);
 
 /** True when the card repeats the last card sent back in this turn, word for word. */
 function unchanged(card: Finding, turn: ModelMessage[]): boolean {
   let last: Partial<Finding> | undefined;
-  for (const m of turn) if (m.role === "assistant" && typeof m.content !== "string") for (const p of m.content) if (p.type === "tool-call" && p.toolName === "report_finding") last = p.input as Partial<Finding>;
+  for (const m of turn) if (m.role === "assistant" && typeof m.content !== "string") for (const p of m.content) if (p.type === "tool-call" && p.toolName === TOOL_NAMES.FINDING) last = p.input as Partial<Finding>;
   return !!last && said(last) === said(card);
 }
 
-/** `evidence` holds claims no result backs; `style` holds wording rules. Only evidence problems mark a card unchecked. */
-function cardProblems(card: Finding, turn: ModelMessage[], results: Map<string, string>, analysisAvailable: boolean, final: boolean): { evidence: string[]; style: string[] } {
+/** The claims of the card that no result backs. */
+function cardProblems(card: Finding, turn: ModelMessage[], results: Map<string, string>, analysisAvailable: boolean, final: boolean): string[] {
   const evidence: string[] = [];
-  const style: string[] = [];
   // The last step and the repair pass offer only report_finding, so no ledger can follow.
   if (card.kind === "root_cause" && analysisAvailable && !final && !analysisRan(turn)) evidence.push("Call begin_analysis with the ledger before the card.");
   const answerNumbers = claimedNumbers(card.answer);
@@ -70,30 +61,10 @@ function cardProblems(card: Finding, turn: ModelMessage[], results: Map<string, 
   const cardNumbers = [...answerNumbers, ...card.explanation.flatMap((e) => claimedNumbers(e.statement))].filter((n) => shown(cited, n.value, n.decimals)).map((n) => n.value);
   const worked = derived(cardNumbers);
   if (cited.length) for (const n of answerNumbers) if (!shown(cited, n.value, n.decimals) && !shown(worked, n.value, n.decimals)) evidence.push(`answer: ${n.text} is not in the result of any cited source.`);
-  const seen = new Map<number, number>();
-  card.explanation.forEach((e, i) => {
-    const own = new Set<number>();
-    for (const n of claimedNumbers(e.statement)) {
-      if (own.has(n.value)) continue;
-      own.add(n.value);
-      if (answerNumbers.some((a) => a.value === n.value)) style.push(`statement ${i + 1} repeats ${n.text} from the answer: state each number once; keep it in the answer and give the statement a new fact.`);
-      else if (seen.has(n.value)) style.push(`statements ${seen.get(n.value)} and ${i + 1} both state ${n.text}: state each number once.`);
-      else seen.set(n.value, i + 1);
-    }
-  });
-  const fields: [string, string | undefined][] = [["title", card.title], ["answer", card.answer], ...card.explanation.map((e, i): [string, string] => [`statement ${i + 1}`, e.statement]), ["unknown", card.unknown], ["action", card.action]];
-  for (const [name, text] of fields) {
-    if (text && ID.test(withoutCode(text))) style.push(`The ${name} holds an id. Name the service, endpoint or condition instead of the id.`);
-    for (const n of claimedNumbers(text ?? "")) {
-      if (n.decimals > 2) style.push(`The ${name} writes ${n.text}: round it to at most two decimals.`);
-      if (/^\d{5,}/.test(n.text)) style.push(`The ${name} writes ${n.text}: write it with thousands separators (${Math.trunc(n.value).toLocaleString("en-US")}).`);
-    }
-  }
-  if (card.action !== undefined && !acted(turn)) style.push("Omit action: no tool changed a system in this turn.");
   const text = [card.title, card.answer, ...card.explanation.map((e) => e.statement)].join(" ");
   const asked = turn.some((m) => m.role === "user" && AUTOMATED.test(typeof m.content === "string" ? m.content : m.content.map((p) => (p.type === "text" ? p.text : "")).join(" ")));
   if (analysisAvailable && !asked && AUTOMATED.test(text) && !actorBacked(turn)) evidence.push("The card calls traffic automated, a bot or an attack, but the ledger has no actor.indicator and actor.holdsChange from results. Describe it as unusual traffic from its source, by count and share.");
-  return { evidence, style };
+  return evidence;
 }
 
 export function reportFindingTool(
@@ -104,19 +75,18 @@ export function reportFindingTool(
   stepReads: () => StepResult[] = () => [],
 ): Tool<Finding, FindingOutput> {
   return tool({
-    description: "Show the summary of an investigation as a card: call it once, alone in its step, after an investigation that reaches a conclusion. Skip it for a yes/no question, a simple lookup, a count, a short check or a follow-up: answer those in text. Text after the card never repeats it. "
-      + "Use kind root_cause (with a verdict) when the turn explains why something happened, summary for status, health checks and trends. Facts from query results only; never a fix. You may state an action you performed in this turn as a fact. "
-      + "Each explanation source is the exact title of a query that succeeded in this turn, and each number in a statement is in that query's result. Each number in the answer is in the result of a source the explanation cites. Each number appears once in the card: a number in the answer is in no statement. At most two decimals, thousands separators, no ids. A card that calls traffic a bot or automated needs actor.indicator and actor.holdsChange in the ledger. A card that fails these checks is sent back, at most twice.",
+    description: "Show the summary as a card: call it once, alone in its step, at the end of every reply that ran queries to answer the question. Skip it only when the answer is one fact read at a glance (a yes or no, or one value from one query), or when no query ran. The card ends the reply: write no text after it. "
+      + "Use kind root_cause (with a verdict) when the question asks why something happened; use summary for status, health and trend questions, even when the check finds a problem. Facts from query results only; never a fix. You may state an action you performed in this turn as a fact. "
+      + "The card is sent back, at most twice, when it names a number or a source that no result shows, or calls traffic a bot or automated without actor.indicator and actor.holdsChange in the ledger. The Response Format section holds the writing rules.",
     inputSchema: findingSchema,
     execute: async (card, options): Promise<FindingOutput> => {
       const turn = options.messages.slice(Math.max(0, turnFrom()));
-      const sentBack = turn.filter((m) => m.role === "tool" && m.content.some((p) => p.type === "tool-result" && p.toolName === "report_finding" && cardRejected((p.output as { value?: unknown }).value))).length;
-      const { evidence, style } = cardProblems(card, turn, queryResults(turn, originals, stepReads()), analysisAvailable(), final());
+      const sentBack = turn.filter((m) => m.role === "tool" && m.content.some((p) => p.type === "tool-result" && p.toolName === TOOL_NAMES.FINDING && cardRejected((p.output as { value?: unknown }).value))).length;
+      const evidence = cardProblems(card, turn, queryResults(turn, originals, stepReads()), analysisAvailable(), final());
       const open = sentBack === 0 || unchanged(card, turn) ? openChallenges(turn) : [];
       if (open.length) evidence.push(`begin_analysis raised challenges. Settle each one with a query, or change the card so that none contradicts it:\n- ${open.join("\n- ")}`);
       if (sentBack >= MAX_SEND_BACKS) return evidence.length ? { recorded: true, unchecked: evidence.join("\n") } : { recorded: true };
-      const problems = [...evidence, ...style];
-      return problems.length ? { recorded: false, problems: problems.join("\n"), next: NEXT } : { recorded: true };
+      return evidence.length ? { recorded: false, problems: evidence.join("\n"), next: NEXT } : { recorded: true };
     },
   });
 }

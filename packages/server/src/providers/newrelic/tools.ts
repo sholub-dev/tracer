@@ -1,31 +1,19 @@
 /**
- * New Relic tool factories — builds execute_nrql tool and provider toolkit.
+ * New Relic tool factories: the execute_nrql tool, the issue tools and the direct-mode kit.
  */
 
 import { z } from "zod";
 import { tool, type Tool } from "ai";
 import type { NewRelicProvider } from "./newrelic.provider.js";
 import type { AiIssue } from "./nerdgraph.client.js";
-import { formatTimestamps, type AfterCompleteParams, type ChatToolMemoryContext } from "@tracer-sh/shared";
-import {
-  injectMemories,
-  type SubAgentQuery,
-} from "../../agents/chat/sub-agent.js";
+import { formatTimestamps, type ChatToolMemoryContext } from "@tracer-sh/shared";
+import type { ProviderQuery } from "../../agents/chat/query-records.js";
 import type { Db } from "../../db/driver.js";
-import { capQuery } from "../../lib/messages-codec.js";
 import { getTimezone } from "../../lib/current-context.js";
-import { toolModelOutput, buildAfterComplete } from "../../tools/provider-tool-helpers.js";
-import { beginAnalysisTool, ANALYSIS_TOOL_NAME } from "../../tools/analysis-tool.js";
+import { toolModelOutput, buildDirectTools, queryTool, type DirectTools } from "../../tools/provider-tool-helpers.js";
 import { withFixHint } from "./nrql-errors.js";
-import { formatNrqlCsv, parseFacetNames, sanitizeNrqlRows, stripStrings } from "./nrql-formatter.js";
-import {
-  directModeSystemPrompt,
-  nrUnifiedFragment,
-} from "./prompts.js";
-
-export { nrUnifiedFragment };
-
-// ── Shared tool builder ──
+import { formatNrqlCsv, parseFacetNames, stripStrings } from "./nrql-formatter.js";
+import { directModeSystemPrompt } from "./prompts.js";
 
 export function withTimezone(query: string, timezone: string): string {
   return /\bWITH\s+TIMEZONE\b/i.test(query) || /^\s*SHOW\b/i.test(query) ? query : `${query.trim().replace(/;$/, "")} WITH TIMEZONE '${timezone}'`;
@@ -82,51 +70,41 @@ function localTime(ms: number | null | undefined, timeZone: string): string | nu
 
 function buildExecuteNrqlTool(
   provider: NewRelicProvider,
-  collectedQueries: SubAgentQuery[],
+  collectedQueries: ProviderQuery[],
   db?: Db,
 ) {
   const ran = new Set<string>();
-  return tool({
+  return queryTool({
     description: "Execute a NRQL query against New Relic.",
-    inputSchema: z.object({
-      query: z.string().describe("The NRQL query to execute. Alias every selected value and facet with AS '<plain name>' (a person reads the column names)."),
-      title: z.string().optional().describe("Plain title of what this query measures, read by a person and cited by the answer card."),
-    }),
-    execute: async ({ query }) => {
-      try {
-        const timezone = await getTimezone(db);
-        const sent = withTimezone(query, timezone);
-        const { rows: raw, futureRemoved, window, messages } = await provider.executeNrql(sent);
-        const cleaned = sanitizeNrqlRows(raw);
-        collectedQueries.push({ query, results: cleaned });
-        const key = query.trim().replace(/\s+/g, " ");
-        const repeated = ran.has(key);
-        ran.add(key);
+    queryDescription: "The NRQL query to execute. Alias every selected value and facet with AS '<plain name>' (a person reads the column names).",
+    collectedQueries,
+    errorMessage: (err, query) => withFixHint(err instanceof Error ? err.message : String(err), query),
+    run: async (query, signal) => {
+      const timezone = await getTimezone(db);
+      const sent = withTimezone(query, timezone);
+      const { rows, futureRemoved, window, messages } = await provider.executeNrql(sent, signal);
+      const key = query.trim().replace(/\s+/g, " ");
+      const repeated = ran.has(key);
+      ran.add(key);
 
-        const now = Date.now() / 1000;
-        const formatted = (formatTimestamps(raw, timezone) as Record<string, unknown>[]).map((r, i) => {
-          const end = raw[i].endTimeSeconds;
-          return typeof end === "number" && end > now && r.beginTimeSeconds != null ? { ...r, beginTimeSeconds: `${r.beginTimeSeconds} (partial)` } : r;
-        });
-        const emptyByFuture = cleaned.length === 0 && futureRemoved > 0;
-        const csv = emptyByFuture
-          ? `No results: all ${futureRemoved} rows start after now and were removed. The window ends in the future.`
-          : formatNrqlCsv(formatted, query);
-        const notes = [
-          window ? `Window: ${localTime(window.begin, timezone)} to ${localTime(window.end, timezone)}` : lacksSince(query) ? "No SINCE: NRQL used the last 60 minutes." : "",
-          ...messages.map((m) => `New Relic: ${m}`),
-          cleaned.length === 0 && !emptyByFuture ? await emptyFacetNote(provider, sent) : "",
-          aliasNote(query),
-          repeated ? "You ran this exact query earlier in this reply; the result is above." : "",
-        ].filter(Boolean);
-        return { parts: [capQuery({ type: "query" as const, query, results: cleaned })], analysis: [csv, ...notes].join("\n") };
-      } catch (err) {
-        const message = withFixHint(err instanceof Error ? err.message : String(err), query);
-        collectedQueries.push({ query, results: { error: message } });
-        return { error: message };
-      }
+      const now = Date.now() / 1000;
+      const formatted = (formatTimestamps(rows, timezone) as Record<string, unknown>[]).map((r, i) => {
+        const end = rows[i].endTimeSeconds;
+        return typeof end === "number" && end > now && r.beginTimeSeconds != null ? { ...r, beginTimeSeconds: `${r.beginTimeSeconds} (partial)` } : r;
+      });
+      const emptyByFuture = rows.length === 0 && futureRemoved > 0;
+      const csv = emptyByFuture
+        ? `No results: all ${futureRemoved} rows start after now and were removed. The window ends in the future.`
+        : formatNrqlCsv(formatted, query);
+      const notes = [
+        window ? `Window: ${localTime(window.begin, timezone)} to ${localTime(window.end, timezone)}` : lacksSince(query) ? "No SINCE: NRQL used the last 60 minutes." : "",
+        ...messages.map((m) => `New Relic: ${m}`),
+        rows.length === 0 && !emptyByFuture ? await emptyFacetNote(provider, sent) : "",
+        aliasNote(query),
+        repeated ? "You ran this exact query earlier in this reply; the result is above." : "",
+      ].filter(Boolean);
+      return { rows, analysis: [csv, ...notes].join("\n") };
     },
-    toModelOutput: ({ output }) => toolModelOutput(output),
   });
 }
 
@@ -236,17 +214,17 @@ export function createNewRelicDirectTools(
   provider: NewRelicProvider,
   memoryContext?: ChatToolMemoryContext,
   db?: unknown,
-): { tools: Record<string, unknown>; systemPrompt: string; afterComplete: (params: AfterCompleteParams) => void } {
-  const collectedQueries: SubAgentQuery[] = [];
-
-  return {
+): DirectTools {
+  const collectedQueries: ProviderQuery[] = [];
+  return buildDirectTools({
+    providerType: "newrelic",
     tools: {
       execute_nrql: buildExecuteNrqlTool(provider, collectedQueries, db as Db | undefined),
       ...buildNewRelicIssueTools(provider, db as Db | undefined),
-      [ANALYSIS_TOOL_NAME]: beginAnalysisTool,
     },
-    systemPrompt: injectMemories(directModeSystemPrompt, memoryContext),
-    afterComplete: buildAfterComplete({ providerType: "newrelic", db: db as Db | undefined, memoryContext, collectedQueries }),
-  };
+    prompt: directModeSystemPrompt,
+    collectedQueries,
+    memoryContext,
+    db,
+  });
 }
-

@@ -16,8 +16,6 @@ export interface PosthogProviderConfig {
 export interface HogQLQueryResponse {
   results: unknown[][];
   columns: string[];
-  types?: string[];
   /** Some error conditions are returned in the body rather than via a non-2xx status. */
   error?: string;
-  hogql?: string;
 }

@@ -1,7 +1,7 @@
-import { isPlainObject, mainMemberKey, parseCondition, type Condition, type ConditionOp } from "@tracer-sh/shared";
+import { isPlainObject, mainMemberKey, parseCondition, type Condition } from "@tracer-sh/shared";
 import { isNumericValue } from "../providers/posthog/posthog-formatter.js";
 
-export { parseCondition, type Condition, type ConditionOp };
+export { parseCondition, type Condition };
 
 export interface Group {
   key: string;
@@ -16,7 +16,6 @@ const NON_ADDITIVE_FUNCTIONS = ["average", "median", "min", "max", "latest", "ea
 function isAdditiveColumn(name: string): boolean {
   return !NON_ADDITIVE_FUNCTIONS.some((fn) => name === fn || name.startsWith(`${fn}.`));
 }
-
 
 export function evaluateCondition(condition: Condition, value: number): boolean {
   switch (condition.op) {
@@ -82,7 +81,7 @@ export function sumGroups(groups: Group[]): number {
   return groups.reduce((s, g) => s + g.count, 0);
 }
 
-export interface Evaluation {
+interface Evaluation {
   fires: boolean;
   /** The compared value: the sum, or the worst firing group (the worst group overall when none fires). */
   value: number;

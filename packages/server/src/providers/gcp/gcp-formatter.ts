@@ -1,9 +1,7 @@
+import { MAX_RESULT_CHARS as TEXT_BUDGET, clipCell as clip } from "../../lib/result-format.js";
+
 // ── Limits ──
 
-/** One text budget per result. */
-const TEXT_BUDGET = 30_000;
-/** Cap for one cell or message. */
-const CELL_CAP = 1000;
 /** Points shown whole per result; above this, series are thinned. */
 const MAX_POINTS = 400;
 
@@ -12,10 +10,6 @@ const MAX_POINTS = 400;
 type Obj = Record<string, unknown>;
 
 const isObj = (v: unknown): v is Obj => !!v && typeof v === "object" && !Array.isArray(v);
-
-function clip(s: string, max = CELL_CAP): string {
-  return s.length > max ? `${s.slice(0, max)}… (+${s.length - max} chars)` : s;
-}
 
 // toFixed(2) would turn 0.004 into "0.00"
 const smallOrFixed = (n: number) => Math.abs(n) < 1 ? Number(n.toPrecision(3)).toString() : Number(n.toFixed(2)).toString();
@@ -39,8 +33,16 @@ function fmtVal(v: unknown): string {
 const kv = (o: unknown): string =>
   isObj(o) ? Object.entries(o).filter(([, v]) => v != null && v !== "").map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : v}`).join(" ") : "";
 
-const mdRow = (r: string[]) =>
-  `| ${r.map((c) => clip(String(c)).replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\n/g, " ")).join(" | ")} |`;
+const mdLines = new WeakMap<string[], string>();
+// fitCount measures the lines that mdTable then prints, so each is built once.
+const mdRow = (r: string[]) => {
+  let line = mdLines.get(r);
+  if (line === undefined) {
+    line = `| ${r.map((c) => clip(String(c)).replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\n/g, " ")).join(" | ")} |`;
+    mdLines.set(r, line);
+  }
+  return line;
+};
 
 const mdHead = (headers: string[]) => `| ${headers.join(" | ")} |\n| ${headers.map(() => "---").join(" | ")} |`;
 

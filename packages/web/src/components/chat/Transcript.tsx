@@ -29,7 +29,7 @@ export function Transcript({ scrollRef, contentRef, isAtBottom, scrollToBottom, 
         <div ref={scrollRef} className="h-full overflow-x-hidden overflow-y-auto" onCopy={normalizeClipboard}>
           <div ref={contentRef} className="flex min-h-full flex-col bg-background">
             {header}
-            <div className={cn(column, "flex-1 space-y-8 pb-10", compact ? "pt-5" : "pt-6")}>{children}</div>
+            <div className={cn(column, "flex-1 space-y-8 pb-6", compact ? "pt-5" : "pt-6")}>{children}</div>
           </div>
         </div>
         <SummaryTabs scrollRef={scrollRef} contentRef={contentRef} />

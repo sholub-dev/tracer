@@ -2,9 +2,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { timeoutSignal } from "../../lib/timeout-signal.js";
 
+/** `token` is null for a service-account key: the MCP subprocess reads the key itself and no refresh token exists to exchange. */
 export type GcpAuthResult =
-  | { ok: true; token: string }
-  | { ok: false; code: "no_credentials" | "reauth_required" | "auth_failed"; message: string };
+  | { ok: true; token: string | null }
+  | { ok: false; message: string };
 
 export const REAUTH_CMD = "Run: gcloud auth application-default login";
 
@@ -46,11 +47,13 @@ async function refreshGcpAuth(): Promise<GcpAuthResult> {
   try {
     creds = JSON.parse(readFileSync(credPath, "utf-8"));
   } catch {
-    return { ok: false, code: "no_credentials", message: `No GCP credentials found. ${REAUTH_CMD}` };
+    return { ok: false, message: `No GCP credentials found. ${REAUTH_CMD}` };
   }
 
+  if (creds.type === "service_account") return { ok: true, token: null };
+
   if (creds.type !== "authorized_user" || !creds.refresh_token) {
-    return { ok: false, code: "no_credentials", message: `No GCP credentials found. ${REAUTH_CMD}` };
+    return { ok: false, message: `No GCP credentials found. ${REAUTH_CMD}` };
   }
 
   let res: Response;
@@ -69,7 +72,6 @@ async function refreshGcpAuth(): Promise<GcpAuthResult> {
   } catch (err) {
     return {
       ok: false,
-      code: "auth_failed",
       message: `GCP token exchange failed: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
@@ -86,20 +88,17 @@ async function refreshGcpAuth(): Promise<GcpAuthResult> {
     if (errorCode === "invalid_grant" && errorSubtype === "invalid_rapt") {
       return {
         ok: false,
-        code: "reauth_required",
         message: `GCP authentication requires re-login (RAPT challenge). ${REAUTH_CMD}`,
       };
     }
     if (errorCode === "invalid_grant") {
       return {
         ok: false,
-        code: "auth_failed",
         message: `GCP credentials are invalid or expired. ${REAUTH_CMD}`,
       };
     }
     return {
       ok: false,
-      code: "auth_failed",
       message: `GCP token exchange failed (${res.status}). ${REAUTH_CMD}`,
     };
   }
@@ -108,7 +107,6 @@ async function refreshGcpAuth(): Promise<GcpAuthResult> {
   if (!token.access_token) {
     return {
       ok: false,
-      code: "auth_failed",
       message: `GCP token exchange returned no access token. ${REAUTH_CMD}`,
     };
   }

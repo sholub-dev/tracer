@@ -44,17 +44,14 @@ Key auto-captured events:
 - Custom events — any application-defined event name (e.g. \`user signed up\`, \`order completed\`).`;
 
 const POSTHOG_CROSS_SIGNAL = `## Cross-Signal Correlation
-- **Actor identity:** \`distinct_id\` is the actor on every event; \`person_id\` is the identified user. \`$identify\` links an anonymous \`distinct_id\` to an identified person. Follow one actor across events with \`distinct_id\` (or \`person_id\` for identified users).
+- **Actor identity:** \`distinct_id\` is the actor on every event; \`person_id\` is the identified user.
 - **User journey:** reconstruct what an actor did by selecting that \`distinct_id\`'s events \`ORDER BY timestamp\` — the events before/after the one of interest are the context.
 - **Session grouping:** \`properties.$session_id\` ties events within a single session together.
-- **Error grouping:** group repeated errors by \`properties.$exception_list[1].type\` + \`properties.$exception_list[1].value\` (\`$exception_fingerprint\` is optional and frequently null, so don't rely on it alone).
+- **Error grouping:** group repeated errors by \`properties.$exception_list[1].type\` + \`properties.$exception_list[1].value\` (never by fingerprint alone).
 - **Diagnostic shortcut:** What's erroring? → \`$exception\` FACET by type | Who's affected? → \`uniq(distinct_id)\` | What did one user do? → that \`distinct_id\`'s events ORDER BY timestamp | Usage/volume → event \`count()\` GROUP BY property.`;
 
 const POSTHOG_ANTI_PATTERNS = `## Common Mistakes — AVOID THESE
-- \`LIKE\` is **case-sensitive**. For case-insensitive matching use \`ILIKE '%pattern%'\`.
 - Exceptions: \`$exception_list\` is **1-indexed** — read \`properties.$exception_list[1].type\` / \`[1].value\`. There are NO flat \`$exception_type\` / \`$exception_message\` properties; filtering on those returns empty.
-- \`$exception_fingerprint\` is frequently NULL — dedup errors by \`type\` + \`value\`, never by fingerprint alone.
-- Paginate with a \`timestamp\` keyset filter, not \`OFFSET\`.
 - PostHog is **NOT an APM**. There is no server request duration, throughput, or error-rate metric. Use \`$exception\` events for errors and event \`count()\` for volume; never invent latency or error-rate numbers PostHog does not record.
 - Don't \`SELECT *\` over long ranges — aggregate with \`count()\` / \`GROUP BY\` instead.
 - Property namespaces differ: event properties are \`properties.$x\`; person properties are \`person.properties.x\`. Confusing the two returns empty results.
@@ -82,9 +79,7 @@ export const POSTHOG_INSIDE_OUT_DEBUGGING = `## Investigation Methodology
 **Diagnostic safeguards:**
 - **No data?** Verify events exist at all: \`SELECT count() FROM events WHERE timestamp >= now() - interval 1 day\`. If it shows zero events, check the project and the window, then report no data.
 
-**Client side only:** PostHog sees the client side. When the cause is a server call, name the endpoint or URL the client called. Say the server data must come from another connected source.
-
-**Important:** PostHog is a product-analytics + error-tracking tool, NOT an APM. There is no server request duration, throughput, or error-rate metric. Use \`$exception\` events for errors and event \`count()\` for volume; never invent latency or error-rate numbers that PostHog does not record.`;
+**Client side only:** PostHog sees the client side. When the cause is a server call, name the endpoint or URL the client called. Say the server data must come from another connected source.`;
 
 const POSTHOG_QUERY_DEFAULTS = `## Query Defaults
 - Always include a \`timestamp\` filter. Default: \`timestamp >= now() - interval 24 hour\`. "recent" → 1 hour. "today" → \`timestamp >= toStartOfDay(now())\`.

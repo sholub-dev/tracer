@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useMemo, type ReactNode } from "react";
 import { readUIMessageStream, type UIMessage, type UIMessageChunk } from "ai";
-import { ProgressStore } from "../../lib/progress-store";
-import { handleProgressData, stopChat, useCompactedMessages } from "../../lib/chat-utils";
+import { stopChat, useCompactedMessages } from "../../lib/chat-utils";
 import { useChatScroll } from "../../lib/hooks";
 import { WEB_CONFIG } from "../../lib/config";
 import { isSteered } from "@tracer-sh/shared";
@@ -11,7 +10,6 @@ import { readEventStream } from "../../lib/sse";
 import { serverFetch } from "../../lib/server-fetch";
 import { useOnResume } from "../../lib/resume";
 import { ActivityLine } from "./ChatIndicators";
-import { activityLabel } from "./activity";
 import { Composer, RUN_PLACEHOLDER } from "./Composer";
 import { FollowUpTimerBar } from "./FollowUpTimerBar";
 import { MessageRow } from "./MessageRow";
@@ -21,8 +19,8 @@ interface LiveStreamViewProps {
   sessionId: string;
   initialMessages: UIMessage[];
   onComplete: () => void;
-  /** Sticky header (session header). */
-  header?: ReactNode;
+  /** Sticky header (session header); gets false once the run has ended. */
+  header?: (streaming: boolean) => ReactNode;
   /** Rendered above the messages (compaction summary). */
   beforeMessages?: ReactNode;
   /** Hide the first N messages, as in ChatCore. */
@@ -39,7 +37,6 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
   const [messages, setMessages] = useState<UIMessage[]>(initialMessages);
   // The parent unmounts this view a moment after the run ends; until then nothing should look busy.
   const [over, setOver] = useState(false);
-  const progressStore = useRef(new ProgressStore()).current;
   const initialMessagesRef = useRef(initialMessages);
   initialMessagesRef.current = initialMessages;
   const onCompleteRef = useRef(onComplete);
@@ -91,7 +88,6 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
         let ctrl!: ReadableStreamDefaultController<UIMessageChunk>;
         const chunkStream = new ReadableStream<UIMessageChunk>({ start(c) { ctrl = c; } });
         const reading = readConnection(chunkStream, () => id === current);
-        progressStore.clear();
         let finished = false;
         let ended = false;
         let opened = false;
@@ -115,7 +111,6 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
               if (event === "part") {
                 try {
                   const part = JSON.parse(data);
-                  if (part.type === "data-provider-part") handleProgressData(progressStore, part.data);
                   ctrl.enqueue(part as UIMessageChunk);
                 } catch { /* ignore parse errors */ }
               } else if (event === "done") {
@@ -157,9 +152,8 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
       cancelled = true;
       conn?.abort();
       wakeDelay?.();
-      progressStore.clear();
     };
-  }, [sessionId, progressStore]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const lastIdx = messages.findLastIndex((m) => !isSteered(m));
   const { collapse, analysisOnlyMsg } = useCompactedMessages(messages, collapseCount, analysisOnlyIndex);
@@ -175,7 +169,7 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
         contentRef={contentRef}
         isAtBottom={isAtBottom}
         scrollToBottom={scrollToBottom}
-        header={header}
+        header={header?.(!over)}
         dock={
           <>
             <FollowUpTimerBar sessionId={sessionId} />
@@ -186,7 +180,7 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
               placeholder={RUN_PLACEHOLDER}
               canSend={false}
               disabled
-              streaming
+              streaming={!over}
               escStops={false}
               onStop={() => void stopChat(sessionId)}
               sources={sources}
@@ -201,13 +195,12 @@ export function LiveStreamView({ sessionId, initialMessages, onComplete, header,
             key={key}
             msg={msg}
             msgIndex={index}
-            isAnimating={last && msg.role === "assistant" && index === lastIdx}
-            progressStore={progressStore}
+            isAnimating={!over && last && msg.role === "assistant" && index === lastIdx}
             compact={false}
             piece={!last}
           />
         ))}
-        <ActivityLine label={over ? null : activityLabel(messages)} />
+        <ActivityLine active={!over} />
       </Transcript>
     </div>
   );

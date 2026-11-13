@@ -1,12 +1,9 @@
 import { z } from "zod";
+import { maskSecret } from "../../lib/mask-secret.js";
 import { publicProcedure, router } from "../trpc.js";
 import { JiraClient, normalizeJiraDomain } from "../../integrations/jira/jira.client.js";
 import { readJiraConfig, writeJiraConfig, deleteJiraConfig } from "../../integrations/jira/config.js";
 import { readSlackConfig, writeSlackConfig, deleteSlackConfig, postSlack, parseMentions, mentionPrefix } from "../../integrations/slack.js";
-
-function maskToken(token: string): string {
-  return token.length <= 4 ? "••••" : "••••••••" + token.slice(-4);
-}
 
 export const integrationsRouter = router({
   getJira: publicProcedure.query(async ({ ctx }) => {
@@ -17,7 +14,7 @@ export const integrationsRouter = router({
       config: {
         domain: config.domain,
         email: config.email,
-        apiToken: maskToken(config.apiToken),
+        apiToken: maskSecret(config.apiToken),
       },
     };
   }),
@@ -46,7 +43,7 @@ export const integrationsRouter = router({
       // The form sends the masked token back when only domain or email changed.
       const stored = await readJiraConfig(ctx.db);
       const token = input.apiToken.trim();
-      const apiToken = stored && token === maskToken(stored.apiToken) ? stored.apiToken : token;
+      const apiToken = stored && token === maskSecret(stored.apiToken) ? stored.apiToken : token;
       const config = { domain, email: input.email.trim(), apiToken };
       const result = await new JiraClient(config).validate();
       if (!result.ok) {
@@ -64,7 +61,7 @@ export const integrationsRouter = router({
   getSlack: publicProcedure.query(async ({ ctx }) => {
     const config = await readSlackConfig(ctx.db);
     if (!config) return { configured: false, config: null };
-    return { configured: true, config: { webhookUrl: maskToken(config.webhookUrl), mentions: config.mentions ?? "" } };
+    return { configured: true, config: { webhookUrl: maskSecret(config.webhookUrl), mentions: config.mentions ?? "" } };
   }),
 
   // Validated by posting a test message before persisting.
@@ -73,7 +70,7 @@ export const integrationsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const stored = await readSlackConfig(ctx.db);
       const submitted = input.webhookUrl.trim();
-      const unchanged = !!stored && submitted === maskToken(stored.webhookUrl);
+      const unchanged = !!stored && submitted === maskSecret(stored.webhookUrl);
       const webhookUrl = unchanged ? stored.webhookUrl : submitted;
       const mentions = input.mentions?.trim() ?? "";
       const parsed = parseMentions(mentions);

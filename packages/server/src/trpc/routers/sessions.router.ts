@@ -18,6 +18,7 @@ import { generateSessionSummary } from "../../agents/utility/summary.js";
 import { sessionChanged, sessionChanges } from "../../lib/session-events.js";
 import { decodeMessages, decodeMessagesJson, encodeMessages } from "../../lib/messages-codec.js";
 
+// The provider entries label the rows the removed provider sub-agents wrote.
 const AGENT_TYPE_LABELS: Record<string, string> = {
   chat: "Chat",
   newrelic: "New Relic sub-agent",
@@ -292,12 +293,15 @@ export const sessionsRouter = router({
       const sourceUpTo = boundaryIdx + 1;
       let prefixUnchanged = false;
       if (fresh && fresh.status !== "streaming" && !ctx.activeStreams.has(input.id)) {
-        try {
-          const freshMessages: UIMessage[] = decodeMessages(fresh.messages);
-          prefixUnchanged =
-            JSON.stringify(freshMessages.slice(0, sourceUpTo)) ===
-            JSON.stringify(messages.slice(0, sourceUpTo));
-        } catch { /* treat as changed */ }
+        if (fresh.messages === row.messages) prefixUnchanged = true;
+        else {
+          try {
+            const freshMessages: UIMessage[] = decodeMessages(fresh.messages);
+            prefixUnchanged =
+              JSON.stringify(freshMessages.slice(0, sourceUpTo)) ===
+              JSON.stringify(messages.slice(0, sourceUpTo));
+          } catch { /* treat as changed */ }
+        }
       }
       if (!prefixUnchanged) {
         throw new TRPCError({ code: "CONFLICT", message: "The conversation changed while the summary was being generated — try again" });

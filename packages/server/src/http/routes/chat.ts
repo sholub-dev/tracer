@@ -31,7 +31,7 @@ async function replyWithRun(c: HonoContext, start: () => Promise<RunResult | Res
   }
 }
 
-// Ids that start with "__" belong to server-owned sessions (monitors, the removed dashboard builder).
+// Ids that start with "__" belong to server-owned sessions (monitors).
 const anySessionId = z.string().min(1);
 const chatSessionId = anySessionId.refine((id) => !id.startsWith("__"), "reserved session id");
 

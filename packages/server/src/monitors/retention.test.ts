@@ -6,7 +6,8 @@ import { runSetup } from "../db/setup.js";
 import { agentRuns, alertIssues, chatSessions, memoryOperations, monitors, monitorTriggers, sessionTimers, syncRows } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { CONFIG } from "../config.js";
-import { isIdle, pruneOldData } from "./scheduler.js";
+import { localDeviceId } from "../db/config-reader.js";
+import { pruneOldData, tickWork } from "./scheduler.js";
 import { pastSessions, saveOutcome } from "./repeats.js";
 
 const NOW = 1_800_000_000;
@@ -78,19 +79,44 @@ test("retention removes old monitor sessions and delete markers, and keeps user 
   assert.deepEqual((await db.select().from(syncRows).where(eq(syncRows.tbl, "x")).all()).map((r) => r.rowKey).sort(), ["fresh", "live"]);
 });
 
-test("a tick is idle without enabled monitors, pending timers and issues in progress", async () => {
+test("finished issues are pruned after the triage retention time, before the sessions that hold them", async () => {
   const { db } = await freshDb();
-  assert.equal(await isIdle(db), false, "an enabled monitor");
+  const old = NOW - CONFIG.triageRetentionSeconds - 60;
+  await db.insert(chatSessions).values({ id: "held", title: "T", messages: "[]", kind: "monitor", status: "done", updatedAt: OLD }).run();
+  await db.insert(monitorTriggers).values({ ...trigger("t", NOW, "held") }).run();
+  const issue = (issueId: string, state: string, updatedAt: number, sessionId = "live") =>
+    ({ issueId, monitorId: "m1", triggerId: "t", sessionId, conditionName: "c", title: "t", state, createdAt: 0, updatedAt });
+  await db.insert(alertIssues).values([
+    issue("a", "closed", old),
+    issue("b", "left_open", old, "held"),
+    issue("c", "nr_closed", NOW),
+    issue("d", "watching", old),
+  ]).run();
+  await pruneOldData(db, NOW);
+  assert.deepEqual((await db.select().from(alertIssues).all()).map((r) => r.issueId).sort(), ["c", "d"]);
+  assert.ok(!(await db.select().from(chatSessions).all()).some((s) => s.id === "held"), "the session no issue holds any more");
+});
+
+test("a tick has work only for the steps with something to do", async () => {
+  const { db } = await freshDb();
+  const none = { monitors: false, firings: false, timers: false, issues: false };
+  assert.deepEqual(await tickWork(db, NOW), { ...none, monitors: true }, "an enabled monitor");
   await db.update(monitors).set({ enabled: 0 }).run();
-  assert.equal(await isIdle(db), true);
+  assert.deepEqual(await tickWork(db, NOW), none);
   await db.insert(sessionTimers).values({ sessionId: "live", fireAt: null, note: "n", setAt: 0 }).run();
-  assert.equal(await isIdle(db), true, "a spent timer");
+  assert.deepEqual(await tickWork(db, NOW), none, "a spent timer");
+  await db.update(sessionTimers).set({ fireAt: NOW + 60 }).run();
+  assert.deepEqual(await tickWork(db, NOW), none, "a timer not due yet");
   await db.update(sessionTimers).set({ fireAt: NOW }).run();
-  assert.equal(await isIdle(db), false, "a pending timer");
+  assert.deepEqual(await tickWork(db, NOW), { ...none, timers: true }, "a due timer");
   await db.delete(sessionTimers).run();
-  await db.insert(monitorTriggers).values(trigger("t", NOW, null)).run();
+  await db.insert(monitorTriggers).values({ ...trigger("t", NOW, null), status: "pending", deviceId: "other" }).run();
+  assert.deepEqual(await tickWork(db, NOW), none, "a pending firing of another device");
+  await db.update(monitorTriggers).set({ deviceId: await localDeviceId(db) }).run();
+  assert.deepEqual(await tickWork(db, NOW), { ...none, firings: true }, "a pending firing of this device");
+  await db.update(monitorTriggers).set({ status: "muted" }).run();
   await db.insert(alertIssues).values({ issueId: "i", monitorId: "m1", triggerId: "t", sessionId: "live", conditionName: "c", title: "t", state: "watching", createdAt: 0, updatedAt: 0 }).run();
-  assert.equal(await isIdle(db), false, "a watching issue");
+  assert.deepEqual(await tickWork(db, NOW), { ...none, issues: true }, "a watching issue");
 });
 
 test("the new indexes serve the sync and timer queries", async () => {

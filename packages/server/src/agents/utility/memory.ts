@@ -7,7 +7,7 @@ import { recordEachCall } from "../../llm/usage.js";
 import { makeMemoryExecute } from "../../tools/memory-executor.js";
 import { createUpdateMemoryTool, createDeleteMemoryTool } from "../../tools/memory-tools.js";
 import { memoryOperations } from "../../db/schema.js";
-import { isEmptyQuery, isFailedQuery, type SubAgentQuery } from "../chat/sub-agent.js";
+import { isEmptyQuery, isFailedQuery, type ProviderQuery } from "../chat/query-records.js";
 import { getDomainKnowledge } from "./memory-domain-knowledge.js";
 import { optimizeIfDue } from "./memory-maintenance.js";
 import { timeoutSignal } from "../../lib/timeout-signal.js";
@@ -18,7 +18,7 @@ interface MemoryAgentOptions {
   existingMemories: Array<{ id: number; toolName: string; note: string | null }>;
   task: string;
   analysisText: string;
-  collectedQueries: SubAgentQuery[];
+  collectedQueries: ProviderQuery[];
   sessionId?: string;
 }
 
@@ -122,7 +122,7 @@ export async function runMemoryAgent(opts: MemoryAgentOptions): Promise<void> {
     return `${label} → OK`;
   }).join("\n");
 
-  const domainKnowledge = await getDomainKnowledge(providerType);
+  const domainKnowledge = getDomainKnowledge(providerType);
   const domainSection = domainKnowledge
     ? `## Provider Domain Knowledge (already in system prompt — do NOT save these as memories)\n${domainKnowledge}\n\n`
     : "";

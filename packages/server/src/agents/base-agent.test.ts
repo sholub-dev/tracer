@@ -230,7 +230,7 @@ test("Anthropic chat request: date-only system prompt with cache breakpoint, tim
   }
 });
 
-async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string | null)[]; onRequest?: (n: number) => Promise<void> }, retryDelaysMs: number[], whileRunning?: (ctx: Context) => Promise<void>, tools?: ToolSet | ((writer: { write: (part: Record<string, unknown>) => void }) => ToolSet), maxSteps?: number, thinking = true, requireFinding = true) {
+async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string | null)[]; onRequest?: (n: number) => Promise<void> }, retryDelaysMs: number[], whileRunning?: (ctx: Context) => Promise<void>, tools?: ToolSet, maxSteps?: number, thinking = true, requireFinding = true) {
   const db = memoryDb();
   // The session status at each model request.
   const statusAtRequest: (string | undefined)[] = [];
@@ -253,7 +253,7 @@ async function retryRun(fake: { fail?: number; hold?: boolean; script?: (string 
     const failed: string[] = [];
     const res = await runChatAgent({
       sessionId: "s1", messages: [{ id: "u1", role: "user", parts: [{ type: "text", text: "why?" }] }], context,
-      collectTools: async (writer) => ({ tools: typeof tools === "function" ? tools(writer) : tools, maxSteps, afterComplete: (params) => { completed++; completedWith = params; } }),
+      collectTools: async () => ({ tools, maxSteps, afterComplete: (params) => { completed++; completedWith = params; } }),
       sessionTitle: () => "t", retryDelaysMs, onFailed: (e) => failed.push(e), requireFinding,
     });
     assert.ok("stream" in res && res.stream);
@@ -397,6 +397,25 @@ test("a chat run that queried and answered in text gets no repair pass and no fo
   assert.equal(r.status, "done");
 });
 
+test("a chat run ends at its accepted card: no text step follows it", async () => {
+  // The script goes on after the card, so a run that did not stop would send a third request.
+  const r = await retryRun({ script: [TOOL_CALL_SSE, FINDING_CALL_SSE, SSE] }, [], undefined, findingTools, undefined, true, false);
+  assert.equal(r.bodies.length, 2);
+  assert.deepEqual(r.saved[1].parts.filter((p) => p.type !== "step-start").map((p) => p.type).slice(-1), ["tool-report_finding"]);
+  assert.equal(r.status, "done");
+});
+
+test("a chat card the check sends back gets another step to fix it", async () => {
+  const rejected = sse([
+    MESSAGE_START,
+    ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_r", name: "report_finding", input: {} } }],
+    ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ kind: "summary", title: "", answer: "Checkout is slow", explanation: [{ statement: "One query ran.", source: "A query that never ran" }] }) } }],
+    ...end("tool_use"),
+  ]);
+  const r = await retryRun({ script: [TOOL_CALL_SSE, rejected, FINDING_CALL_SSE, SSE] }, [], undefined, findingTools, undefined, true, false);
+  assert.equal(r.bodies.length, 3);
+});
+
 test("the memory input of a text answer is the last text part, with result blocks as references", async () => {
   const note = sse([
     MESSAGE_START,
@@ -423,14 +442,14 @@ test("a chat run at its last step loses its query tools but is not forced to a c
   const r = await retryRun({ script: [TOOL_CALL_SSE, SSE] }, [], undefined, findingTools, 2, false, false);
   assert.deepEqual((r.bodies[1].tools as { name: string }[]).map((t) => t.name), ["report_finding"]);
   assert.notDeepEqual(r.bodies[1].tool_choice, forcedCard);
-  assert.match(JSON.stringify(r.bodies[1].messages), /in text, or with report_finding/);
+  assert.match(JSON.stringify(r.bodies[1].messages), /with report_finding, or in text when the answer is one fact/);
 });
 
 test("a repair card the check sends back gets one more step to fix it", async () => {
   const rejected = sse([
     MESSAGE_START,
     ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_r", name: "report_finding", input: {} } }],
-    ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ kind: "summary", title: "", answer: "Incident d9e0fc2e-414c-4b8d-872d-1ad2b89d7dad closed", explanation: [{ statement: "One query ran.", source: "Lookup" }] }) } }],
+    ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ kind: "summary", title: "", answer: "Incident closed", explanation: [{ statement: "One query ran.", source: "A query that never ran" }] }) } }],
     ...end("tool_use"),
   ]);
   const r = await retryRun({ script: [TOOL_CALL_SSE, EMPTY_TEXT_SSE, rejected, FINDING_CALL_SSE, SSE] }, [], undefined, findingTools);
@@ -659,28 +678,6 @@ test("a tool that runs longer than the stall limit is not cut off", { timeout: 1
   }
 });
 
-test("a stop keeps the progress a running tool streamed", async () => {
-  const r = await retryRun({ script: [TOOL_CALL_SSE] }, [0], async (ctx) => {
-    await new Promise((res) => setTimeout(res, 300));
-    ctx.activeStreams.get("s1")!.controller.abort();
-  }, (writer) => ({
-    lookup: tool({
-      inputSchema: z.object({}),
-      execute: async (_input, { abortSignal, toolCallId }) => {
-        const send = (part: unknown) => writer.write({ type: "data-provider-part", data: { toolCallId, part } });
-        send({ type: "text-delta", delta: "checking " });
-        send({ type: "text-delta", delta: "logs" });
-        send({ type: "query", query: "SELECT 1", results: [] });
-        await new Promise((res) => abortSignal?.addEventListener("abort", res));
-        return "late";
-      },
-    }),
-  }));
-  const toolPart = r.saved.at(-1)!.parts.find((p) => p.type === "tool-lookup") as { state: string; output: unknown };
-  assert.equal(toolPart.state, "output-available");
-  assert.deepEqual(toolPart.output, { parts: [{ type: "text", content: "checking logs" }, { type: "query", query: "SELECT 1", results: [] }] });
-});
-
 test("a connection dropped mid-stream on the last attempt fails the run and shows one error", async () => {
   const r = await retryRun({ script: [DROPPED, DROPPED] }, [0]);
   assert.equal(r.bodies.length, 2);
@@ -764,7 +761,7 @@ async function interruptedSession(db: Db, fields: Partial<typeof schema.chatSess
 }
 
 async function resumeAfterRestart(db: Db, context: Context) {
-  const runs = await settleInterruptedRuns(db);
+  const { interrupted: runs } = await settleInterruptedRuns(db);
   await resumeRuns(context, runs);
   while (context.activeStreams.size > 0) await new Promise((r) => setTimeout(r, 20));
   return { runs, row: await db.select().from(schema.chatSessions).get() };
@@ -815,7 +812,7 @@ test("a restart does not resume a stopped run, an old run or a run without a sco
   const old = Math.floor(Date.now() / 1000) - CONFIG.chatResumeMaxAgeSec - 60;
   await interruptedSession(db, { id: "old", updatedAt: old });
   await interruptedSession(db, { id: "unscoped", runScope: null });
-  assert.deepEqual(await settleInterruptedRuns(db), []);
+  assert.deepEqual((await settleInterruptedRuns(db)).interrupted, []);
   const rows = await db.select().from(schema.chatSessions).all();
   assert.deepEqual(rows.map((r) => r.status), ["done", "done"]);
 });
@@ -891,7 +888,7 @@ test("a restart leaves a session alone when another run already owns it", async 
     await writeAppSetting(db, SETTINGS_KEYS.chatModel, { provider: "anthropic", modelId: "claude-test" });
     const context: Context = { db, providers: new Registry(), activeStreams: new Map() };
     await interruptedSession(db);
-    const runs = await settleInterruptedRuns(db);
+    const { interrupted: runs } = await settleInterruptedRuns(db);
     // A timer or a new firing started the session before the resume reached it.
     context.activeStreams.set("s1", { broadcaster: {} as StreamBroadcaster, controller: new AbortController(), steer: newSteerState() });
     await resumeRuns(context, runs);
@@ -958,7 +955,7 @@ test("the agent hears once when a tenth of its steps remain, and again on its la
   assert.match(notes[99]!, /last step/);
   assert.deepEqual(Array.from({ length: 5 }, (_, i) => budgetNote(i, 5, ["execute_nrql"], true)).flatMap((n, i) => (n ? [i] : [])), [4]);
   assert.equal(budgetNote(4, 5, [], true), undefined, "a turn with no query is not told to report");
-  assert.match(budgetNote(99, 100, ["execute_nrql"], false)!, /in text, or with report_finding/);
+  assert.match(budgetNote(99, 100, ["execute_nrql"], false)!, /with report_finding, or in text when the answer is one fact/);
   assert.doesNotMatch(budgetNote(90, 100, ["execute_nrql"], false)!, /begin_analysis|card/);
 });
 

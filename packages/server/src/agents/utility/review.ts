@@ -1,6 +1,7 @@
 import { generateText, type ModelMessage, type UIMessage } from "ai";
-import { turnStart } from "@tracer-sh/shared";
+import { TOOL_NAMES, turnStart } from "@tracer-sh/shared";
 import { CONFIG } from "../../config.js";
+import { abortAfter } from "../../lib/fetch-retry.js";
 import type { ProviderOptions } from "../../llm/resolve.js";
 import { recordEachCall } from "../../llm/usage.js";
 import type { Db } from "../../db/driver.js";
@@ -8,8 +9,6 @@ import type { Ledger } from "../../tools/analysis-tool.js";
 import type { AlertSummary } from "../../monitors/alert-summary.js";
 import { truncate } from "./summary.js";
 
-const FINDING_TOOL = "report_finding";
-const SUMMARY_TOOL = "report_alert_summary";
 
 const TOOL_INPUT_MAX_CHARS = 2000;
 const TOOL_RESULT_MAX_CHARS = 8000;
@@ -57,7 +56,7 @@ const SUMMARY_INSTRUCTIONS = `You check the alert details that a debugging agent
 
 Check only these fields against the results:
 - Each issue's count and error class come from one result row, or one filtered query, for that endpoint. A count that is the endpoint total, written next to one error class, is a problem. The class is written without its package.
-- On a latency or traffic alert, each line shows the value next to its normal level, both from results. An error count on such a line is a problem.
+- On a latency or traffic alert, each line shows the value next to its normal level, both from results. An error count on such a line is a problem. A latency below its own normal level is not a slowdown.
 - userImpact: for an error line, the failure status code or message from the same result as the count, or exactly "none". For a latency or traffic line it is exactly "none": the value already says it. A success code (200, 204) is not an impact.
 - endpoint is a route or an operation that a result names. The service name and "/" are not endpoints.
 - started and status agree with the times in the results. "back to normal" is a problem when any later point in a result is back over the alert's limit or far above the normal level: the status is the latest point, not the first dip.
@@ -137,14 +136,14 @@ function renderMessage(m: ModelMessage, shown: Set<string> = new Set()): Line[] 
     return m.content.flatMap((p): Line[] => {
       if (p.type === "text") return [{ text: `Agent: ${p.text}` }];
       if (p.type === "tool-call" && shown.has(p.toolCallId)) return [{ text: `Answer shown to the person: ${truncate(p.input, TOOL_INPUT_MAX_CHARS)}`, callId: p.toolCallId }];
-      if (p.type === "tool-call" && p.toolName !== FINDING_TOOL && p.toolName !== SUMMARY_TOOL) return [{ text: `Tool call ${p.toolName}: ${truncate(p.input, TOOL_INPUT_MAX_CHARS)}`, callId: p.toolCallId }];
+      if (p.type === "tool-call" && p.toolName !== TOOL_NAMES.FINDING && p.toolName !== TOOL_NAMES.ALERT_SUMMARY) return [{ text: `Tool call ${p.toolName}: ${truncate(p.input, TOOL_INPUT_MAX_CHARS)}`, callId: p.toolCallId }];
       return [];
     });
   }
   if (m.role === "user") return [{ text: `${isHarnessNote(m) ? "Harness note" : "User"}: ${truncate(userText(m), QUESTION_MAX_CHARS)}` }];
   if (m.role === "tool") {
     return m.content.flatMap((p): Line[] =>
-      p.type === "tool-result" && p.toolName !== FINDING_TOOL && p.toolName !== SUMMARY_TOOL ? [{ text: `Result ${p.toolName}: ${cut(resultText(p.output), TOOL_RESULT_MAX_CHARS)}`, callId: p.toolCallId }] : [],
+      p.type === "tool-result" && p.toolName !== TOOL_NAMES.FINDING && p.toolName !== TOOL_NAMES.ALERT_SUMMARY ? [{ text: `Result ${p.toolName}: ${cut(resultText(p.output), TOOL_RESULT_MAX_CHARS)}`, callId: p.toolCallId }] : [],
     );
   }
   return [];
@@ -170,7 +169,7 @@ export function reviewSummary(
 /** The ids of the cards the person saw: a follow-up refers to these, not to the drafts the review sent back. */
 function shownCards(messages: ModelMessage[]): Set<string> {
   return new Set(messages.flatMap((m) => m.role !== "tool" ? [] : m.content.flatMap((p) =>
-    p.type === "tool-result" && p.toolName === FINDING_TOOL && (p.output as { value?: { recorded?: unknown } }).value?.recorded === true ? [p.toolCallId] : [])));
+    p.type === "tool-result" && p.toolName === TOOL_NAMES.FINDING && (p.output as { value?: { recorded?: unknown } }).value?.recorded === true ? [p.toolCallId] : [])));
 }
 
 /**
@@ -246,11 +245,7 @@ async function review(
   verdict: (text: string) => string | null,
 ): Promise<string | null> {
   if (abortSignal?.aborted) return null;
-  // Not AbortSignal.any or AbortSignal.timeout: they need iOS 17.4 and 16, and the app supports iOS 15.
-  const controller = new AbortController();
-  const onAbort = () => controller.abort(abortSignal!.reason);
-  abortSignal?.addEventListener("abort", onAbort, { once: true });
-  const timer = setTimeout(() => controller.abort(new DOMException("The review timed out", "TimeoutError")), CONFIG.reviewTimeoutMs);
+  const { signal, clear } = abortAfter(abortSignal, CONFIG.reviewTimeoutMs, "The review timed out");
   try {
     const { text } = await generateText({
       model,
@@ -258,7 +253,7 @@ async function review(
       providerOptions: withoutThoughts(providerOptions),
       instructions,
       messages: [{ role: "user", content }],
-      abortSignal: controller.signal,
+      abortSignal: signal,
       onLanguageModelCallEnd: recordEachCall(db, sessionId, "review", modelId),
     });
     return verdict(text);
@@ -266,7 +261,6 @@ async function review(
     if (!abortSignal?.aborted) console.warn("[review] Failed to review:", err);
     return null;
   } finally {
-    clearTimeout(timer);
-    abortSignal?.removeEventListener("abort", onAbort);
+    clear();
   }
 }

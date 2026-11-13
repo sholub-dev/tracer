@@ -117,18 +117,18 @@ export function Debug({ sessionId, isNew, onDeleted }: { sessionId: string; isNe
         collapseCount={liveUpTo}
         analysisOnlyIndex={liveUpTo > 0 ? liveUpTo : undefined}
         onComplete={() => void refetchUntilSettled()}
-        header={
+        header={(running) => (
           <SessionHeader
             chatId={sessionId}
             title={live.title === DEFAULT_SESSION_TITLE ? undefined : live.title}
             meta={sessionMeta(live.kind, liveMsgs, live.updatedAt)}
             cost={costText}
-            streaming
-            onPostMortem={() => {}}
+            streaming={running}
+            postMortemDisabled
             onCopyText={() => copyText(transcriptOf(live.title, liveMsgs), "Copied as text")}
             onDelete={deleteSession}
           />
-        }
+        )}
         beforeMessages={
           liveUpTo > 0 && live.summary ? (
             <SessionSummaryBlock summary={live.summary} summarizedCount={liveUpTo} createdAt={live.summaryCreatedAt} readOnly />
@@ -425,14 +425,7 @@ function DebugChat({ chatId, initialMessages, sources, cost, costText, activePro
       // The row itself stays, hidden while the reply streams, so it does not shift the reply when it appears.
       const idle = !isStreaming && editingIndex === null && !selectingCompact && compacting === null;
       let footer: React.ReactNode = null;
-      if (compacting?.upTo === index + 1) {
-        footer = (
-          <span role="status" className="inline-flex items-center gap-2 rounded-md bg-primary-tint px-2.5 py-1 text-xs text-primary">
-            <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-            Summarizing up to here
-          </span>
-        );
-      } else if (selectingCompact && compacting === null && canCompactAt(msg, index)) {
+      if (selectingCompact && compacting === null && canCompactAt(msg, index)) {
         footer = (
           <Button variant="outline" size="xs" onClick={() => handleCompactRef.current(index)}>
             Summarize up to here

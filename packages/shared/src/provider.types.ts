@@ -1,6 +1,5 @@
 /** Provider runtime status */
 export interface ProviderStatus {
-  name: string;
   type: string;
   connected: boolean;
   lastChecked: string | null;
@@ -20,12 +19,6 @@ export interface TokenUsage {
   reasoningTokens: number;
   cachedInputTokens: number;
   cacheWriteTokens: number;
-}
-
-/** Minimal writer interface for streaming progress events to the client. */
-export interface ChatToolWriter {
-  write(part: Record<string, unknown>): void;
-  sessionId?: string;
 }
 
 /** Memory context passed to provider chat tools. */
@@ -56,20 +49,24 @@ export interface AfterCompleteParams {
   sessionId: string;
 }
 
+/** What a provider receives when chat asks for its tools. */
+export interface ChatToolOptions {
+  memoryContext?: ChatToolMemoryContext;
+  db?: unknown;
+  mode?: ChatMode;
+}
+
 /** Tools and prompt fragments a provider contributes to chat */
 export interface ProviderToolKit {
   tools: Record<string, unknown>;
   systemPrompt?: string;
   promptFragments?: string[];
-  /** Override the main chat step limit (direct mode). */
-  maxSteps?: number;
   /** Fired after the chat session completes (direct mode — e.g. memory agent). */
   afterComplete?: (params: AfterCompleteParams) => void;
 }
 
 /** Provider interface - all providers must implement this */
 export interface IProvider {
-  readonly name: string;
   readonly type: string;
 
   connected: boolean;
@@ -78,17 +75,11 @@ export interface IProvider {
   idle?: boolean;
 
   initialize(): Promise<void>;
-  testConnection(): Promise<boolean>;
   ping(): Promise<PingResult>;
   dispose(): Promise<void>;
 
   executeRawQuery(query: string): Promise<unknown>;
 
   /** Return chat tools and prompt fragments for this provider */
-  getChatTools?(options: {
-    writer?: ChatToolWriter;
-    memoryContext?: ChatToolMemoryContext;
-    db?: unknown;
-    mode?: ChatMode;
-  }): ProviderToolKit;
+  getChatTools?(options: ChatToolOptions): ProviderToolKit;
 }

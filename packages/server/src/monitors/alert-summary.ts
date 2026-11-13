@@ -6,7 +6,7 @@ import { cardRejected, findingFromMessages, turnStart, type Finding } from "@tra
 export const SLACK_RULE = "This text is posted to Slack as written: state facts about this alert only. No ids, no links, no references to other alerts, earlier posts, sessions, investigation steps, past occurrences or tickets.";
 
 export const SEVERITIES = ["high", "medium", "low"] as const;
-export const ALERT_STATES = ["ongoing", "resolved", "unclear"] as const;
+const ALERT_STATES = ["ongoing", "resolved", "unclear"] as const;
 
 export const MONITOR_ROLE = "You own this alert until it needs no more attention. In every run, investigate the cause as in any session: follow the chain into each service, database or host that the connected sources cover, also outside what this alert covers, until a result shows the mechanism or the data stops. On each re-check, look at the whole episode up to now and compare it with your earlier reports, not only the time since the last check. Check that your earlier cause still explains every symptom, and go deeper where it stopped short. Measure each value against its normal level in one query with the same window length (COMPARE WITH where the query language has it), so the two windows always match. Then decide whether to watch it longer. Resolved: the value is back to its normal level (the level before the spike) and stays there while requests keep arriving; no requests is not resolved; say what ended it when the data shows it. Report resolved, and close the issues when your close tools are listed. Handed to a person: the problem is still present and later data cannot add evidence (it is stable, not worsening), or the next link of the cause is outside every connected source. Report ongoing, set no timer, and say why in the answer. Still changing: only then call set_timer, and choose the interval from how fast the value changes and the impact.";
 
@@ -50,7 +50,7 @@ const savedSchema = z.object({
 
 export type AlertSummary = z.infer<typeof savedSchema>;
 
-export type SummaryReview = (summary: AlertSummary, messages: ModelMessage[], abortSignal: AbortSignal | undefined) => Promise<string | null>;
+type SummaryReview = (summary: AlertSummary, messages: ModelMessage[], abortSignal: AbortSignal | undefined) => Promise<string | null>;
 type SummaryOutput = { recorded: true } | { recorded: false; problems: string; next: string };
 
 const NEXT = "The alert details are not posted. For each problem, fix the listed fields from the results: take a count and its error class from one result row, and a status code from the same result as the count. Then call report_alert_summary again with all fields.";
@@ -64,20 +64,6 @@ export const isSlackSummaryTool = (t: unknown) => typeof t === "object" && t !==
 function wasSentBack(messages: ModelMessage[], turnFrom: number): boolean {
   return messages.slice(Math.max(0, turnFrom)).some((m) => m.role === "tool" && m.content.some((p) =>
     p.type === "tool-result" && p.toolName === "report_alert_summary" && cardRejected((p.output as { value?: unknown }).value)));
-}
-
-// A value may carry thousands separators ("1,234ms"), so the comma belongs to the number, not the clause.
-const SLOWER = /(?<![\d.,])(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s?(ms|s)\b[^,;]*?\bvs\.?\s+(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s?(ms|s)\b/i;
-const seconds = (v: string, unit: string) => Number(v.replaceAll(",", "")) / (unit.toLowerCase() === "ms" ? 1000 : 1);
-
-/** Issue lines whose latency sits below its own normal level, so the line shows no slowdown. */
-export function fasterThanNormal(summary: Pick<AlertSummary, "issues">): string[] {
-  return (summary.issues ?? []).flatMap((i) => {
-    const m = SLOWER.exec(i.errors ?? "");
-    return m && seconds(m[1], m[2]) < seconds(m[3], m[4])
-      ? [`issues: "${i.errors}" shows ${i.service} faster than its normal level. Give the measure that is worse than normal, from a result that compares the same window length, or write "unknown".`]
-      : [];
-  });
 }
 
 // Read back from the saved tool call: failed attempts are never saved, and it goes with the session.
@@ -97,7 +83,7 @@ export function reportAlertSummaryTool({ slack }: { slack: boolean }, review?: S
     execute: async (summary, options): Promise<SummaryOutput> => {
       if (!slack || !review || final() || wasSentBack(options.messages, turnFrom())) return { recorded: true };
       const reviewed = (await review(summary, options.messages, options.abortSignal))?.trim();
-      const problems = [...fasterThanNormal(summary), ...(reviewed && !/^\W*OK\W*$/i.test(reviewed) ? [reviewed] : [])].join("\n");
+      const problems = reviewed && !/^\W*OK\W*$/i.test(reviewed) ? reviewed : "";
       return problems ? { recorded: false, problems, next: NEXT } : { recorded: true };
     },
   });
@@ -149,7 +135,6 @@ export function summaryFromMessages(messages: UIMessage[]): AlertSummary | null 
 export function latestRunSummary(messages: UIMessage[]): AlertSummary | null {
   return summaryFromMessages(messages.slice(turnStart(messages)));
 }
-
 
 /** The finding that goes with the alert details: a finding from a later follow-up turn must not replace it. */
 export function alertFindingFromMessages(messages: UIMessage[]): Finding | null {

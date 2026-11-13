@@ -8,8 +8,8 @@ import * as schema from "../db/schema.js";
 import type { Db } from "../db/driver.js";
 import { evaluateCondition, evaluateGroups, extractGroups, parseCondition, sumGroups } from "./condition.js";
 import { byRelevance, classifyGroups, outcomeSummary, readPastSessionTool } from "./repeats.js";
-import { isFailedWindow, nextWindow, openWindow } from "./scheduler.js";
-import { validateMonitor } from "./validate.js";
+import { nextWindow, openWindow } from "./window.js";
+import { checkDraft, validateMonitor } from "./validate.js";
 import { summaryFromMessages } from "./alert-summary.js";
 import type { UIMessage } from "ai";
 import { saveMonitor, setMonitorToggles } from "./store.js";
@@ -230,7 +230,6 @@ test("nextWindow ends windows on clock boundaries, runs them after the lag, and 
   assert.deepEqual(nextWindow(t(10, 44), 300, t(10, 46, 2), lag), { start: t(10, 40), end: t(10, 45) });
   assert.equal(nextWindow(t(10, 46), 300, t(10, 46, 2), lag), null);
   assert.equal(nextWindow(t(10, 45), 300, t(10, 46, 2), lag), null);
-  // After sleep, one window covers the whole gap.
   // A long sleep is not summed into one check: the window covers at most two periods.
   assert.deepEqual(nextWindow(t(10, 45), 300, t(12, 1), lag), { start: t(11, 50), end: t(12, 0) });
   assert.deepEqual(nextWindow(t(11, 55), 300, t(12, 1), lag), { start: t(11, 55), end: t(12, 0) });
@@ -253,26 +252,18 @@ test("a catch-up window of a monitor slower than the catch-up limit still spans 
   assert.deepEqual(openWindow(now - 60 - 2 * period, period, now, 60, true), { start: now - 60 - period, end: now - 60 });
 });
 
-test("isFailedWindow skips only the window end that failed", () => {
-  const failed = new Map([["m1", 1000]]);
-  assert.equal(isFailedWindow(failed, "m1", 1000), true);
-  assert.equal(isFailedWindow(failed, "m1", 1300), false);
-  assert.equal(isFailedWindow(failed, "m2", 1000), false);
-});
-
-test("validateMonitor checks provider-specific rules", async () => {
-  const registry = {} as ProviderRegistry;
+test("checkDraft checks provider-specific rules", () => {
   const hog = "SELECT count() AS count FROM events WHERE timestamp >= toDateTime({{SINCE}}) AND timestamp < toDateTime({{UNTIL}})";
   const base = { query: hog, condition: "> 0", frequencySeconds: 300 };
-  const err = async (d: Parameters<typeof validateMonitor>[1]) => {
-    const r = await validateMonitor(registry, d);
+  const err = (d: Parameters<typeof checkDraft>[0]) => {
+    const r = checkDraft(d);
     return "error" in r ? r.error : null;
   };
-  assert.match((await err({ ...base, provider: "gcp" }))!, /Unsupported monitor provider/);
-  assert.match((await err({ ...base, provider: "posthog" }))!, /chartQuery/);
-  assert.match((await err({ ...base, provider: "posthog", chartQuery: "SELECT 1" }))!, /\{\{SINCE\}\}/);
-  assert.equal(await err({ ...base, provider: "posthog", chartQuery: hog }), null);
-  assert.match((await err({ ...base, provider: "newrelic", query: "SELECT count(*) FROM Log SINCE {{SINCE}} UNTIL {{UNTIL}} TIMESERIES" }))!, /TIMESERIES/);
+  assert.match((err({ ...base, provider: "gcp" }))!, /Unsupported monitor provider/);
+  assert.match((err({ ...base, provider: "posthog" }))!, /chartQuery/);
+  assert.match((err({ ...base, provider: "posthog", chartQuery: "SELECT 1" }))!, /\{\{SINCE\}\}/);
+  assert.equal(err({ ...base, provider: "posthog", chartQuery: hog }), null);
+  assert.match((err({ ...base, provider: "newrelic", query: "SELECT count(*) FROM Log SINCE {{SINCE}} UNTIL {{UNTIL}} TIMESERIES" }))!, /TIMESERIES/);
 });
 
 test("validateMonitor preview follows the scheduler rule", async () => {
@@ -284,11 +275,11 @@ test("validateMonitor preview follows the scheduler rule", async () => {
   const r = await validateMonitor(registry, {
     provider: "newrelic", query: "SELECT apdex(duration) FROM Transaction FACET appName SINCE {{SINCE}} UNTIL {{UNTIL}}",
     condition: "< 0.8", frequencySeconds: 300,
-  }, { runQuery: true });
+  });
   assert.ok(!("error" in r));
   assert.equal(r.wouldTrigger, true);
   assert.equal(r.sampleValue, 0.5);
-  assert.deepEqual(r.groups?.map((g) => g.key), ["a"]);
+  assert.deepEqual(r.groups.map((g) => g.key), ["a"]);
 });
 
 test("setMonitorToggles changes only the given toggles and resets the window when Run turns on", async () => {

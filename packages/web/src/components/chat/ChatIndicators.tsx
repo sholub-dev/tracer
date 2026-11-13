@@ -1,12 +1,15 @@
 import { ArrowDown } from "lucide-react";
 import { IconButton } from "../common/IconButton";
 
-/** The one animated element at the tail of a running reply; the slot keeps its height when the label comes and goes. */
-export function ActivityLine({ label }: { label: string | null }) {
+const DOT_DELAYS = ["0ms", "200ms", "400ms"];
+
+/** The one animated element at the tail of a running reply. It stays mounted for the whole run, so its animation never restarts. */
+export function ActivityLine({ active = true }: { active?: boolean }) {
   return (
-    <p role="status" className="-mt-4 h-[18px] text-[13px]/[18px] text-muted-foreground">
-      {label && <span className="animate-shimmer">{label}</span>}
-    </p>
+    <div role="status" className="-mt-4 flex h-[18px] items-center gap-1">
+      {active && <span className="sr-only">Working</span>}
+      {active && DOT_DELAYS.map((delay) => <span key={delay} className="size-1.5 animate-pulse-dot rounded-full bg-muted-foreground" style={{ animationDelay: delay }} />)}
+    </div>
   );
 }
 

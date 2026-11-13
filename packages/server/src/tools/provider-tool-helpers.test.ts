@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isEmptyQuery, isFailedQuery } from "../agents/chat/sub-agent.js";
+import { isEmptyQuery, isFailedQuery } from "../agents/chat/query-records.js";
 import { buildAfterComplete, toolModelOutput } from "./provider-tool-helpers.js";
 
 const params = { sessionId: "s", lastUserMessage: "q", lastAssistantText: "a" } as never;

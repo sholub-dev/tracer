@@ -51,7 +51,6 @@ export const MonitorChart = memo(function MonitorChart({ provider, query: monito
         height={CHART_HEIGHT}
         refreshKey={refreshKey}
         threshold={threshold}
-        growWithLegend
         transform={transform}
       />
     </div>

@@ -26,7 +26,6 @@ interface SearchableSelectProps {
   fitContent?: boolean;
   disabled?: boolean;
   id?: string;
-  className?: string;
 }
 
 function useStarred(storageKey: string): [Set<string>, (value: string) => void] {
@@ -128,7 +127,7 @@ export function SearchableOptions({ options, value, onSelect, storageKey, loadin
   );
 }
 
-export function SearchableSelect({ options, value, onChange, placeholder = "Select", storageKey, fitContent, disabled, id, className }: SearchableSelectProps) {
+export function SearchableSelect({ options, value, onChange, placeholder = "Select", storageKey, fitContent, disabled, id }: SearchableSelectProps) {
   const [open, setOpen] = useState(false);
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -138,7 +137,7 @@ export function SearchableSelect({ options, value, onChange, placeholder = "Sele
           type="button"
           variant="outline"
           disabled={disabled}
-          className={cn("w-full justify-between bg-card px-2.5 font-normal", className)}
+          className={"w-full justify-between bg-card px-2.5 font-normal"}
         >
           <span className={cn("truncate", !value && "text-muted-foreground")}>
             {selectedLabel(options, value, placeholder)}

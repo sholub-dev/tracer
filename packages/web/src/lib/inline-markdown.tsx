@@ -11,7 +11,7 @@ function figures(text: string, at: number): ReactNode[] {
   let last = 0;
   for (const m of text.matchAll(FIGURE)) {
     if (m.index > last) out.push(text.slice(last, m.index));
-    out.push(<strong key={`${at}-${m.index}`} className="font-semibold text-foreground tabular-nums">{m[0]}</strong>);
+    out.push(<strong key={`${at}-${m.index}`} className="font-semibold text-foreground">{m[0]}</strong>);
     last = m.index + m[0].length;
   }
   out.push(text.slice(last));

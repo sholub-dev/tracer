@@ -165,7 +165,7 @@ export const MonitorCard = memo(function MonitorCard({
               {monitor.name}
             </h2>
             {monitor.unreadCount > 0 && (
-              <Badge aria-label={`${monitor.unreadCount} unread`} className="min-w-5 rounded-full px-1.5 tabular-nums">
+              <Badge aria-label={`${monitor.unreadCount} unread`} className="min-w-5 rounded-full px-1.5">
                 {monitor.unreadCount}
               </Badge>
             )}
@@ -205,7 +205,7 @@ export const MonitorCard = memo(function MonitorCard({
 
         <p className="flex min-w-0 items-start gap-1.5 text-[13px] leading-[18px] text-ink-2">
           <span className="flex h-[18px] items-center"><ProviderDot provider={monitor.provider} /></span>
-          <span className="tabular-nums">{provider} · {condition} · {frequency} · {ranAt}</span>
+          <span>{provider} · {condition} · {frequency} · {ranAt}</span>
         </p>
         {monitor.lastError && (
           <p className="flex items-start gap-1.5 text-[13px] leading-[18px] text-warning">

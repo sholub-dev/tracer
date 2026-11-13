@@ -5,10 +5,9 @@ import { cn } from "@/lib/utils";
 import { formatClock, formatDateTime, formatShortDate } from "../../lib/format";
 import { coerceNumeric, expandObjectColumns, mainMemberColumns } from "../../lib/result-utils";
 import { splitSeriesLabels } from "../../lib/series-labels";
+import { LEGEND_RESERVE } from "./legend-reserve";
 
 const SKIP_KEYS = new Set(["beginTimeSeconds", "endTimeSeconds", "inspectedCount", "facet", "comparison"]);
-// Matches the legend reserve QueryChart adds for growWithLegend.
-const LEGEND_RESERVE = 36;
 const MINUTE = 60;
 const DAY = 86_400;
 
@@ -230,7 +229,7 @@ function ChartFrame({ config, containerSize, plotHeight, legendExtra = 0, label,
       config={config}
       role="img"
       aria-label={label}
-      className={cn("aspect-auto w-full font-sans [&_.recharts-cartesian-axis-tick_text]:tabular-nums [&_[tabindex='-1']]:outline-hidden", !containerSize && "my-2")}
+      className={cn("aspect-auto w-full font-sans [&_[tabindex='-1']]:outline-hidden", !containerSize && "my-2")}
       style={{ height }}
       // A finger that drags across the chart is scrolling the page; a tap still opens the tooltip.
       onTouchMoveCapture={(e) => e.stopPropagation()}
@@ -360,7 +359,7 @@ function TimeseriesPlot({ series, containerSize, plotHeight, threshold, dualAxis
               formatter={(value, name) => (
                 <div className="flex w-full items-center justify-between gap-4">
                   <span className="text-muted-foreground">{config[String(name)]?.label}</span>
-                  <span className="font-medium text-foreground tabular-nums">{formatYAxis(value)}</span>
+                  <span className="font-medium text-foreground">{formatYAxis(value)}</span>
                 </div>
               )}
             />

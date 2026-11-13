@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { UIMessage } from "ai";
-import { alertFindingFromMessages, fasterThanNormal, latestRunSummary, dismissalFromMessages, reportAlertSummaryTool, summaryFromMessages } from "./alert-summary.js";
+import { alertFindingFromMessages, latestRunSummary, dismissalFromMessages, reportAlertSummaryTool, summaryFromMessages } from "./alert-summary.js";
 
 const valid = {
   severity: "low", policy: "p", started: "s", status: "stopped",
@@ -86,19 +86,10 @@ test("a summary the review sent back is never read as the report", () => {
   assert.equal(alertFindingFromMessages([{ id: "", role: "assistant", parts: [rejected] }] as unknown as UIMessage[]), null);
 });
 
-test("an issue line with latency below its normal level is flagged", () => {
-  const line = (errors: string) => fasterThanNormal({ issues: [{ service: "risk", endpoint: "/score", errors, userImpact: "none" }] } as never);
-  assert.equal(line("0.76s avg vs 0.84s normal").length, 1);
-  assert.equal(line("760ms avg vs 0.68s normal").length, 0);
-  assert.equal(line("42 × TimeoutException").length, 0);
-});
-
-test("a latency with thousands separators is read whole, and the last step records the summary", async () => {
-  const line = (errors: string) => fasterThanNormal({ issues: [{ service: "risk", endpoint: "/score", errors, userImpact: "none" }] } as never).length;
-  assert.equal(line("1,234ms avg vs 800ms normal"), 0);
-  assert.equal(line("800ms avg vs 1,234ms normal"), 1);
-  const faster = { ...valid, issues: [{ service: "risk", endpoint: "/score", errors: "0.76s avg vs 0.84s normal", userImpact: "none" }], notify: false };
-  const t = (final: boolean) => reportAlertSummaryTool({ slack: true }, async () => null, () => 0, () => final) as any;
-  assert.equal((await t(false).execute(faster, { messages: [], toolCallId: "s" })).recorded, false);
-  assert.deepEqual(await t(true).execute(faster, { messages: [], toolCallId: "s" }), { recorded: true });
+test("a summary the review finds a problem in is sent back, and the last step records it", async () => {
+  const t = (final: boolean) => reportAlertSummaryTool({ slack: true }, async () => "issues: the value is below its normal level.", () => 0, () => final) as any;
+  const sentBack = await t(false).execute(valid, { messages: [], toolCallId: "s" });
+  assert.equal(sentBack.recorded, false);
+  assert.equal(sentBack.problems, "issues: the value is below its normal level.");
+  assert.deepEqual(await t(true).execute(valid, { messages: [], toolCallId: "s" }), { recorded: true });
 });

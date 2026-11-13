@@ -2,17 +2,17 @@ import type { ChatToolMemoryContext as MemoryContext } from "@tracer-sh/shared";
 import { pickNotes } from "../../tools/memory-notes.js";
 
 /** A query and its results, collected by a provider's execute tool for telemetry/memory. */
-export interface SubAgentQuery {
+export interface ProviderQuery {
   query: string;
   results: unknown;
 }
 
 /** True when the provider returned an error instead of rows. */
-export function isFailedQuery(q: SubAgentQuery): boolean {
+export function isFailedQuery(q: ProviderQuery): boolean {
   return !!q.results && typeof q.results === "object" && "error" in (q.results as Record<string, unknown>);
 }
 
-export function isEmptyQuery(q: SubAgentQuery): boolean {
+export function isEmptyQuery(q: ProviderQuery): boolean {
   return Array.isArray(q.results) && q.results.length === 0;
 }
 
@@ -22,7 +22,6 @@ export const MEMORY_SECTION_NAME = "Corrections from Previous Sessions";
 /**
  * Inject memory instructions into a system prompt, placed after the first section
  * (identity/role) to avoid the "lost in the middle" problem with long prompts.
- * Used by direct-mode provider tools.
  */
 export function injectMemories(prompt: string, memoryContext?: MemoryContext): string {
   if (!memoryContext) return prompt;

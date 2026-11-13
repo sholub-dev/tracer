@@ -1,13 +1,10 @@
-/**
- * MCP result helpers shared by MCP-backed provider direct tools (e.g. GCP).
- */
+/** MCP result helpers for the tools of MCP-backed providers (GCP). */
 
 /**
- * Extract displayable content from an MCP tool result.
- * MCP tools return { content: [{type:"text", text:"..."}], isError: boolean }.
- * This unwraps the envelope so UI can render plain text or structured JSON.
+ * Unwraps an MCP tool result, which is { content: [{type:"text", text:"..."}], isError }.
+ * `value` is the parsed JSON of the text, the text itself or the whole result; `text` is what to search for markers.
  */
-export function extractMcpContent(result: unknown): unknown {
+export function extractMcpContent(result: unknown): { value: unknown; text: string } {
   if (result && typeof result === "object" && !Array.isArray(result)) {
     const r = result as Record<string, unknown>;
     if (Array.isArray(r.content)) {
@@ -15,24 +12,29 @@ export function extractMcpContent(result: unknown): unknown {
         .filter((c) => c.type === "text" && typeof c.text === "string")
         .map((c) => c.text as string);
       if (texts.length > 0) {
-        const combined = texts.join("\n").trim();
+        const text = texts.join("\n").trim();
         try {
-          return JSON.parse(combined);
+          return { value: JSON.parse(text), text };
         } catch {
-          return combined;
+          return { value: text, text };
         }
       }
     }
   }
-  return result;
+  return { value: result, text: JSON.stringify(result) ?? "" };
 }
 
-/** Detect GCP server-side truncation markers in MCP results. */
-export function detectTruncation(normalized: unknown): boolean {
-  const str = typeof normalized === "string"
-    ? normalized
-    : JSON.stringify(normalized);
-  return str.includes("truncated due to") && str.includes("character limit");
+/** The message of a failed call, or undefined when it succeeded. The MCP server reports API failures as a `{"error":{name,message,stack}}` text without isError. */
+export function mcpFailure(result: unknown, { value, text }: { value: unknown; text: string }): string | undefined {
+  const flagged = (result as { isError?: boolean } | null)?.isError === true;
+  const err = value && typeof value === "object" && !Array.isArray(value) ? (value as { error?: unknown }).error : undefined;
+  if (!flagged && !err) return undefined;
+  if (typeof err === "string") return err;
+  if (err && typeof err === "object") {
+    const message = (err as { message?: unknown }).message;
+    return typeof message === "string" ? message : JSON.stringify(err);
+  }
+  return text;
 }
 
 /** Detect transport-level errors that indicate the MCP subprocess has died. */

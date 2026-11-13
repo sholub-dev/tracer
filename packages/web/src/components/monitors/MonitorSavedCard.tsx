@@ -51,7 +51,7 @@ export const MonitorSavedCard = memo(function MonitorSavedCard({ output, fresh }
         <span title={output.name} className="block truncate text-sm font-medium">
           {output.deleted ? "Deleted" : output.created ? "Created" : "Updated"} "{output.name}"
         </span>
-        {facts.length > 0 && <span className="block truncate text-xs text-muted-foreground tabular-nums">{facts.join(" · ")}</span>}
+        {facts.length > 0 && <span className="block truncate text-xs text-muted-foreground">{facts.join(" · ")}</span>}
       </span>
       {output.wouldTrigger !== undefined && (
         <Badge className={cn("rounded-md", output.wouldTrigger ? "bg-destructive-tint text-destructive" : "bg-muted text-ink-2")}>

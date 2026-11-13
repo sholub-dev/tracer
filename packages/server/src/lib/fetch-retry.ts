@@ -28,46 +28,82 @@ function wait(ms: number, signal?: AbortSignal | null): Promise<void> {
 }
 
 /**
+ * A signal that follows `caller` and aborts after `ms`, plus a promise that rejects on either abort.
+ * Racing it covers a caller that ignores the signal: the iOS native HTTP layer waits up to 600 s.
+ * Not AbortSignal.any: it needs iOS 17.4, and the app supports iOS 15. `clear` removes the timer and the caller link.
+ */
+export function abortAfter(caller: AbortSignal | null | undefined, ms: number | undefined, message: string, onTimeout?: () => void) {
+  const controller = new AbortController();
+  const stopped = new Promise<never>((_, reject) => {
+    controller.signal.addEventListener("abort", () => reject(controller.signal.reason), { once: true });
+  });
+  // After a response, the abort only stops the body read; nothing awaits this rejection then.
+  stopped.catch(() => {});
+  const onCallerAbort = () => controller.abort(caller!.reason);
+  if (caller?.aborted) onCallerAbort();
+  else caller?.addEventListener("abort", onCallerAbort, { once: true });
+  const timer = ms === undefined ? undefined : setTimeout(() => {
+    onTimeout?.();
+    controller.abort(new DOMException(message, "TimeoutError"));
+  }, ms);
+  return {
+    signal: controller.signal,
+    stopped,
+    clear: () => {
+      clearTimeout(timer);
+      caller?.removeEventListener("abort", onCallerAbort);
+    },
+  };
+}
+
+/** A response keeps its timer and caller link: they also limit reading the body, until `clear`. */
+async function fetchOnce(input: string | URL, init: RequestInit, options: RetryOptions): Promise<{ res: Response; clear: () => void }> {
+  const delays = options.retry === false ? [] : CONFIG.fetchRetryDelaysMs;
+  const caller = init.signal;
+  for (let attempt = 0; ; attempt++) {
+    const link = abortAfter(caller, options.timeoutMs, "The request timed out");
+    let res: Response | undefined;
+    try {
+      res = await Promise.race([fetch(input, { ...init, signal: link.signal }), link.stopped]);
+    } catch (err) {
+      link.clear();
+      if (caller?.aborted || attempt >= delays.length) throw err;
+    }
+    if (res && (!RETRY_STATUSES.has(res.status) || attempt >= delays.length)) return { res, clear: link.clear };
+    if (res) {
+      link.clear();
+      await res.body?.cancel().catch(() => {});
+    }
+    await wait(retryDelay(res, delays[attempt]), caller);
+  }
+}
+
+/**
  * fetch that repeats the request after a network error or a 408/429/5xx response.
  * Returns the last response, or throws the last error. A caller abort stops at once.
  * Any rejection that is not a caller abort counts as transient: the native HTTP layer on iOS uses its own error shapes.
  */
 export async function fetchWithRetry(input: string | URL, init: RequestInit = {}, options: RetryOptions = {}): Promise<Response> {
-  const delays = options.retry === false ? [] : CONFIG.fetchRetryDelaysMs;
-  const caller = init.signal;
-  for (let attempt = 0; ; attempt++) {
-    // Not AbortSignal.any: it needs iOS 17.4, and the app supports iOS 15.
-    const controller = new AbortController();
-    const onCallerAbort = () => controller.abort(caller!.reason);
-    if (caller?.aborted) onCallerAbort();
-    else caller?.addEventListener("abort", onCallerAbort, { once: true });
-    // The iOS native HTTP layer ignores the signal and waits up to 600 s, so the timer also rejects on its own.
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timedOut = options.timeoutMs === undefined ? undefined : new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        const err = new DOMException("The request timed out", "TimeoutError");
-        controller.abort(err);
-        reject(err);
-      }, options.timeoutMs);
+  return (await fetchOnce(input, init, options)).res;
+}
+
+export interface FetchedText {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  text: string;
+}
+
+/** fetchWithRetry that reads the body, then ends the timer and the caller link. A failed read throws only for an ok response. */
+export async function fetchText(input: string | URL, init: RequestInit = {}, options: RetryOptions = {}): Promise<FetchedText> {
+  const { res, clear } = await fetchOnce(input, init, options);
+  try {
+    const text = await res.text().catch((err: unknown) => {
+      if (res.ok) throw err;
+      return "";
     });
-    // After a response, the timer only stops the body read; nothing awaits this rejection then.
-    timedOut?.catch(() => {});
-    let res: Response | undefined;
-    try {
-      const request = fetch(input, { ...init, signal: controller.signal });
-      res = await (timedOut ? Promise.race([request, timedOut]) : request);
-    } catch (err) {
-      clearTimeout(timer);
-      caller?.removeEventListener("abort", onCallerAbort);
-      if (caller?.aborted || attempt >= delays.length) throw err;
-    }
-    // A response keeps its timer and the caller link: they also limit reading the body.
-    if (res && (!RETRY_STATUSES.has(res.status) || attempt >= delays.length)) return res;
-    if (res) {
-      clearTimeout(timer);
-      caller?.removeEventListener("abort", onCallerAbort);
-      await res.body?.cancel().catch(() => {});
-    }
-    await wait(retryDelay(res, delays[attempt]), caller);
+    return { ok: res.ok, status: res.status, statusText: res.statusText, text };
+  } finally {
+    clear();
   }
 }

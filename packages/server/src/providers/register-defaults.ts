@@ -1,13 +1,8 @@
-/**
- * Registers the built-in provider factories (New Relic, PostHog).
- * Extracted from index.ts for separation of concerns.
- */
-
 import type { ProviderRegistry } from "./registry.js";
 import { NewRelicProvider } from "./newrelic/newrelic.provider.js";
 import { PosthogProvider } from "./posthog/posthog.provider.js";
 
-/** `registerPlatformProviders` runs between New Relic and PostHog to keep the Settings list order. */
+/** Registers the New Relic and PostHog factories; `registerPlatformProviders` runs between them to keep the Settings list order. */
 export function registerDefaultProviders(
   providers: ProviderRegistry,
   registerPlatformProviders?: (providers: ProviderRegistry) => void,

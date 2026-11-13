@@ -1,11 +1,9 @@
 // ── Deterministic NRQL → CSV formatter (token-efficient for LLM) ──
 
+import { MAX_ARRAY_ITEMS, MAX_RESULT_CHARS, clipCell, csvBlock } from "../../lib/result-format.js";
+
 type Row = Record<string, unknown>;
 
-/** Text budget of one result, in characters. */
-const MAX_RESULT_CHARS = 30000;
-const MAX_CELL_CHARS = 1000;
-const MAX_ARRAY_ITEMS = 50;
 /** Points of a timeseries shown in full; a longer one is thinned. */
 const MAX_SERIES_POINTS = 400;
 /** What NRQL returns when a query has no LIMIT clause. */
@@ -22,10 +20,6 @@ function fmtNum(v: number): string {
   return s;
 }
 
-function cap(s: string): string {
-  return s.length > MAX_CELL_CHARS ? `${s.slice(0, MAX_CELL_CHARS)}… (+${s.length - MAX_CELL_CHARS} chars)` : s;
-}
-
 function fmtArray(a: unknown[], sep: string): string {
   const items = a.slice(0, MAX_ARRAY_ITEMS).map((x) => (x != null && typeof x === "object" ? JSON.stringify(x) : fmtVal(x)));
   return items.join(sep) + (a.length > MAX_ARRAY_ITEMS ? `${sep}… +${a.length - MAX_ARRAY_ITEMS} more` : "");
@@ -35,43 +29,15 @@ function fmtVal(v: unknown): string {
   if (v === undefined) return "";
   if (v === null) return "null";
   if (typeof v === "number") return fmtNum(v);
-  if (Array.isArray(v)) return cap(fmtArray(v, "; "));
-  if (typeof v === "object") return cap(JSON.stringify(v));
-  return cap(String(v));
+  if (Array.isArray(v)) return clipCell(fmtArray(v, "; "));
+  if (typeof v === "object") return clipCell(JSON.stringify(v));
+  return clipCell(String(v));
 }
 
-/** Escape a value for CSV: quote if it contains commas, quotes, or newlines. */
-function csvEscape(val: string): string {
-  if (val.includes(",") || val.includes('"') || val.includes("\n")) {
-    return `"${val.replace(/"/g, '""')}"`;
-  }
-  return val;
-}
+const cutNote = (shown: number, total: number) =>
+  `\n(Showing ${shown} of ${total} rows: the rest do not fit the ${MAX_RESULT_CHARS}-character result cap. To see them, narrow the WHERE clause, the window or the LIMIT, or aggregate.)`;
 
-/** Whole rows from the top while the text fits the budget; a note says what was cut. A string entry is a plain line (a section or date heading) and is not a row. */
-function csvBlock(headers: string[], tableRows: (string[] | string)[], uncut = false): string {
-  const hdr = headers.map(csvEscape).join(",");
-  const lines = tableRows.map((r) => (typeof r === "string" ? r : r.map(csvEscape).join(",")));
-  const isRow = (i: number) => typeof tableRows[i] !== "string";
-  const totalRows = tableRows.filter((r) => typeof r !== "string").length;
-  let size = hdr.length;
-  let shown = 0;
-  let rowsShown = 0;
-  while (shown < lines.length && (uncut || rowsShown === 0 || size + lines[shown].length + 1 <= MAX_RESULT_CHARS)) {
-    size += lines[shown].length + 1;
-    if (isRow(shown)) rowsShown++;
-    shown++;
-  }
-  while (shown > 0 && !isRow(shown - 1)) shown--;
-  if (!uncut && rowsShown === 1 && size > MAX_RESULT_CHARS) {
-    const head = lines.slice(0, shown - 1).map((l) => `${l}\n`).join("");
-    return `${hdr}\n${head}${lines[shown - 1].slice(0, Math.max(0, MAX_RESULT_CHARS - hdr.length - head.length - 1))}\n(Row cut at ${MAX_RESULT_CHARS} characters; select fewer columns.)`;
-  }
-  const note = rowsShown < totalRows
-    ? `\n(Showing ${rowsShown} of ${totalRows} rows: the rest do not fit the ${MAX_RESULT_CHARS}-character result cap. To see them, narrow the WHERE clause, the window or the LIMIT, or aggregate.)`
-    : "";
-  return `${hdr}\n${lines.slice(0, shown).join("\n")}${note}`;
-}
+const nrCsv = (headers: string[], rows: (string[] | string | (() => string[]))[], uncut = false) => csvBlock(headers, rows, { cut: cutNote, uncut });
 
 /** The query without single-quoted strings, so clause words inside text do not match. */
 export function stripStrings(query: string | undefined): string | undefined {
@@ -119,7 +85,7 @@ function shapeOf(rows: Row[], query: string | undefined): Shape {
 }
 
 function hiddenKeys(s: Shape): Set<string> {
-  return new Set(["inspectedCount", ...(s.timeseries ? ["beginTimeSeconds", "endTimeSeconds"] : [])]);
+  return new Set(s.timeseries ? ["beginTimeSeconds", "endTimeSeconds"] : []);
 }
 
 function visibleKeys(rows: Row[], s: Shape): string[] {
@@ -313,16 +279,16 @@ export function formatNrqlCsv(rows: Row[], query?: string): string {
     }
     if (faceted) note += limitNote(new Set(rows.map(facetValue)).size, query, DEFAULT_FACET_LIMIT);
     const { body, legend } = seriesTable(displayRows, keys, faceted ? facetLabel(rows, shape, query) : undefined, displayRows.length === rows.length);
-    return csvBlock(["Bucket start", ...keys], body) + legend + note;
+    return nrCsv(["Bucket start", ...keys], body) + legend + note;
   }
 
   // ── Histogram ──
   if (rows.length === 1 && Object.keys(sample).some((k) => k.startsWith("histogram."))) {
     const buckets = sample[Object.keys(sample).find((k) => k.startsWith("histogram."))!];
     if (Array.isArray(buckets) && buckets.length > 0) {
-      if (buckets.every((b) => typeof b === "number")) return csvBlock(["Bucket index", "Count"], buckets.map((b, i) => [String(i), fmtVal(b)]));
+      if (buckets.every((b) => typeof b === "number")) return nrCsv(["Bucket index", "Count"], buckets.map((b, i) => [String(i), fmtVal(b)]));
       if (buckets.every((b) => b != null && typeof b === "object")) {
-        return csvBlock(["Bucket", "Count"], buckets.map((b: any) => [fmtVal(b.bucketStart ?? b.start), fmtVal(b.count)]));
+        return nrCsv(["Bucket", "Count"], buckets.map((b: any) => [fmtVal(b.bucketStart ?? b.start), fmtVal(b.count)]));
       }
     }
   }
@@ -353,7 +319,7 @@ export function formatNrqlCsv(rows: Row[], query?: string): string {
         ...keys.flatMap((k) => periods.map((p) => fmtVal(byPeriod.get(p)?.[k]))),
         ...changed.map((k) => change(byPeriod.get("current")?.[k], byPeriod.get("previous")?.[k])),
       ]);
-      return csvBlock(headers, body, uncut) + limitNote(grouped.size, query, DEFAULT_FACET_LIMIT);
+      return nrCsv(headers, body, uncut) + limitNote(grouped.size, query, DEFAULT_FACET_LIMIT);
     }
 
     // Scalar comparison (no facet) → inline
@@ -390,25 +356,13 @@ export function formatNrqlCsv(rows: Row[], query?: string): string {
   if (shape.faceted) {
     const keys = visibleKeys(rows, shape);
     const headers = [facetLabel(rows, shape, query), ...keys];
-    const body = rows.map((r) => [facetValue(r), ...keys.map((k) => fmtVal(r[k]))]);
-    return csvBlock(headers, body, uncut) + limitNote(rows.length, query, DEFAULT_FACET_LIMIT);
+    const body = rows.map((r) => () => [facetValue(r), ...keys.map((k) => fmtVal(r[k]))]);
+    return nrCsv(headers, body, uncut) + limitNote(rows.length, query, DEFAULT_FACET_LIMIT);
   }
 
   // ── Raw events (fallback) ──
   const keys = visibleKeys(rows, shape);
   const headers = keys.length > 0 ? keys : unionKeys(rows);
-  const body = rows.map((r) => headers.map((k) => fmtVal(r[k])));
-  return csvBlock(headers, body, uncut) + limitNote(rows.length, query, DEFAULT_EVENT_LIMIT);
-}
-
-/** Strip NerdGraph internal metadata from rows before sending to UI. */
-export function sanitizeNrqlRows(rows: Record<string, unknown>[]): Record<string, unknown>[] {
-  return rows.map((row) => {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(row)) {
-      if (k === "inspectedCount") continue;
-      out[k] = v;
-    }
-    return out;
-  });
+  const body = rows.map((r) => () => headers.map((k) => fmtVal(r[k])));
+  return nrCsv(headers, body, uncut) + limitNote(rows.length, query, DEFAULT_EVENT_LIMIT);
 }

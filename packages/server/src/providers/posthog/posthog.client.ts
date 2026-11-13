@@ -1,4 +1,4 @@
-import { fetchWithRetry } from "../../lib/fetch-retry.js";
+import { fetchText } from "../../lib/fetch-retry.js";
 import type { HogQLQueryResponse } from "./types.js";
 
 const DEFAULT_HOST = "https://us.posthog.com";
@@ -32,8 +32,10 @@ export class PosthogClient {
     // The key goes to this host and the project id lands in the URL path, so both need a strict shape.
     if (!isPosthogHost(this.host)) throw new Error("PostHog host must be an https URL");
     if (!isPosthogProjectId(this.projectId)) throw new Error("PostHog project ID must be a number");
-    const response = await fetchWithRetry(`${this.host}/api/projects/${this.projectId}/query/`, {
+    const response = await fetchText(`${this.host}/api/projects/${this.projectId}/query/`, {
       method: "POST",
+      // The key header must not follow a redirect to another host.
+      redirect: "error",
       signal: options?.signal,
       headers: {
         "Content-Type": "application/json",
@@ -55,7 +57,7 @@ export class PosthogClient {
       // failures produce a clear, actionable message (feeds the auth-stop rule).
       let detail = `${response.status} ${response.statusText}`;
       try {
-        const body = (await response.json()) as { detail?: string; error?: string };
+        const body = JSON.parse(response.text) as { detail?: string; error?: string };
         detail = body.detail ?? body.error ?? detail;
       } catch {
         /* non-JSON body — keep the status line */
@@ -63,7 +65,7 @@ export class PosthogClient {
       throw new Error(`PostHog query failed: ${detail}`);
     }
 
-    const result = (await response.json()) as HogQLQueryResponse;
+    const result = JSON.parse(response.text) as HogQLQueryResponse;
 
     if (result.error) {
       throw new Error(`PostHog query error: ${result.error}`);

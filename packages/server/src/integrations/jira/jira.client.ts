@@ -1,4 +1,4 @@
-import { fetchWithRetry } from "../../lib/fetch-retry.js";
+import { fetchText } from "../../lib/fetch-retry.js";
 
 /**
  * Jira Cloud REST API v2 client using a classic Atlassian API token over HTTP
@@ -75,24 +75,6 @@ export function isJiraDomain(raw: string): boolean {
   return /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i.test(normalizeJiraDomain(raw));
 }
 
-/**
- * Jira Cloud REST v2 returns descriptions as plain/wiki strings, but defensively
- * flatten an Atlassian Document Format (ADF) node tree to text if one shows up.
- */
-function toPlainText(value: unknown): string | null {
-  if (value == null) return null;
-  if (typeof value === "string") return value;
-  const parts: string[] = [];
-  const walk = (node: unknown): void => {
-    if (!node || typeof node !== "object") return;
-    const n = node as { text?: unknown; content?: unknown };
-    if (typeof n.text === "string") parts.push(n.text);
-    if (Array.isArray(n.content)) n.content.forEach(walk);
-  };
-  walk(value);
-  return parts.join("") || null;
-}
-
 export class JiraClient {
   private readonly baseUrl: string;
   private readonly authHeader: string;
@@ -105,8 +87,8 @@ export class JiraClient {
     this.authHeader = "Basic " + btoa(String.fromCharCode(...bytes));
   }
 
-  private async request(path: string, init?: RequestInit): Promise<Response> {
-    const res = await fetchWithRetry(`${this.baseUrl}${path}`, {
+  private async request(path: string, init?: RequestInit): Promise<string> {
+    const res = await fetchText(`${this.baseUrl}${path}`, {
       ...init,
       headers: {
         Authorization: this.authHeader,
@@ -115,11 +97,8 @@ export class JiraClient {
         ...init?.headers,
       },
     }, { timeoutMs: 15_000, retry: !init?.method || init.method === "GET" });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`Jira ${res.status}: ${text.slice(0, 300) || res.statusText}`);
-    }
-    return res;
+    if (!res.ok) throw new Error(`Jira ${res.status}: ${res.text.slice(0, 300) || res.statusText}`);
+    return res.text;
   }
 
   /** Validate credentials by fetching the current user. */
@@ -136,14 +115,14 @@ export class JiraClient {
    *  panel fields: type, priority, assignee, reporter, labels, etc.) plus its
    *  comment thread. Read-only. */
   async getIssue(key: string): Promise<JiraIssue> {
-    const res = await this.request(
+    const text = await this.request(
       `/rest/api/2/issue/${encodeURIComponent(key)}?fields=${ISSUE_FIELDS}`,
     );
-    const data = (await res.json()) as {
+    const data = JSON.parse(text) as {
       key?: string;
       fields?: {
         summary?: string;
-        description?: unknown;
+        description?: string | null;
         status?: { name?: string };
         issuetype?: { name?: string };
         priority?: { name?: string };
@@ -160,7 +139,7 @@ export class JiraClient {
           comments?: Array<{
             id?: string;
             author?: { displayName?: string } | null;
-            body?: unknown;
+            body?: string;
             created?: string;
           }>;
         };
@@ -172,7 +151,7 @@ export class JiraClient {
     return {
       key: data.key ?? key,
       summary: f.summary ?? "",
-      description: toPlainText(f.description),
+      description: f.description ?? null,
       status: f.status?.name ?? "Unknown",
       issueType: f.issuetype?.name ?? null,
       priority: f.priority?.name ?? null,
@@ -188,7 +167,7 @@ export class JiraClient {
       comments: (f.comment?.comments ?? []).map((c) => ({
         id: c.id ?? null,
         author: c.author?.displayName ?? null,
-        body: toPlainText(c.body),
+        body: c.body ?? null,
         created: c.created ?? null,
       })),
     };
@@ -196,12 +175,12 @@ export class JiraClient {
 
   /** Post a single plain-text comment to an issue. The only write operation. */
   async addComment(key: string, body: string): Promise<{ id: string | null; url: string }> {
-    const res = await this.request(`/rest/api/2/issue/${encodeURIComponent(key)}/comment`, {
+    const text = await this.request(`/rest/api/2/issue/${encodeURIComponent(key)}/comment`, {
       method: "POST",
       body: JSON.stringify({ body }),
     });
-    const data = (await res.json().catch(() => ({}))) as { id?: string };
-    const id = data.id ?? null;
+    let id: string | null = null;
+    try { id = (JSON.parse(text) as { id?: string }).id ?? null; } catch { /* the comment is posted; only its link is lost */ }
     return {
       id,
       url: id

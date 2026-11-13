@@ -104,8 +104,9 @@ test("prompts never let the agent claim an action or owner that no result shows"
 
 test("prompts make the finding card optional and keep its rules", () => {
   for (const [name, prompt] of allPrompts) {
+    assert.ok(prompt.includes("Answer in plain text without a card only when the answer is one fact read at a glance"), `${name}: missing one-fact exception`);
     assert.ok(prompt.includes("Then call `report_finding` once, alone in its step. The card is the summary"), `${name}: missing report_finding rule`);
-    assert.ok(prompt.includes("A yes/no question, a simple lookup, a count, a short check or a follow-up gets a plain text answer: no card and no `begin_analysis`"), `${name}: missing text-answer rule`);
+    assert.ok(prompt.includes("When the reply ran queries to answer the question, end it with the finding card"), `${name}: missing text-answer rule`);
     assert.ok(prompt.includes("Before a `root_cause` card, call the `begin_analysis` tool") && !prompt.includes("once in each reply that investigated"), `${name}: begin_analysis is not tied to the root-cause card`);
     assert.ok(prompt.includes("`root_cause` when the question asks why") && prompt.includes("`summary` for status"), `${name}: missing finding kinds`);
     assert.ok(!prompt.includes("every turn that ran at least one query") && !prompt.includes("Skip it only when no query ran"), `${name}: stale forced-card rule`);

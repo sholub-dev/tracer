@@ -1,26 +1,16 @@
-import { createRequire } from "node:module";
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
 import { createMCPClient } from "@ai-sdk/mcp";
 import { Experimental_StdioMCPTransport } from "@ai-sdk/mcp/mcp-stdio";
-import type {
-  PingResult,
-  ChatToolWriter,
-  ChatToolMemoryContext,
-  ProviderToolKit,
-} from "@tracer-sh/shared";
 import { BaseProvider } from "../providers/base.provider.js";
-import type { McpServerDefinition, McpServerEntry } from "./definitions.js";
+import type { McpServerEntry } from "./definitions.js";
 import { CONFIG } from "../config.js";
 import { withTimeout } from "../lib/with-timeout.js";
 
 type McpClient = Awaited<ReturnType<typeof createMCPClient>>;
 
 export class McpProvider extends BaseProvider {
-  readonly name: string;
   readonly type: string;
 
-  private clients: McpClient[] = [];
+  private client: McpClient | null = null;
   protected cachedTools: Record<string, any> | null = null;
   private lastReconnectAttempt = 0;
   private starting: Promise<void> | null = null;
@@ -28,100 +18,46 @@ export class McpProvider extends BaseProvider {
   private liveTools: Record<string, any> = {};
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
   private inFlight = 0;
+  /** Why the last start or ping failed; the reconnect wait reports it instead of a bare "not connected". */
+  private lastError: Error | undefined;
   private disposed = false;
   idle = false;
 
   constructor(
-    private readonly definition: McpServerDefinition,
+    private readonly server: McpServerEntry,
     protected readonly config: Record<string, string>,
     providerType: string,
   ) {
     super();
-    this.name = providerType;
     this.type = providerType;
   }
 
-  async initialize(): Promise<void> {
+  /** Spawns the subprocess when none runs, then lists its tools: this also refills the cache that invalidateTools() cleared. */
+  protected async probe(): Promise<void> {
+    if (!this.client) {
+      const now = Date.now();
+      if (now - this.lastReconnectAttempt < CONFIG.mcpReconnectCooldownMs) throw this.lastError ?? new Error("No MCP client connected");
+      this.lastReconnectAttempt = now;
+    }
     try {
-      await this.createClients();
-      // Eagerly discover tools to validate the connections
-      const tools = await this.discoverAllTools();
-      this.cachedTools = tools;
-      this.connected = true;
-      this.armIdleClose();
-      this.lastChecked = new Date().toISOString();
-      console.log(
-        `[mcp] ${this.definition.label} connected (${this.clients.length} server(s)), ${Object.keys(tools).length} tools discovered`,
-      );
+      if (!this.client) await this.createClient();
+      await withTimeout(this.discoverTools(), CONFIG.mcpPingTimeoutMs, "MCP ping");
+      this.lastError = undefined;
     } catch (err) {
-      this.connected = false;
-      this.lastChecked = new Date().toISOString();
-      console.warn(`[mcp] ${this.definition.label} failed to initialize:`, err);
+      this.lastError = err instanceof Error ? err : new Error(String(err));
+      // A dead or hung subprocess stays set otherwise and every later ping fails on it. Not awaited: a hung close must not hang the ping.
+      if (this.inFlight === 0) void this.closeClient();
       throw err;
     }
+    this.armIdleClose();
   }
 
-  async testConnection(): Promise<boolean> {
-    try {
-      // Always restart clients to pick up fresh credentials
-      await this.closeAllClients();
-      this.cachedTools = null;
-      await this.createClients();
-      const tools = await this.discoverAllTools();
-      this.cachedTools = tools;
-      this.connected = true;
-      this.armIdleClose();
-      this.lastChecked = new Date().toISOString();
-      return true;
-    } catch {
-      await this.closeAllClients();
-      this.cachedTools = null;
-      this.connected = false;
-      this.lastChecked = new Date().toISOString();
-      return false;
-    }
-  }
-
-  async ping(): Promise<PingResult> {
-    if (this.clients.length === 0) {
-      const now = Date.now();
-      if (now - this.lastReconnectAttempt < CONFIG.mcpReconnectCooldownMs) {
-        return { ok: false, error: "No MCP clients connected" };
-      }
-      this.lastReconnectAttempt = now;
-      try {
-        await this.createClients();
-      } catch (err) {
-        this.connected = false;
-        this.lastChecked = new Date().toISOString();
-        return { ok: false, error: err instanceof Error ? err.message : String(err) };
-      }
-      if (this.clients.length === 0) {
-        return { ok: false, error: "No MCP clients connected" };
-      }
-    }
-    try {
-      // Also refills the tool cache that invalidateTools() cleared.
-      await withTimeout(this.discoverTools(), CONFIG.mcpPingTimeoutMs, "MCP ping");
-      this.connected = true;
-      this.armIdleClose();
-      this.lastChecked = new Date().toISOString();
-      return { ok: true };
-    } catch (err) {
-      this.connected = false;
-      this.lastChecked = new Date().toISOString();
-      // A dead or hung subprocess stays in the list otherwise and every later ping fails on it. Not awaited: a hung close must not hang the ping.
-      if (this.inFlight === 0) void this.closeAllClients();
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
-    }
-  }
-
-  async dispose(): Promise<void> {
+  override async dispose(): Promise<void> {
     this.disposed = true;
     clearTimeout(this.idleTimer);
-    await this.closeAllClients();
+    await this.closeClient();
     this.cachedTools = null;
-    this.connected = false;
+    await super.dispose();
   }
 
   /** Return cached tools synchronously, or null if not yet discovered. */
@@ -134,133 +70,75 @@ export class McpProvider extends BaseProvider {
     return this.inFlight;
   }
 
-  /** Invalidate cached tools and clients — forces reconnection on next getMcpTools() call. */
+  /** Invalidate cached tools and the client; the next ping respawns it. */
   invalidateTools(): void {
     this.cachedTools = null;
-    // Not connected, so the next run pings it and respawns the clients; a connected provider is skipped.
+    // Not connected, so the next run pings it and respawns the client; a connected provider is skipped.
     this.connected = false;
-    // Reset state first: a concurrent init may create new clients while the old ones close.
-    this.closeAllClients().catch(() => {});
-  }
-
-  /** Get cached MCP tools (AI SDK-compatible). Lazily rediscovers if cache is empty. */
-  async getMcpTools(): Promise<Record<string, any>> {
-    if (this.cachedTools) return this.cachedTools;
-    try {
-      if (this.clients.length === 0) {
-        await this.createClients();
-      }
-      return await this.discoverTools();
-    } catch (err) {
-      await this.closeAllClients();
-      this.cachedTools = null;
-      throw err;
-    }
-  }
-
-  /**
-   * Base MCP providers expose no chat tools by default — concrete MCP-backed
-   * providers (e.g. GCP) override this with their own direct query tools.
-   */
-  getChatTools(_options: {
-    writer?: ChatToolWriter;
-    memoryContext?: ChatToolMemoryContext;
-    db?: unknown;
-  }): ProviderToolKit {
-    return { tools: {} };
+    this.closeClient().catch(() => {});
   }
 
   async executeRawQuery(_query: string): Promise<unknown> {
-    return { error: "Raw queries are not supported by MCP-backed providers." };
+    throw new Error("Raw queries are not supported by MCP-backed providers.");
   }
 
   // ── Private ──
 
-  /** Restarts the idle countdown; the subprocesses close when it ends with no tool call running. */
+  /** Restarts the idle countdown; the subprocess closes when it ends with no tool call running. */
   private armIdleClose(): void {
     this.idle = false;
     clearTimeout(this.idleTimer);
     this.idleTimer = setTimeout(() => {
       if (this.inFlight > 0) return this.armIdleClose();
       this.idle = true;
-      void this.closeAllClients();
+      void this.closeClient();
     }, CONFIG.mcpIdleCloseMs);
     this.idleTimer.unref?.();
   }
 
-  /** Spawn MCP clients for all servers in parallel. */
-  private createClients(): Promise<void> {
-    this.starting ??= this.spawnAllClients().finally(() => { this.starting = null; });
+  private createClient(): Promise<void> {
+    this.starting ??= this.spawnClient().then(async (client) => {
+      // A dispose during the spawn found no client to close, so this one would outlive the provider.
+      if (this.disposed) {
+        await client.close().catch(() => {});
+        throw new Error("The provider was disposed during startup");
+      }
+      this.client = client;
+    }).finally(() => { this.starting = null; });
     return this.starting;
   }
 
-  private async spawnAllClients(): Promise<void> {
-    const results = await Promise.allSettled(this.definition.servers.map((entry) => this.spawnClient(entry)));
-    const started = results.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
-    const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
-    if (failed) {
-      await Promise.all(started.map((c) => c.close().catch(() => {})));
-      throw failed.reason;
-    }
-    // A dispose during the spawn found no clients to close, so these would outlive the provider.
-    if (this.disposed) {
-      await Promise.all(started.map((c) => c.close().catch(() => {})));
-      throw new Error("The provider was disposed during startup");
-    }
-    this.clients = started;
-  }
-
-  /** Spawn a single MCP client for one server entry with timeout. */
-  private async spawnClient(entry: McpServerEntry): Promise<McpClient> {
+  private async spawnClient(): Promise<McpClient> {
+    const { server } = this;
     const env: Record<string, string> = {
       PATH: process.env.PATH ?? "",
       HOME: process.env.HOME ?? "",
       NODE_ENV: process.env.NODE_ENV ?? "",
     };
-    for (const [configKey, envVar] of Object.entries(entry.envMapping)) {
+    for (const [configKey, envVar] of Object.entries(server.envMapping)) {
       if (this.config[configKey]) {
         env[envVar] = this.config[configKey];
       }
     }
-    if (entry.passthroughEnv) {
-      for (const key of entry.passthroughEnv) {
-        if (process.env[key]) {
-          env[key] = process.env[key]!;
-        }
+    for (const key of server.passthroughEnv ?? []) {
+      if (process.env[key]) {
+        env[key] = process.env[key]!;
       }
     }
 
-    // Prefer locally-installed (potentially patched) packages over npx downloads.
-    const local = resolveLocalBin(entry.package);
-    const command = local ? "node" : "npx";
-    const args = local
-      ? [local, ...(entry.args ?? [])]
-      : ["-y", `${entry.package}@${entry.version}`, ...(entry.args ?? [])];
-
     const transport = new Experimental_StdioMCPTransport({
-      command,
-      args,
+      command: "npx",
+      args: ["-y", `${server.package}@${server.version}`],
       env,
     });
 
     const clientPromise = createMCPClient({ transport });
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let timedOut = false;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        timedOut = true;
-        reject(new Error(`MCP server ${entry.package} timed out after ${CONFIG.mcpInitTimeoutMs / 1000}s`));
-      }, CONFIG.mcpInitTimeoutMs);
-    });
-
     try {
-      return await Promise.race([clientPromise, timeoutPromise]);
+      return await withTimeout(clientPromise, CONFIG.mcpInitTimeoutMs, `MCP server ${server.package} startup`);
     } catch (err) {
       // The client may still come up after the timeout; close it so its process does not leak.
-      if (timedOut) clientPromise.then((c) => c.close()).catch(() => {});
+      clientPromise.then((c) => c.close()).catch(() => {});
       throw err;
-    } finally {
-      clearTimeout(timer);
     }
   }
 
@@ -272,35 +150,32 @@ export class McpProvider extends BaseProvider {
     return this.discovering;
   }
 
-  /** Discover tools from all connected clients and merge into a single record. */
   private async discoverAllTools(): Promise<Record<string, any>> {
-    const toolSets = await Promise.all(this.clients.map((c) => c.tools()));
-    const merged: Record<string, any> = {};
-    for (const tools of toolSets) {
-      for (const [name, t] of Object.entries<any>(tools)) {
-        this.liveTools[name] = t;
-        merged[name] = typeof t.execute === "function" ? { ...t, execute: (...args: unknown[]) => this.running(() => this.execute(name, args)) } : t;
-      }
+    const tools = (await this.client?.tools()) ?? {};
+    const wrapped: Record<string, any> = {};
+    for (const [name, t] of Object.entries<any>(tools)) {
+      this.liveTools[name] = t;
+      wrapped[name] = typeof t.execute === "function" ? { ...t, execute: (...args: unknown[]) => this.running(() => this.execute(name, args)) } : t;
     }
-    return merged;
+    return wrapped;
   }
 
-  /** After an idle close the cached tools stay, so a call respawns the clients and runs on the fresh tool. */
+  /** After an idle close the cached tools stay, so a call respawns the client and runs on the fresh tool. */
   private async execute(name: string, args: unknown[]): Promise<unknown> {
-    if (this.clients.length === 0) {
-      await this.createClients();
+    if (!this.client) {
+      await this.createClient();
       try {
         await withTimeout(this.discoverTools(), CONFIG.mcpInitTimeoutMs, "MCP tool discovery");
       } catch (err) {
         // A hung subprocess would block every later call the same way.
-        void this.closeAllClients();
+        void this.closeClient();
         throw err;
       }
     }
     return this.liveTools[name].execute(...args);
   }
 
-  /** A tool call keeps the clients open while it runs and restarts the idle countdown when it ends. */
+  /** A tool call keeps the client open while it runs and restarts the idle countdown when it ends. */
   private async running<T>(call: () => Promise<T>): Promise<T> {
     this.inFlight++;
     try {
@@ -311,27 +186,10 @@ export class McpProvider extends BaseProvider {
     }
   }
 
-  /** Close all clients, ignoring errors (processes may already be dead). */
-  private async closeAllClients(): Promise<void> {
-    const old = this.clients;
-    this.clients = [];
-    await Promise.all(old.map((c) => c.close().catch(() => {})));
-  }
-}
-
-const require = createRequire(import.meta.url);
-
-/** Resolve the bin entry of a locally-installed npm package, or null if not found. */
-function resolveLocalBin(pkg: string): string | null {
-  try {
-    const pkgJsonPath = require.resolve(`${pkg}/package.json`);
-    const pkgJson = JSON.parse(readFileSync(pkgJsonPath, "utf-8"));
-    const bin = pkgJson.bin;
-    if (!bin) return null;
-    const entry = typeof bin === "string" ? bin : Object.values(bin)[0] as string;
-    if (!entry) return null;
-    return resolve(dirname(pkgJsonPath), entry);
-  } catch {
-    return null;
+  /** Ignores errors: the process may already be dead. */
+  private async closeClient(): Promise<void> {
+    const old = this.client;
+    this.client = null;
+    await old?.close().catch(() => {});
   }
 }

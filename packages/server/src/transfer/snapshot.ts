@@ -38,12 +38,14 @@ export interface SyncRow {
 
 /** Vertex AI authenticates through gcloud on the desktop, so a phone cannot use it. */
 const DESKTOP_ONLY_PROVIDER = "google-vertex";
-export const CHAT_MODEL_KEY = "chat_model";
+const CHAT_MODEL_KEY = "chat_model";
 
-/** True when a stored chat_model value selects the desktop-only provider. */
-export function usesDesktopOnlyProvider(value: unknown): boolean {
+/** True for a row the phone cannot use: a desktop-only provider config, or the chat model that selects such a provider. */
+export function isDesktopOnly(table: string, row: Record<string, unknown>): boolean {
+  if (table === "provider_configs") return row.type === DESKTOP_ONLY_PROVIDER;
+  if (table !== "app_settings" || row.key !== CHAT_MODEL_KEY) return false;
   try {
-    return JSON.parse(String(value))?.provider === DESKTOP_ONLY_PROVIDER;
+    return JSON.parse(String(row.value))?.provider === DESKTOP_ONLY_PROVIDER;
   } catch {
     return false;
   }
@@ -53,7 +55,7 @@ export function usesDesktopOnlyProvider(value: unknown): boolean {
 export const SESSION_RUN_STATE = { status: "done", runScope: null, resumed: 0 };
 
 /** Rows per read; a session row carries its whole message list, so one read of all rows would hold every transcript at once. */
-export const READ_PAGE_ROWS = 200;
+const READ_PAGE_ROWS = 200;
 
 /** Reads one table. Device-local settings and desktop-only provider configs are left out, and sessions export no run state. */
 export async function readTable(tx: Db, name: string, table: SQLiteTable, match?: SQL): Promise<Record<string, unknown>[]> {
@@ -144,24 +146,22 @@ export function* batches<T>(rows: T[]) {
 
 /**
  * Replaces every row in this database with the rows in the snapshot, except this device's own settings. Returns the row count per table.
- * With `dropTimers`, the copied follow-up timers are dropped: they belong to the source device.
+ * Follow-up timers belong to the source device, so none are copied: the same re-check must not run on both devices.
  */
-export async function importSnapshot(db: Db, snapshot: Snapshot, options: { dropTimers?: boolean } = {}): Promise<Record<string, number>> {
+export async function importSnapshot(db: Db, snapshot: Snapshot): Promise<Record<string, number>> {
   if (snapshot.format !== FORMAT) throw new Error("The copy comes from a different Tracer version. Update both apps to the same version.");
   const counts: Record<string, number> = {};
   const localAt = Date.now();
   for (const [name, table] of TABLES) checkRows(name, table, snapshot.tables[name] ?? []);
   await runInTransaction(db, async (tx) => {
-    const chatModel = (snapshot.tables.app_settings ?? []).find((r) => r.key === CHAT_MODEL_KEY);
     // A chat model this phone cannot run leaves the phone's own choice in place.
-    const keepLocalModel = !!chatModel && usesDesktopOnlyProvider(chatModel.value);
+    const keepLocalModel = (snapshot.tables.app_settings ?? []).some((r) => isDesktopOnly("app_settings", r));
     const keep = keepLocalModel ? [...LOCAL_SETTING_KEYS, CHAT_MODEL_KEY] : LOCAL_SETTING_KEYS;
     for (const [name, table] of [...TABLES].reverse()) {
       await (name === "app_settings" ? tx.delete(table).where(notInArray(schema.appSettings.key, keep)) : tx.delete(table)).run();
     }
     for (const [name, table] of TABLES) {
-      const rows = (snapshot.tables[name] ?? []).filter((r) => !(name === "app_settings" && keepLocalModel && r.key === CHAT_MODEL_KEY)
-        && !(name === "provider_configs" && r.type === DESKTOP_ONLY_PROVIDER));
+      const rows = name === "session_timers" ? [] : (snapshot.tables[name] ?? []).filter((r) => !isDesktopOnly(name, r));
       for (const batch of batches(rows)) await tx.insert(table).values(batch as never).run();
       counts[name] = rows.length;
     }
@@ -170,7 +170,6 @@ export async function importSnapshot(db: Db, snapshot: Snapshot, options: { drop
     for (const batch of batches(snapshot.rows ?? [])) {
       await tx.insert(schema.syncRows).values(batch.map((r) => ({ tbl: r.tbl, rowKey: r.row_key, changedAt: r.changed_at, localAt, deleted: r.deleted }))).run();
     }
-    if (options.dropTimers) await tx.delete(schema.sessionTimers).run();
   });
   return counts;
 }

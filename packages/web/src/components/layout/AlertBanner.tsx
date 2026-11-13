@@ -9,7 +9,7 @@ import { detectBanners } from "../../lib/alert-banner";
 import { formatClock } from "../../lib/format";
 import { trpc } from "../../lib/trpc";
 
-const TOASTER_ID = "alerts";
+export const TOASTER_ID = "alerts";
 const DISMISSED_MS = 4000;
 const SEVERITY: Record<AlertBrief["severity"], string> = {
   high: "bg-destructive-tint text-destructive",
@@ -58,12 +58,12 @@ function AlertBanner({ brief, result, onOpen, onClose }: AlertBannerProps) {
       <div className="pointer-events-none flex items-center gap-2 text-sm">
         <Activity className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="truncate font-medium">{brief.name}</span>
-        <span className="shrink-0 text-muted-foreground tabular-nums">· {formatClock(brief.triggeredAt)}</span>
+        <span className="shrink-0 text-muted-foreground">· {formatClock(brief.triggeredAt)}</span>
         <button
           type="button"
           aria-label="Close"
           onClick={onClose}
-          className="pointer-events-auto relative z-10 ml-auto shrink-0 rounded-md p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="pointer-events-auto relative z-10 -my-1 -mr-1 ml-auto shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <X className="size-4" />
         </button>

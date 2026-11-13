@@ -6,7 +6,6 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Markdown, ResultLookupProvider } from "../../lib/markdown";
-import type { ProgressStore } from "../../lib/progress-store";
 import type { AskState } from "../../lib/ask-card";
 import { AskCard } from "./AskCard";
 import { FindingCard } from "./FindingCard";
@@ -73,7 +72,6 @@ const snapshot = (part: Part) => ({ ...part }) as ToolPart;
 interface Props {
   parts: UIMessage["parts"];
   isAnimating: boolean;
-  progressStore: ProgressStore;
   compact?: boolean;
   /** State of the reply's question card; it depends on the messages after the reply, so the thread passes it in. */
   ask?: AskState;
@@ -110,7 +108,7 @@ function flow(entries: Entry[]): React.ReactNode[] {
 
 /** One reply, rendered in the order its parts arrive: text, steps and the card each stay where they appeared. */
 export const MessageParts = React.memo(
-  function MessageParts({ parts, isAnimating, progressStore, compact = false, ask = CLOSED, onAsk }: Props) {
+  function MessageParts({ parts, isAnimating, compact = false, ask = CLOSED, onAsk }: Props) {
     if (parts.length === 0 && !isAnimating) {
       return <p className="text-sm text-muted-foreground">Interrupted before a reply.</p>;
     }
@@ -152,7 +150,7 @@ export const MessageParts = React.memo(
           inside.push(text(`${key}-after`, part.text.slice(marker.charIdx + ANALYSIS_MARKER.length)));
         }
         target = inside;
-        return;
+        if (marker.kind !== "card") return;
       }
       if (i === cardIdx && live) {
         target.push({ key, node: <React.Fragment key={key}><FindingCard card={live.card} revising={live.revising} compact={compact} />{evidence}</React.Fragment> });
@@ -162,7 +160,7 @@ export const MessageParts = React.memo(
       if (part.type === "text") target.push(text(key, part.text));
       else if (part.type === "reasoning") target.push({ key, step: true, node: <li key={key}><ReasoningBlock content={part.text} isAnimating={isAnimating} /></li> });
       else if (part.type === "file") target.push({ key, node: <FileAttachment key={key} part={part as FilePartLike} /> });
-      else if (isProviderTool(part.type)) target.push({ key, step: true, node: <ProviderStep key={key} part={snapshot(part)} progressStore={progressStore} isAnimating={isAnimating} /> });
+      else if (isProviderTool(part.type)) target.push({ key, step: true, node: <ProviderStep key={key} part={snapshot(part)} isAnimating={isAnimating} /> });
       else if (part.type.startsWith("tool-")) target.push({ key, step: true, node: <li key={key} className="empty:hidden"><OtherToolPart part={snapshot(part)} isAnimating={isAnimating} /></li> });
     });
 
@@ -190,7 +188,7 @@ export const MessageParts = React.memo(
   },
   (prev, next) => {
     if (prev.isAnimating || next.isAnimating) return false;
-    if (prev.compact !== next.compact || prev.progressStore !== next.progressStore) return false;
+    if (prev.compact !== next.compact) return false;
     if (!sameAsk(prev.ask, next.ask) || prev.onAsk !== next.onAsk) return false;
     if (prev.parts === next.parts) return true;
     // A tool part changing state keeps the array length but swaps the part object.

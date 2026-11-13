@@ -1,18 +1,14 @@
 import {
   normalizeNewRelicRows,
-  type ChatMode,
-  type ChatToolWriter,
-  type ChatToolMemoryContext,
-  type PingResult,
+  type ChatToolOptions,
   type ProviderToolKit,
 } from "@tracer-sh/shared";
 import type { NewRelicProviderConfig, NrqlResult } from "./types.js";
 import { BaseProvider } from "../base.provider.js";
 import { NerdGraphClient, type AiIssue, type AiIssuesFilter } from "./nerdgraph.client.js";
-import {
-  createNewRelicDirectTools,
-  nrUnifiedFragment,
-} from "./tools.js";
+import { createNewRelicDirectTools } from "./tools.js";
+import { nrUnifiedFragment } from "./prompts.js";
+import { toolKit } from "../../tools/provider-tool-helpers.js";
 
 export interface NrqlOutcome {
   rows: Record<string, unknown>[];
@@ -22,7 +18,6 @@ export interface NrqlOutcome {
 }
 
 export class NewRelicProvider extends BaseProvider {
-  readonly name = "newrelic";
   readonly type = "newrelic";
 
   private client: NerdGraphClient;
@@ -32,38 +27,8 @@ export class NewRelicProvider extends BaseProvider {
     this.client = new NerdGraphClient(config.apiKey, config.accountId);
   }
 
-  async initialize(): Promise<void> {
-    await this.testConnection();
-  }
-
-  async testConnection(): Promise<boolean> {
-    try {
-      await this.client.query("SELECT count(*) FROM Transaction SINCE 1 minute ago");
-      this.connected = true;
-      this.lastChecked = new Date().toISOString();
-      return true;
-    } catch {
-      this.connected = false;
-      this.lastChecked = new Date().toISOString();
-      return false;
-    }
-  }
-
-  async ping(): Promise<PingResult> {
-    try {
-      await this.client.query("SELECT 1", { retry: false });
-      this.connected = true;
-      this.lastChecked = new Date().toISOString();
-      return { ok: true };
-    } catch (err) {
-      this.connected = false;
-      this.lastChecked = new Date().toISOString();
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
-    }
-  }
-
-  async dispose(): Promise<void> {
-    this.connected = false;
+  protected async probe(): Promise<void> {
+    await this.client.query("SELECT 1", { retry: false });
   }
 
   async executeRawQuery(query: string): Promise<unknown> {
@@ -71,14 +36,14 @@ export class NewRelicProvider extends BaseProvider {
   }
 
   /** Rows plus the window and messages New Relic reports. `futureRemoved` counts rows dropped for starting after now. */
-  async executeNrql(query: string): Promise<NrqlOutcome> {
-    const response = await this.client.query(query);
+  async executeNrql(query: string, signal?: AbortSignal): Promise<NrqlOutcome> {
+    const response = await this.client.query(query, { signal });
     const { results, metadata } = response.data?.actor.account.nrql ?? { results: [] };
     // An UNTIL in the future returns empty buckets that read as a drop to zero.
     const now = Date.now() / 1000;
     const kept = results.filter((r: NrqlResult) => !(typeof r.beginTimeSeconds === "number" && r.beginTimeSeconds > now));
     return {
-      rows: normalizeNewRelicRows(kept),
+      rows: normalizeNewRelicRows(kept.map(({ inspectedCount: _, ...row }) => row)),
       futureRemoved: results.length - kept.length,
       window: metadata?.timeWindow ?? null,
       messages: metadata?.messages ?? [],
@@ -101,23 +66,7 @@ export class NewRelicProvider extends BaseProvider {
     return this.client.resolveIssue(issueId);
   }
 
-  getChatTools(options: {
-    writer?: ChatToolWriter;
-    memoryContext?: ChatToolMemoryContext;
-    db?: unknown;
-    mode?: ChatMode;
-  }): ProviderToolKit {
-    const direct = createNewRelicDirectTools(
-      this,
-      options.memoryContext,
-      options.db,
-    );
-    return {
-      tools: direct.tools,
-      afterComplete: direct.afterComplete,
-      ...(options.mode === "unified"
-        ? { promptFragments: [nrUnifiedFragment] }
-        : { systemPrompt: direct.systemPrompt }),
-    };
+  getChatTools(options: ChatToolOptions): ProviderToolKit {
+    return toolKit(createNewRelicDirectTools(this, options.memoryContext, options.db), options.mode, nrUnifiedFragment);
   }
 }

@@ -32,7 +32,7 @@ export function monitorChatRunOptions(context: Context): RunOptions {
   return {
     scope: MONITOR_CHAT_SCOPE,
     retryDelaysMs: CONFIG.chatRetryDelaysMs,
-    collectTools: (writer) => collectMonitorTools(context.providers, context.db, context.activeStreams, writer),
+    collectTools: (sessionId) => collectMonitorTools(context.providers, context.db, context.activeStreams, sessionId),
     sessionTitle: firstUserMessageTitle,
   };
 }
@@ -59,8 +59,8 @@ export async function buildRunOptions(context: Context, spec: RunSpec): Promise<
     retryDelaysMs,
     // Slack and the triage read the card, so only a monitor run has to end with one.
     requireFinding: monitor,
-    collectTools: async (writer) => {
-      const collected = await collectChatTools(context.providers, context.db, writer, scopedProvider, mode);
+    collectTools: async () => {
+      const collected = await collectChatTools(context.providers, context.db, sessionId, mode, scopedProvider);
       const afterComplete: typeof collected.afterComplete = onComplete
         ? (params) => { collected.afterComplete?.(params); onComplete({}); }
         : collected.afterComplete;

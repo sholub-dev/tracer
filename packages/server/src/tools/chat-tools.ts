@@ -1,7 +1,6 @@
 import type { Db } from "../db/driver.js";
 import type { ProviderRegistry } from "../providers/registry.js";
-import type { ChatToolWriter as StreamWriter, ChatMode } from "@tracer-sh/shared";
-import { DEFAULT_CHAT_MODE } from "@tracer-sh/shared";
+import type { ChatMode } from "@tracer-sh/shared";
 import { setTimerTool } from "./timer-tool.js";
 import { reportFindingTool } from "./finding-tool.js";
 import { askUserTool } from "./ask-tool.js";
@@ -14,17 +13,17 @@ type ChatToolsResult = Omit<BaseToolSetup, "connectedProviders" | "tools"> & {
 export async function collectChatTools(
   registry: ProviderRegistry,
   db: Db,
-  writer?: StreamWriter,
+  sessionId: string | undefined,
+  mode: ChatMode,
   activeProvider?: string,
-  mode: ChatMode = DEFAULT_CHAT_MODE,
 ): Promise<ChatToolsResult> {
   const { tools, promptFragments, systemPrompt, maxSteps, afterComplete, connectedProviders, providerTypes } =
-    await collectBaseTools(registry, db, writer, mode, activeProvider, true);
+    await collectBaseTools(registry, db, sessionId, mode, activeProvider, true);
 
   // Debug chat returns undefined tools when no providers are connected,
   // so server.ts can show a "no providers configured" fallback prompt.
   // Keep tools if an always-on integration (e.g. Jira) contributed any.
-  if (connectedProviders.length === 0 && (!tools || Object.keys(tools).length === 0)) {
+  if (connectedProviders.length === 0 && Object.keys(tools).length === 0) {
     return { tools: undefined, promptFragments: [] };
   }
 

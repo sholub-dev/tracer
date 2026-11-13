@@ -6,12 +6,12 @@ import { CONFIG } from "../config.js";
 import { startAgentSession } from "../agents/start-session.js";
 import { formatLocalTime, getTimezone } from "../lib/current-context.js";
 import { WAKEUP_MARK, wakeupExtras, type Wakeup } from "./triage.js";
-import { issuesEnded, monitorStopped } from "./follow-up.js";
+import { dropTimer, issuesEnded, monitorStopped } from "./follow-up.js";
 import { sessionChanged } from "../lib/session-events.js";
 
-const REARM_DELAYS_SECONDS = [120];
-/** Re-arms per timer (session and set time) since its last successful wake-up; an app restart starts the count again. */
-const rearms = new Map<string, number>();
+const REARM_DELAY_SECONDS = 120;
+/** Timers (session and set time) re-armed once since their last successful wake-up; an app restart clears it. */
+const retried = new Set<string>();
 
 /** Runs each scheduler tick: wakes the sessions whose follow-up timer is due. */
 export async function fireDueTimers(context: Context, start = startAgentSession): Promise<void> {
@@ -20,6 +20,7 @@ export async function fireDueTimers(context: Context, start = startAgentSession)
   const due = await db.select({ timer: sessionTimers, kind: chatSessions.kind, scope: chatSessions.runScope }).from(sessionTimers)
     .innerJoin(chatSessions, eq(chatSessions.id, sessionTimers.sessionId))
     .where(lte(sessionTimers.fireAt, now)).orderBy(sessionTimers.fireAt).all();
+  if (due.length === 0) return;
   const tz = await getTimezone(db);
   let started = 0;
   for (const { timer, kind, scope } of due) {
@@ -27,9 +28,8 @@ export async function fireDueTimers(context: Context, start = startAgentSession)
     const { sessionId } = timer;
     const retryLater = async () => {
       // A wake-up that cannot start for a day is dropped, like any follow-up past its limit.
-      await (unixNow() >= timer.setAt + CONFIG.timerMaxAfterSessionSeconds
-        ? db.delete(sessionTimers).where(eq(sessionTimers.sessionId, sessionId)).run()
-        : db.update(sessionTimers).set({ fireAt: unixNow() + CONFIG.timerBusyRetrySeconds }).where(eq(sessionTimers.sessionId, sessionId)).run());
+      if (unixNow() >= timer.setAt + CONFIG.timerMaxAfterSessionSeconds) return dropTimer(db, sessionId);
+      await db.update(sessionTimers).set({ fireAt: unixNow() + CONFIG.timerBusyRetrySeconds }).where(eq(sessionTimers.sessionId, sessionId)).run();
       sessionChanged(sessionId);
     };
     // A monitor session hands a failed re-check to a person. Any other session retries once, later, which covers a network
@@ -37,11 +37,10 @@ export async function fireDueTimers(context: Context, start = startAgentSession)
     // A timer the run set again stays.
     const rearmOnFailure = ({ error }: { error?: string }) => {
       const key = `${sessionId}:${timer.setAt}`;
-      const tries = rearms.get(key) ?? 0;
-      if (!error) { rearms.delete(key); return; }
-      if (tries >= REARM_DELAYS_SECONDS.length || unixNow() >= timer.setAt + CONFIG.timerMaxAfterSessionSeconds) { rearms.delete(key); return; }
-      rearms.set(key, tries + 1);
-      const fireAt = unixNow() + REARM_DELAYS_SECONDS[tries]!;
+      if (!error) { retried.delete(key); return; }
+      if (retried.has(key) || unixNow() >= timer.setAt + CONFIG.timerMaxAfterSessionSeconds) { retried.delete(key); return; }
+      retried.add(key);
+      const fireAt = unixNow() + REARM_DELAY_SECONDS;
       void (async () => {
         // The fired row can still be there; it is replaced, so the cleanup of fired rows cannot drop the re-arm.
         await db.insert(sessionTimers).values({ ...timer, fireAt })
@@ -50,8 +49,7 @@ export async function fireDueTimers(context: Context, start = startAgentSession)
       })().catch((err) => console.error(`[timer] could not keep the follow-up for session ${sessionId}:`, err instanceof Error ? err.message : String(err)));
     };
     if (kind === SESSION_KIND.MONITOR && (await monitorStopped(db, sessionId) || await issuesEnded(db, sessionId))) {
-      await db.delete(sessionTimers).where(eq(sessionTimers.sessionId, sessionId)).run();
-      sessionChanged(sessionId);
+      await dropTimer(db, sessionId);
       continue;
     }
     // Without a connected provider the run has no tools to check the alert; the re-check waits.

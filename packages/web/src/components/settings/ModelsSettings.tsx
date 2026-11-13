@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { Loader2, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 
@@ -130,6 +130,7 @@ function ApiKeyRow({ type, label, note }: { type: "anthropic" | "google"; label:
       }}
       remove={{
         label: "Remove",
+        past: "removed",
         title: `Remove the ${label} API key?`,
         description: "Models from this provider stop working until you add a key again.",
         onConfirm: () => removeKey.mutateAsync(type),
@@ -185,6 +186,7 @@ function VertexRow() {
       }}
       remove={{
         label: "Disable",
+        past: "disabled",
         title: "Disable Vertex AI?",
         description: "Your project selection will be removed.",
         onConfirm: () => removeConfig.mutateAsync(),
@@ -205,6 +207,7 @@ function VertexRow() {
               onChange={(projectId) => saveConfig.mutate({ projectId }, { onError: (e) => toast.error(e.message) })}
             />
             <LocationField
+              key={existing?.location}
               value={existing?.location ?? "global"}
               disabled={busy}
               onCommit={(location) => {
@@ -222,7 +225,6 @@ function VertexRow() {
 function LocationField({ value, onCommit, disabled }: { value: string; onCommit: (value: string) => void; disabled?: boolean }) {
   const id = useId();
   const [local, setLocal] = useState(value);
-  useEffect(() => setLocal(value), [value]);
   return (
     <div className="space-y-1.5">
       <Label htmlFor={id} className="text-[13px]/[18px]">
@@ -273,8 +275,8 @@ function Pricing() {
                   <TableRow key={m.modelId} className={cn("hover:bg-transparent", !configured.has(m.provider) && "text-muted-foreground")}>
                     <TableCell className="pl-4 font-mono text-xs">{m.modelId}</TableCell>
                     <TableCell>{llmProviderLabel(m.provider)}</TableCell>
-                    <TableCell className="text-right tabular-nums">${inputPrice.toFixed(2)}</TableCell>
-                    <TableCell className="pr-4 text-right tabular-nums">${outputPrice.toFixed(2)}</TableCell>
+                    <TableCell className="text-right">${inputPrice.toFixed(2)}</TableCell>
+                    <TableCell className="pr-4 text-right">${outputPrice.toFixed(2)}</TableCell>
                   </TableRow>
                 );
               })}

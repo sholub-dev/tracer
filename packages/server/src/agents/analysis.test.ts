@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { UIMessage } from "ai";
-import { findAnalysisMarker } from "@tracer-sh/shared";
+import { analysisSectionParts, compactionUpTo, findAnalysisMarker, isAnalysisMessage, splitAtAnalysis } from "@tracer-sh/shared";
 import { extractAnalysis } from "./analysis.js";
 
 const msg = (parts: unknown[]) => ({ id: "", role: "assistant", parts }) as unknown as UIMessage;
@@ -59,4 +59,23 @@ test("extractAnalysis keeps a text answer that a later tool call follows", () =>
   const timer = { type: "tool-schedule_followup", toolCallId: "t", state: "output-available", input: {}, output: {} };
   const out = extractAnalysis([user, msg([{ type: "text", text: "Checking." }, query, { type: "text", text: "One." }, timer])]);
   assert.equal(out.analysis, "One.");
+});
+
+test("a card with no begin_analysis opens the analysis section at the card part", () => {
+  const parts = [{ type: "step-start" }, { type: "tool-lookup" }, { type: "tool-report_finding" }, { type: "text" }];
+  assert.deepEqual(findAnalysisMarker(parts), { kind: "card", partIdx: 2 });
+  assert.deepEqual(splitAtAnalysis(parts), { before: parts.slice(0, 2), analysis: parts.slice(2) });
+  assert.deepEqual(analysisSectionParts(parts), parts.slice(2));
+  assert.equal(isAnalysisMessage({ role: "assistant", parts }), true);
+  assert.equal(isAnalysisMessage({ role: "user", parts }), false);
+  assert.equal(compactionUpTo([{ role: "user", parts: [] }, { role: "assistant", parts }], 1), 1);
+});
+
+test("begin_analysis and the text marker take precedence over a card", () => {
+  const withTool = [{ type: "tool-report_finding" }, { type: "tool-begin_analysis" }];
+  assert.deepEqual(findAnalysisMarker(withTool), { kind: "tool", partIdx: 1 });
+  const withText: { type: string; text?: string }[] = [{ type: "tool-report_finding" }, { type: "text", text: "a <analysis> b" }];
+  assert.equal(findAnalysisMarker(withText)?.kind, "text");
+  assert.equal(findAnalysisMarker([{ type: "tool-lookup" }, { type: "text" }]), null);
+  assert.equal(splitAtAnalysis([{ type: "text" }]), null);
 });

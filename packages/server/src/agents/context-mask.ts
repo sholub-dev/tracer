@@ -1,7 +1,8 @@
 import type { JSONValue, ModelMessage } from "ai";
+import { TOOL_NAMES } from "@tracer-sh/shared";
 import { CONFIG } from "../config.js";
 
-const KEPT_TOOLS: ReadonlySet<string> = new Set(["report_finding", "begin_analysis"]);
+const KEPT_TOOLS: ReadonlySet<string> = new Set([TOOL_NAMES.FINDING, TOOL_NAMES.BEGIN_ANALYSIS]);
 const WRAPPER = "<tool_result>\n";
 const STUB_LINES = 6;
 const STUB_CHARS = 600;

@@ -111,19 +111,12 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
-  --color-chart-1: var(--chart-1);
-  --color-chart-2: var(--chart-2);
-  --color-chart-3: var(--chart-3);
-  --color-chart-4: var(--chart-4);
-  --color-chart-5: var(--chart-5);
   --color-new-relic: var(--provider-new-relic);
   --color-posthog: var(--provider-posthog);
   --color-gcp: var(--provider-gcp);
   --color-jira: var(--provider-jira);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
@@ -134,7 +127,6 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) * 1.4);
   --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
 
   --animate-pulse-dot: pulse-dot 1.6s ease-out infinite;
@@ -189,8 +181,6 @@
   --provider-jira: #0052cc;
   --sidebar: #f4f3ef;
   --sidebar-foreground: #1f1f1d;
-  --sidebar-primary: #2b5ea7;
-  --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: #e9e7e1;
   --sidebar-accent-foreground: #1f1f1d;
   --sidebar-border: #e6e4de;
@@ -248,12 +238,6 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
-
-  .animate-shimmer {
-    animation: none;
-    background: none;
-    color: var(--muted-foreground);
-  }
 }
 
 @keyframes row-in {
@@ -264,19 +248,7 @@
   from { opacity: 0; filter: blur(3px); }
 }
 
-@keyframes shimmer {
-  from { background-position: 100% 0; }
-  to { background-position: -100% 0; }
-}
-
 .animate-row-in { animation: row-in 220ms ease-out; }
-.animate-shimmer {
-  color: transparent;
-  background: linear-gradient(90deg, var(--muted-foreground) 35%, var(--foreground) 50%, var(--muted-foreground) 65%) 100% 0 / 250% 100% no-repeat;
-  -webkit-background-clip: text;
-  background-clip: text;
-  animation: shimmer 1.8s linear infinite;
-}
 .animate-title-in { animation: title-in 350ms ease-out; }
 
 /* Recharts makes charts focusable; clicking one draws the browser focus ring. */

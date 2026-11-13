@@ -1,5 +1,12 @@
-import { fetchWithRetry } from "../../lib/fetch-retry.js";
+import { fetchText } from "../../lib/fetch-retry.js";
 import type { NerdGraphResponse } from "./types.js";
+
+interface GraphqlOptions {
+  optIn?: string;
+  retry?: boolean;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
 
 export interface AiIssue {
   issueId: string;
@@ -37,9 +44,12 @@ export class NerdGraphClient {
     this.accountId = accountId;
   }
 
-  private async graphql<T>(query: string, variables: Record<string, unknown>, optIn?: string, retry?: boolean, timeoutMs = 35_000): Promise<T> {
-    const response = await fetchWithRetry("https://api.newrelic.com/graphql", {
+  private async graphql<T>(query: string, variables: Record<string, unknown>, { optIn, retry, timeoutMs = 35_000, signal }: GraphqlOptions = {}): Promise<T> {
+    const response = await fetchText("https://api.newrelic.com/graphql", {
       method: "POST",
+      // The key header must not follow a redirect to another host.
+      redirect: "error",
+      signal,
       headers: {
         "Content-Type": "application/json",
         "API-Key": this.apiKey,
@@ -49,11 +59,11 @@ export class NerdGraphClient {
     }, { timeoutMs, retry });
 
     if (!response.ok) {
-      const body = (await response.text().catch(() => "")).slice(0, 500);
+      const body = response.text.slice(0, 500);
       throw new Error(`NerdGraph request failed: ${response.status} ${response.statusText}${body ? `: ${body}` : ""}`);
     }
 
-    const result = (await response.json()) as { errors?: { message: string }[] };
+    const result = JSON.parse(response.text) as { errors?: { message: string }[] };
 
     if (result.errors?.length) {
       throw new Error(`NerdGraph error: ${result.errors.map((e) => e.message).join("; ")}`);
@@ -62,7 +72,7 @@ export class NerdGraphClient {
     return result as T;
   }
 
-  async query(nrql: string, options?: { retry?: boolean }): Promise<NerdGraphResponse> {
+  async query(nrql: string, options?: { retry?: boolean; signal?: AbortSignal }): Promise<NerdGraphResponse> {
     let res: NerdGraphResponse;
     try {
       res = await this.graphql<NerdGraphResponse>(`query($accountId: Int!, $nrql: Nrql!) {
@@ -74,7 +84,7 @@ export class NerdGraphClient {
             }
           }
         }
-      }`, { nrql }, undefined, options?.retry, NRQL_FETCH_TIMEOUT_MS);
+      }`, { nrql }, { retry: options?.retry, timeoutMs: NRQL_FETCH_TIMEOUT_MS, signal: options?.signal });
     } catch (err) {
       // Quoted parts echo the query, so an attribute or a value such as 'timeout' or '504' is not a timeout.
       const message = (err instanceof Error ? err.message : String(err)).replace(/'[^']*'/g, "");
@@ -106,7 +116,7 @@ export class NerdGraphClient {
     const issues: AiIssue[] = [];
     let cursor: string | null = null;
     for (let page = 0; page < AI_ISSUES_MAX_PAGES; page++) {
-      const res: Page = await this.graphql<Page>(query, { filter, tw: { startTime: startMs, endTime: endMs }, cursor }, "AiIssues");
+      const res: Page = await this.graphql<Page>(query, { filter, tw: { startTime: startMs, endTime: endMs }, cursor }, { optIn: "AiIssues" });
       const result = res.data?.actor.account.aiIssues.issues;
       issues.push(...(result?.issues ?? []));
       cursor = result?.nextCursor ?? null;
@@ -132,7 +142,7 @@ export class NerdGraphClient {
           ${mutation}(accountId: $accountId, issueId: $issueId) { error result { issueId } }
         }`,
         { issueId },
-        "AiIssues",
+        { optIn: "AiIssues" },
       );
       const out = res.data?.[mutation];
       if (out?.error) return { error: out.error };

@@ -44,23 +44,23 @@ export class ProviderRegistry {
     return entry.factory(config);
   }
 
-  /** A provider already registered under the name is disposed, so its subprocess or timers do not leak. */
+  /** A provider already registered under the type is disposed, so its subprocess or timers do not leak. */
   register(provider: IProvider): void {
-    const previous = this.providers.get(provider.name);
-    this.providers.set(provider.name, provider);
+    const previous = this.providers.get(provider.type);
+    this.providers.set(provider.type, provider);
     if (previous && previous !== provider) void previous.dispose().catch(() => {});
   }
 
-  async unregister(name: string): Promise<void> {
-    const provider = this.providers.get(name);
+  async unregister(type: string): Promise<void> {
+    const provider = this.providers.get(type);
     if (provider) {
       await provider.dispose();
-      this.providers.delete(name);
+      this.providers.delete(type);
     }
   }
 
-  getProvider(name: string): IProvider | undefined {
-    return this.providers.get(name);
+  getProvider(type: string): IProvider | undefined {
+    return this.providers.get(type);
   }
 
   getAllProviders(): IProvider[] {
@@ -69,7 +69,6 @@ export class ProviderRegistry {
 
   getStatus(): ProviderStatus[] {
     return this.getAllProviders().map((p) => ({
-      name: p.name,
       type: p.type,
       connected: p.connected,
       lastChecked: p.lastChecked,
@@ -82,8 +81,8 @@ export class ProviderRegistry {
   async reconnectDisconnected(): Promise<void> {
     const now = Date.now();
     const due = this.getAllProviders().filter((p) => {
-      if ((p.connected && !p.idle) || now - (this.lastReconnectAt.get(p.name) ?? -Infinity) < CONFIG.providerReconnectCooldownMs) return false;
-      this.lastReconnectAt.set(p.name, now);
+      if ((p.connected && !p.idle) || now - (this.lastReconnectAt.get(p.type) ?? -Infinity) < CONFIG.providerReconnectCooldownMs) return false;
+      this.lastReconnectAt.set(p.type, now);
       return true;
     });
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -128,7 +127,7 @@ export class ProviderRegistry {
   private async registerFromDb(db: Db, replace: boolean): Promise<IProvider[]> {
     if (replace) {
       for (const provider of this.getAllProviders()) {
-        if (this.factories.has(provider.type)) await this.unregister(provider.name);
+        if (this.factories.has(provider.type)) await this.unregister(provider.type);
       }
     }
     const rows = await db.select().from(providerConfigs).all();

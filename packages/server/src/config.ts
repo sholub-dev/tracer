@@ -4,7 +4,8 @@
  *
  * User-controllable settings (timezone, step limits, thinking budgets)
  * are stored in the `app_settings` DB table. The defaults below are
- * fallbacks when no DB value is set. Env vars override everything.
+ * fallbacks when no DB value is set. Env vars override the defaults; for some
+ * settings (the model, API keys) a saved DB value wins over the env var.
  */
 
 import type { KnownModelId } from "@tracer-sh/shared";

@@ -16,7 +16,7 @@ export async function recordSync(db: Db, peer: { id?: string; name: string }): P
 }
 
 /** Where the last good sync with one device ended: `mine` on this clock, `theirs` on the other device's clock. */
-export interface SyncMark {
+interface SyncMark {
   mine: number;
   theirs: number;
 }

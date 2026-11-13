@@ -5,7 +5,7 @@ import { createNodeDb } from "../db/node-db.js";
 import { runSetup } from "../db/setup.js";
 import { chatSessions, toolMemories } from "../db/schema.js";
 import { CONFIG } from "../config.js";
-import { injectMemories } from "../agents/chat/sub-agent.js";
+import { injectMemories } from "../agents/chat/query-records.js";
 import { encodeMessages } from "../lib/messages-codec.js";
 import { clearSessionSets, combineSets, memorySetFor, pickNotes } from "./memory-notes.js";
 

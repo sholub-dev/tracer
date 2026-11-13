@@ -6,6 +6,8 @@ export const WEB_CONFIG = {
   sessionEventCoalesceMs: 500,
   subscriptionRetryMaxMs: 10_000,
   sourcesStaleMs: 60_000,
+  /** How often the gcloud auth status repeats. */
+  gcpAuthPollMs: 30_000,
   /** How often a failed data-source check repeats. */
   providerRetryMs: 15_000,
   /** How often a passing data-source check repeats while the page is visible; credentials can lapse at any time. */

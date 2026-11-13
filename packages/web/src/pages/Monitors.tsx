@@ -8,7 +8,7 @@ import { trpc } from "../lib/trpc";
 import { PageSidebarButton } from "../components/layout/Shell";
 import { BuilderSheet } from "../components/monitors/BuilderSheet";
 import { MonitorCard } from "../components/monitors/MonitorCard";
-import { TimeRangePicker } from "../components/common/TimeRangePicker";
+import { SegmentedControl } from "../components/common/SegmentedControl";
 
 interface MonitorsProps {
   builderSessionId?: string;
@@ -148,16 +148,17 @@ export function Monitors({ builderSessionId, onNavigate: navigate, onOpenBuilder
           <div className="flex min-w-0 flex-1 flex-col sm:flex-row sm:items-baseline sm:gap-3">
             <h1 className="text-xl font-semibold tracking-tight">Monitors</h1>
             {listQuery.isSuccess && (
-              <p className="text-[13px] leading-[18px] text-muted-foreground tabular-nums">
+              <p className="text-[13px] leading-[18px] text-muted-foreground">
                 {monitors.length} {monitors.length === 1 ? "monitor" : "monitors"} · {firing} firing
               </p>
             )}
           </div>
           {hasMonitors && (
-            <TimeRangePicker
+            <SegmentedControl
+              label="Time range"
               value={since}
-              onChange={setSince}
-              presets={RANGE_PRESETS}
+              onValueChange={setSince}
+              options={RANGE_PRESETS.map((p) => ({ value: p.since, label: p.label }))}
               className="order-last max-sm:w-full max-sm:[&>*]:flex-1 sm:order-none"
             />
           )}

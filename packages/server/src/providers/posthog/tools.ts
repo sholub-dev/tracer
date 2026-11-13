@@ -1,77 +1,43 @@
 /**
- * PostHog tool factories — builds execute_hogql tool and provider toolkit.
+ * PostHog tool factories: the execute_hogql tool and the direct-mode kit.
  */
 
-import { z } from "zod";
-import { tool } from "ai";
 import type { PosthogProvider } from "./posthog.provider.js";
-import type { AfterCompleteParams, ChatToolMemoryContext } from "@tracer-sh/shared";
-import {
-  injectMemories,
-  type SubAgentQuery,
-} from "../../agents/chat/sub-agent.js";
-import { capQuery } from "../../lib/messages-codec.js";
-import type { Db } from "../../db/driver.js";
-import { toolModelOutput, buildAfterComplete } from "../../tools/provider-tool-helpers.js";
-import { beginAnalysisTool, ANALYSIS_TOOL_NAME } from "../../tools/analysis-tool.js";
+import type { ChatToolMemoryContext } from "@tracer-sh/shared";
+import type { ProviderQuery } from "../../agents/chat/query-records.js";
+import { buildDirectTools, queryTool, type DirectTools } from "../../tools/provider-tool-helpers.js";
 import { formatHogqlCsv, toChartRows } from "./posthog-formatter.js";
-import {
-  directModeSystemPrompt,
-  posthogUnifiedFragment,
-} from "./prompts.js";
-
-export { posthogUnifiedFragment };
-
-// ── Shared tool builder ──
+import { directModeSystemPrompt } from "./prompts.js";
 
 function buildExecuteHogqlTool(
   provider: PosthogProvider,
-  collectedQueries: SubAgentQuery[],
+  collectedQueries: ProviderQuery[],
 ) {
-  return tool({
+  return queryTool({
     description: "Execute a HogQL query against PostHog.",
-    inputSchema: z.object({
-      query: z.string().describe("The HogQL query to execute. Alias every selected value and facet with AS '<plain name>' (a person reads the column names)."),
-      title: z.string().optional().describe("Plain title of what this query measures, read by a person and cited by the answer card."),
-    }),
-    execute: async ({ query }, { abortSignal }) => {
-      try {
-        const raw = (await provider.executeRawQuery(query, abortSignal)) as Record<string, unknown>[];
-        // Reshape time-bucketed results into New Relic's chartable contract so they plot as a
-        // timeseries (no-op for non-timeseries shapes — they keep rendering as tables/badges).
-        const rows = toChartRows(raw);
-        collectedQueries.push({ query, results: rows });
-
-        // The model reads the CSV built from the ORIGINAL rows: HogQL already returns time buckets
-        // as readable strings under their own alias, so there is nothing to humanize — and using
-        // `raw` avoids relabeling/dropping the user's columns or mangling numeric metrics.
-        const csv = formatHogqlCsv(raw, query);
-        return { parts: [capQuery({ type: "query" as const, query, results: rows })], analysis: csv };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        collectedQueries.push({ query, results: { error: message } });
-        return { error: message };
-      }
+    queryDescription: "The HogQL query to execute. Alias every selected value and facet with AS '<plain name>' (a person reads the column names).",
+    collectedQueries,
+    run: async (query, signal) => {
+      const raw = (await provider.executeRawQuery(query, signal)) as Record<string, unknown>[];
+      // The card gets time-bucketed rows reshaped as New Relic's timeseries so they chart. The model reads the CSV of the
+      // original rows: HogQL already returns buckets as readable strings under their own alias.
+      return { rows: toChartRows(raw), analysis: formatHogqlCsv(raw, query) };
     },
-    toModelOutput: ({ output }) => toolModelOutput(output),
   });
 }
-
-// ── Tool factories ──
 
 export function createPosthogDirectTools(
   provider: PosthogProvider,
   memoryContext?: ChatToolMemoryContext,
   db?: unknown,
-): { tools: Record<string, unknown>; systemPrompt: string; afterComplete: (params: AfterCompleteParams) => void } {
-  const collectedQueries: SubAgentQuery[] = [];
-
-  return {
-    tools: {
-      execute_hogql: buildExecuteHogqlTool(provider, collectedQueries),
-      [ANALYSIS_TOOL_NAME]: beginAnalysisTool,
-    },
-    systemPrompt: injectMemories(directModeSystemPrompt, memoryContext),
-    afterComplete: buildAfterComplete({ providerType: "posthog", db: db as Db | undefined, memoryContext, collectedQueries }),
-  };
+): DirectTools {
+  const collectedQueries: ProviderQuery[] = [];
+  return buildDirectTools({
+    providerType: "posthog",
+    tools: { execute_hogql: buildExecuteHogqlTool(provider, collectedQueries) },
+    prompt: directModeSystemPrompt,
+    collectedQueries,
+    memoryContext,
+    db,
+  });
 }

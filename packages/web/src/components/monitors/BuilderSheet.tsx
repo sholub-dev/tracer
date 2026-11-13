@@ -24,7 +24,8 @@ interface BuilderSheetProps {
 }
 
 export function BuilderSheet({ sessionId, editingName, initialInput, onOpenChat, onClose }: BuilderSheetProps) {
-  const chats = trpc.monitors.builderChats.useQuery().data ?? [];
+  const chatsQuery = trpc.monitors.builderChats.useQuery();
+  const chats = chatsQuery.data ?? [];
   const current = chats.find((c) => c.id === sessionId);
   const chatRef = useRef<ChatCoreRef>(null);
   const title = editingName ? `Edit ${editingName}` : current?.title || "New monitor";
@@ -50,7 +51,7 @@ export function BuilderSheet({ sessionId, editingName, initialInput, onOpenChat,
         <SheetHeader className="flex-row items-center gap-2 border-b px-5 py-3">
           <SheetTitle className="min-w-0 flex-1 truncate text-lg font-semibold">{title}</SheetTitle>
           <SheetDescription className="sr-only">Describe what to watch and the agent writes and tests the query.</SheetDescription>
-          <BuilderChats chats={chats} currentId={sessionId} onOpen={onOpenChat} onDeletedCurrent={onClose} />
+          <BuilderChats chats={chats} loading={chatsQuery.isPending} currentId={sessionId} onOpen={onOpenChat} onDeletedCurrent={onClose} />
           <IconButton label="Close" side="left" onClick={onClose}>
             <X />
           </IconButton>
@@ -63,12 +64,13 @@ export function BuilderSheet({ sessionId, editingName, initialInput, onOpenChat,
 
 interface BuilderChatsProps {
   chats: BuilderChat[];
+  loading: boolean;
   currentId: string | undefined;
   onOpen: (sessionId: string) => void;
   onDeletedCurrent: () => void;
 }
 
-function BuilderChats({ chats, currentId, onOpen, onDeletedCurrent }: BuilderChatsProps) {
+function BuilderChats({ chats, loading, currentId, onOpen, onDeletedCurrent }: BuilderChatsProps) {
   const [open, setOpen] = useState(false);
   const [deleting, setDeleting] = useState<BuilderChat | null>(null);
   const deleteChat = useDeleteSession({ noun: "chat", onDeleted: (id) => id === currentId && onDeletedCurrent() });
@@ -80,12 +82,12 @@ function BuilderChats({ chats, currentId, onOpen, onDeletedCurrent }: BuilderCha
           <Button variant="ghost" size="sm" className="gap-1.5 text-ink-2">
             <History className="size-4" aria-hidden="true" />
             Builder chats
-            {chats.length > 0 && <span className="text-xs text-muted-foreground tabular-nums">{chats.length}</span>}
+            {chats.length > 0 && <span className="text-xs text-muted-foreground">{chats.length}</span>}
           </Button>
         </PopoverTrigger>
         <PopoverContent align="end" className="w-80 gap-0 p-1">
           {chats.length === 0 ? (
-            <p className="px-2 py-3 text-[13px] text-muted-foreground">No builder chats yet.</p>
+            <p className="px-2 py-3 text-[13px] text-muted-foreground">{loading ? "Loading" : "No builder chats yet."}</p>
           ) : (
             <ul className="max-h-80 overflow-y-auto">
               {chats.map((c) => (
@@ -99,7 +101,7 @@ function BuilderChats({ chats, currentId, onOpen, onDeletedCurrent }: BuilderCha
                     <span className={cn("w-full truncate text-[13px]", c.id === currentId && "font-semibold", c.status === "done" && "text-primary")}>
                       {c.title || "Untitled chat"}
                     </span>
-                    <span className="text-xs text-muted-foreground tabular-nums">{formatTime(c.updatedAt)}</span>
+                    <span className="text-xs text-muted-foreground">{formatTime(c.updatedAt)}</span>
                   </button>
                   <IconButton
                     label={`Delete ${c.title || "chat"}`}

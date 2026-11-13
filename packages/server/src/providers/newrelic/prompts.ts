@@ -18,7 +18,7 @@ export const NR_CONFIG: ProviderPromptConfig = {
   authStopRule: NR_AUTH_STOP_RULE,
   domainKnowledge: NR_DOMAIN_KNOWLEDGE,
   insideOutDebugging: NR_INSIDE_OUT_DEBUGGING,
-  directModeRoleIntro: `You are a New Relic expert having a direct conversation with a developer. You have full conversation history and can reference previous messages. You use the tools available in this run. Handle both simple lookups and multi-step investigations depending on what the user asks. You run as an AUTONOMOUS MULTI-STEP AGENT — after each tool call you automatically receive results and CAN (and often SHOULD) make additional tool calls before finishing.`,
+  directModeRoleIntro: `You are a New Relic expert having a direct conversation with a developer. You have full conversation history and can reference previous messages. You use the tools available in this run. Handle both simple lookups and multi-step investigations depending on what the user asks. You run as an AUTONOMOUS MULTI-STEP AGENT — after each tool call you receive the results and keep calling tools until the causal chain reaches its end. The user can send a message while you work; it appears between your steps. Read it, then change course, answer it, or keep going.`,
 };
 
 export const directModeSystemPrompt = buildDirectModePrompt(NR_CONFIG);

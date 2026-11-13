@@ -7,7 +7,7 @@ import { runInTransaction } from "../../db/driver.js";
 import { chatSessions, monitors, monitorTriggers } from "../../db/schema.js";
 import { alertBrief, parseTriggerGroups } from "../../monitors/repeats.js";
 import { deleteMonitor, setMonitorToggles } from "../../monitors/store.js";
-import { ingestLagSeconds } from "../../monitors/triage.js";
+import { ingestLagSeconds } from "../../monitors/window.js";
 import { pendingFirings, resolveFiring } from "../../monitors/scheduler.js";
 import { pendingFiringChanges } from "../../lib/firing-events.js";
 

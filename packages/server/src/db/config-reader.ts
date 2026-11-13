@@ -14,6 +14,19 @@ export async function readProviderConfig(db: Db, type: string): Promise<Record<s
   }
 }
 
+/** Upsert the config of a provider type. */
+export async function writeProviderConfig(db: Db, type: string, config: Record<string, string>): Promise<void> {
+  const json = JSON.stringify(config);
+  await db.insert(providerConfigs)
+    .values({ type, config: json })
+    .onConflictDoUpdate({ target: providerConfigs.type, set: { config: json } })
+    .run();
+}
+
+export async function deleteProviderConfig(db: Db, type: string): Promise<void> {
+  await db.delete(providerConfigs).where(eq(providerConfigs.type, type)).run();
+}
+
 export async function readAppSetting<T>(db: Db, key: string): Promise<T | null> {
   const row = await db.select().from(appSettings).where(eq(appSettings.key, key)).get();
   if (!row) return null;
@@ -43,6 +56,10 @@ export async function writeAppSetting(db: Db, key: string, value: unknown): Prom
     .values({ key, value: json, updatedAt: now })
     .onConflictDoUpdate({ target: appSettings.key, set: { value: json, updatedAt: now } })
     .run();
+}
+
+export async function deleteAppSetting(db: Db, key: string): Promise<void> {
+  await db.delete(appSettings).where(eq(appSettings.key, key)).run();
 }
 
 /** This device's id: stored as plain text, not JSON. Empty when unset. */

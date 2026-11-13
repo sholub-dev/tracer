@@ -3,9 +3,7 @@ import { runInTransaction, type Db } from "../db/driver.js";
 import * as schema from "../db/schema.js";
 import { failedWindowEnds } from "../monitors/store.js";
 import { LOCAL_SETTING_KEYS, SYNC_KEYS } from "../db/setup.js";
-import { CHAT_MODEL_KEY, checkRows, FORMAT, readSyncRows, readTable, SESSION_RUN_STATE, TABLES, usesDesktopOnlyProvider, type SyncRow } from "./snapshot.js";
-
-export { LOCAL_SETTING_KEYS, SYNC_KEYS };
+import { checkRows, FORMAT, isDesktopOnly, readSyncRows, readTable, SESSION_RUN_STATE, TABLES, type SyncRow } from "./snapshot.js";
 
 type Row = Record<string, any>;
 
@@ -94,7 +92,8 @@ export async function mergeSyncPayload(db: Db, remote: SyncPayload): Promise<{ a
   }
 
   // Cleared only after the commit: a rolled-back merge keeps the monitor, so it keeps its failed windows too.
-  const removedMonitors: string[] = [];
+  // A changed monitor retries at once, like an edit.
+  const changedMonitors: string[] = [];
   const merged = await runInTransaction(db, async (tx) => {
     const logged = new Map((await readSyncRows(tx)).map((r) => [`${r.tbl}\0${r.row_key}`, r.changed_at]));
     const newer = new Map<string, SyncRow[]>();
@@ -116,7 +115,7 @@ export async function mergeSyncPayload(db: Db, remote: SyncPayload): Promise<{ a
       for (const entry of (newer.get(name) ?? []).filter((e) => e.deleted)) {
         await tx.delete(table).where(eq(keyOf(name).column, entry.row_key)).run();
         await log(entry);
-        if (name === "monitors") removedMonitors.push(entry.row_key);
+        if (name === "monitors") changedMonitors.push(entry.row_key);
         deleted[name]++;
       }
     }
@@ -140,7 +139,7 @@ export async function mergeSyncPayload(db: Db, remote: SyncPayload): Promise<{ a
       for (const entry of (newer.get(name) ?? []).filter((e) => !e.deleted)) {
         const row = incoming.get(entry.row_key);
         if (!row) continue;
-        if (name === "app_settings" && row.key === CHAT_MODEL_KEY && usesDesktopOnlyProvider(row.value)) continue;
+        if (isDesktopOnly(name, row)) continue;
         let orphan = false;
         for (const [fk, parent] of PARENTS[name] ?? []) {
           if (!(await hasParent(parent, row[fk]))) orphan = true;
@@ -165,10 +164,11 @@ export async function mergeSyncPayload(db: Db, remote: SyncPayload): Promise<{ a
         await tx.insert(table).values(insert as never).onConflictDoUpdate({ target: column, set: omit(values, [prop]) as never }).run();
         await log(entry);
         applied[name]++;
+        if (name === "monitors") changedMonitors.push(entry.row_key);
       }
     }
     return { applied, deleted };
   });
-  for (const id of removedMonitors) failedWindowEnds.delete(id);
+  for (const id of changedMonitors) failedWindowEnds.delete(id);
   return merged;
 }

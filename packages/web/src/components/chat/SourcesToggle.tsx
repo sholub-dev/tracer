@@ -32,7 +32,7 @@ export function SourcesToggle({ activeProvider, onToggle }: SourcesToggleProps) 
 
   if (!connected?.length) return null;
 
-  const options = [{ value: UNIFIED_SCOPE, label: "All sources" }, ...connected.map((p) => ({ value: p.type, label: providerLabel(p.type, p.name) }))];
+  const options = [{ value: UNIFIED_SCOPE, label: "All sources" }, ...connected.map((p) => ({ value: p.type, label: providerLabel(p.type) }))];
 
   return (
     <>

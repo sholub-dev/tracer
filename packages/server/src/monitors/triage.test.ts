@@ -10,13 +10,14 @@ import type { ProviderRegistry } from "../providers/registry.js";
 import { CONFIG } from "../config.js";
 import { NewRelicProvider } from "../providers/newrelic/newrelic.provider.js";
 import type { AiIssue } from "../providers/newrelic/nerdgraph.client.js";
-import { applyTriage, checkWatches, TRIAGE_EFFECT, closedCheckPrompt, decide, issuesPrompt, monitorIssueTools, incidentQuery, incidentRefs, reportIssueStatusTool, wakeupExtras, type DecideInput } from "./triage.js";
+import { applyTriage, checkWatches, TRIAGE_EFFECT, closedCheckPrompt, decide, issuesPrompt, monitorIssueTools, incidentRefs, reportIssueStatusTool, wakeupExtras, type DecideInput } from "./triage.js";
 import { buildMessage, firingRerun } from "./scheduler.js";
 import { writeSlackConfig } from "../integrations/slack.js";
 import { MONITOR_ROLE } from "./alert-summary.js";
 import { fireDueTimers } from "./timers.js";
 import { ensureFollowUp } from "./follow-up.js";
 import { setMonitorToggles } from "./store.js";
+import { incidentQuery } from "./window.js";
 import { settleMonitorRun } from "./scheduler.js";
 import type { StartSessionOptions } from "../agents/start-session.js";
 
@@ -266,18 +267,6 @@ test("a follow-up wake-up stops watching when triage is off or the 24h cap passe
   await addIssue(on.context.db, "b", { state: "watching", verdict: "ongoing", watchUntil: 1 });
   assert.equal((await wakeupExtras(on.context, "s1")).tools?.report_issue_status, undefined);
   assert.equal((await on.context.db.select().from(schema.alertIssues).get())?.state, "left_open");
-});
-
-test("checkWatches deletes finished issues after the retention period and keeps the rest", async () => {
-  const { context } = fakeNewRelic({});
-  const old = Math.floor(Date.now() / 1000) - CONFIG.triageRetentionSeconds - 60;
-  await addIssue(context.db, "a", { state: "closed", updatedAt: old });
-  await addIssue(context.db, "b", { state: "left_open", updatedAt: old });
-  await addIssue(context.db, "c", { state: "nr_closed" });
-  await addIssue(context.db, "d", { state: "watching", updatedAt: old });
-  await addTimer(context.db);
-  await checkWatches(context);
-  assert.deepEqual((await context.db.select().from(schema.alertIssues).all()).map((r) => r.issueId).sort(), ["c", "d"]);
 });
 
 test("checkWatches leaves watched issues open once their follow-up timer is gone", async () => {

@@ -1,6 +1,6 @@
 import { streamText, convertToModelMessages, hasToolCall, isStepCount, createUIMessageStream, toUIMessageStream, type UIMessage, type ToolSet, isTextUIPart } from "ai";
 import { and, eq, sql } from "drizzle-orm";
-import { CLIENT_TOOL_NAMES, DEFAULT_SESSION_TITLE, cardRejected, findingSchema, TOOL_NAMES, unixNow, splitAtAnalysis, findingFromMessages, findingMarkdown, resultRefsToText, turnStart, type AfterCompleteParams, type TokenUsage } from "@tracer-sh/shared";
+import { CLIENT_TOOL_NAMES, DEFAULT_SESSION_TITLE, cardRejected, findingSchema, TOOL_NAMES, unixNow, splitAtAnalysis, findingFromMessages, findingMarkdown, turnStart, type AfterCompleteParams, type TokenUsage } from "@tracer-sh/shared";
 import { chatSessions } from "../db/schema.js";
 import { sessionChanged } from "../lib/session-events.js";
 import { decodeMessages, encodeMessages } from "../lib/messages-codec.js";
@@ -217,7 +217,7 @@ export function budgetNote(stepNumber: number, maxSteps: number, toolNames: stri
   if (stepNumber === maxSteps - 1) {
     return requireFinding
       ? "This is the last step. Call report_finding now from the results you have. State only what the results show, set the confidence label to match, and state in unknown the open why you did not reach."
-      : "This is the last step, and no query tools remain. Answer now from the results you have with report_finding, or in text when the answer is one fact. State only what the results show, and name the open question you did not reach.";
+      : "This is the last step, and no query tools remain. Answer now from the results you have with report_finding. State only what the results show, and name the open question you did not reach.";
   }
   if (reserve > 1 && stepNumber === maxSteps - reserve) {
     if (!requireFinding) return `At this point ${reserve} steps remained in this reply. Finish the link you are on, then answer from the results you have.`;
@@ -400,7 +400,7 @@ async function processLLMStream(
     if (step !== maxSteps - 1) return undefined;
     const names = [...turnToolNames(messages), ...stepToolNames(steps)];
     if (!owesFinding(names)) return undefined;
-    // A chat run may answer in text: only the query tools go, nothing is forced.
+    // A chat run is told to end with the card; only the query tools go, nothing is forced.
     return requireFinding ? forceCard : { activeTools: [TOOL_NAMES.FINDING] };
   };
   // Ends only this attempt (a silent stream), unlike serverAbort, which is a stop of the whole run.
@@ -559,7 +559,7 @@ async function processLLMStream(
             // The last text part of a reply is its answer; the first can be a note before a tool call.
             const answer = lastWithText("assistant")?.parts.filter(isTextUIPart).at(-1);
             const question = lastWithText("user")?.parts.find(isTextUIPart);
-            let lastAssistantText = answer ? resultRefsToText(answer.text) : "";
+            let lastAssistantText = answer ? answer.text : "";
             // The card is the answer; the first text part is only a note before it.
             const finding = findingFromMessages(enrichedMessages.slice(turnStart(enrichedMessages)));
             if (finding) lastAssistantText = findingMarkdown(finding);

@@ -13,7 +13,7 @@ import {
   NR_INSIDE_OUT_DEBUGGING,
 } from "./domain-knowledge.js";
 
-export const NR_CONFIG: ProviderPromptConfig = {
+const NR_CONFIG: ProviderPromptConfig = {
   providerName: "New Relic",
   authStopRule: NR_AUTH_STOP_RULE,
   domainKnowledge: NR_DOMAIN_KNOWLEDGE,

@@ -10,7 +10,7 @@ export interface NerdGraphResponse {
 }
 
 /** NRQL query result */
-export interface NrqlQueryResult {
+interface NrqlQueryResult {
   results: NrqlResult[];
   metadata?: {
     timeWindow?: { begin: number; end: number } | null;

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { timeoutSignal } from "../../lib/timeout-signal.js";
 
 /** `token` is null for a service-account key: the MCP subprocess reads the key itself and no refresh token exists to exchange. */
-export type GcpAuthResult =
+type GcpAuthResult =
   | { ok: true; token: string | null }
   | { ok: false; message: string };
 

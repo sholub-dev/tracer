@@ -3,7 +3,7 @@ import { AlertCircle, ClipboardCheck, Copy, History, Send, Timer, type LucideIco
 import { CLIENT_TOOL_NAMES, isPlainObject } from "@tracer-sh/shared";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
-import { Markdown, type ResultLookup } from "../../lib/markdown";
+import { Markdown } from "../../lib/markdown";
 import ResultView, { JsonTree } from "../charts/ResultView";
 import { hasErrorOutput } from "../../lib/chat-utils";
 import { MonitorSavedCard, type MonitorSavedOutput } from "../monitors/MonitorSavedCard";
@@ -12,7 +12,6 @@ import { ProviderDot } from "../common/ProviderDot";
 import { IconButton } from "../common/IconButton";
 import { copyText } from "./MessageActions";
 import { ReasoningBlock } from "./ReasoningBlock";
-import { ANSWER_PROSE_COMPACT } from "./prose";
 import { providerLabel } from "../../lib/providers";
 import { smallToolLabel } from "../../lib/tool-label";
 
@@ -25,18 +24,14 @@ export interface ToolPart {
   input?: Record<string, unknown>;
 }
 
-/** A saved sub-agent output part. "summary" is from older sessions. */
+/** A saved sub-agent output part. */
 type ProgressPart =
   | { type: "query"; query: string; results: unknown; totalRows?: number }
   | { type: "text"; content: string }
-  | { type: "tool-call"; toolName: string }
-  | { type: "reasoning"; content: string }
-  | { type: "analysis-start" }
-  | { type: "summary"; content: string };
+  | { type: "reasoning"; content: string };
 
 interface SubAgentOutput {
   analysis?: string;
-  queries?: Array<{ query: string; results: unknown; totalRows?: number }>;
   parts?: ProgressPart[];
   error?: string;
 }
@@ -52,17 +47,13 @@ const SMALL_TOOLS: Record<string, { done: string; errorLabel: string; icon: Luci
 
 const MONITOR_TOOLS = new Set<string>([CLIENT_TOOL_NAMES.SAVE_MONITOR, CLIENT_TOOL_NAMES.DELETE_MONITOR]);
 
-// Bare names are from older sessions; GCP's MCP tools have dynamic names, so anything else is GCP.
+// GCP's MCP tools have dynamic names, so anything else is GCP.
 const PROVIDER_BY_TOOL: Record<string, string> = {
   "tool-execute_nrql": "newrelic",
-  "tool-nrql": "newrelic",
-  "tool-newrelic": "newrelic",
   "tool-list_nr_issues": "newrelic",
   "tool-ack_nr_issue": "newrelic",
   "tool-close_nr_issue": "newrelic",
   "tool-execute_hogql": "posthog",
-  "tool-hogql": "posthog",
-  "tool-posthog": "posthog",
   "tool-get_jira_issue": "jira",
   "tool-add_jira_comment": "jira",
 };
@@ -88,19 +79,13 @@ export function isProviderTool(type: string) {
 
 function isSubAgentOutput(output: unknown): output is SubAgentOutput {
   if (!output || typeof output !== "object" || Array.isArray(output)) return false;
-  return "parts" in output || "queries" in output || "analysis" in output || "error" in output;
-}
-
-function legacyToParts(output: SubAgentOutput): ProgressPart[] {
-  const parts: ProgressPart[] = (output.queries ?? []).map((q) => ({ type: "query", query: q.query, results: q.results, totalRows: q.totalRows }));
-  if (output.analysis) parts.push({ type: "text", content: output.analysis });
-  return parts;
+  return "parts" in output || "error" in output;
 }
 
 /** Ordered parts of a provider tool's saved output. */
 function stepParts(part: ToolPart): ProgressPart[] {
   const output = part.state === "output-available" ? part.output : undefined;
-  if (isSubAgentOutput(output)) return output.parts?.length ? output.parts : legacyToParts(output);
+  if (isSubAgentOutput(output)) return output.parts ?? [];
   return [];
 }
 
@@ -165,14 +150,9 @@ function Narration({ content, isAnimating }: { content: string; isAnimating: boo
 }
 
 function ProgressItems({ parts, isAnimating, provider }: { parts: ProgressPart[]; isAnimating: boolean; provider: string }) {
-  let inAnalysis = false;
   return (
     <>
       {parts.map((p, i) => {
-        if (p.type === "analysis-start") {
-          inAnalysis = true;
-          return null;
-        }
         if (p.type === "query") {
           return (
             <div key={i} className="space-y-2">
@@ -182,10 +162,6 @@ function ProgressItems({ parts, isAnimating, provider }: { parts: ProgressPart[]
           );
         }
         if (p.type === "reasoning") return <ReasoningBlock key={i} content={p.content} isAnimating={isAnimating} />;
-        if (p.type === "tool-call") return null;
-        if (inAnalysis && p.type === "text") {
-          return <Markdown key={i} text={p.content} isAnimating={isAnimating} className={ANSWER_PROSE_COMPACT} />;
-        }
         return <Narration key={i} content={p.content} isAnimating={isAnimating} />;
       })}
     </>
@@ -337,11 +313,11 @@ function StepBody({ part, isAnimating }: { part: ToolPart; isAnimating: boolean 
   );
 }
 
-type StepProps = { part: ToolPart; isAnimating: boolean };
+type StepProps = { part: ToolPart; isAnimating: boolean; /** The evidence list under the summary card already shows this step's results. */ cited?: boolean };
 
 // The AI SDK clones the streaming message per chunk, so part identity changes even when nothing read here did.
 function stepPropsEqual(prev: StepProps, next: StepProps): boolean {
-  if (prev.isAnimating !== next.isAnimating) return false;
+  if (prev.isAnimating !== next.isAnimating || prev.cited !== next.cited) return false;
   const a = prev.part;
   const b = next.part;
   if (a === b) return true;
@@ -350,7 +326,7 @@ function stepPropsEqual(prev: StepProps, next: StepProps): boolean {
   return a.output === b.output && a.errorText === b.errorText && a.input?.task === b.input?.task && a.input?.query === b.input?.query && a.input?.title === b.input?.title;
 }
 
-/** A finished step's results in a card, with its query behind a toggle: the evidence under a summary card and a result block in the answer. */
+/** A finished step's results in a card, with its query behind a toggle: the evidence under a summary card. */
 // Memoized: a settled part never changes, and the reply around it re-renders on every streamed chunk.
 export const ResultCard = memo(function ResultCard({ part }: { part: ToolPart }) {
   const [open, setOpen] = useState(false);
@@ -382,12 +358,12 @@ export const ResultCard = memo(function ResultCard({ part }: { part: ToolPart })
 });
 
 // A running or failed step is one folded row; a finished step with results shows them in a card.
-export const ProviderStep = memo(function ProviderStep({ part, isAnimating }: StepProps) {
+export const ProviderStep = memo(function ProviderStep({ part, isAnimating, cited }: StepProps) {
   const provider = providerOf(part.type);
   const settled = part.state === "output-available" || part.state === "output-error";
   // A failed step is marked, not explained: the error reads only in the opened row.
   const failed = !!stepError(part);
-  if (part.state === "output-available" && stepResults(part).length > 0) {
+  if (!cited && part.state === "output-available" && stepResults(part).length > 0) {
     return <li className="animate-in fade-in duration-200"><ResultCard part={part} /></li>;
   }
   return (
@@ -418,18 +394,6 @@ function stepResults(part: ToolPart): Array<{ data: unknown; totalRows?: number 
   if (queries.length) return queries;
   const rows = rowsOf(part.output);
   return rows ? [{ data: rows }] : [];
-}
-
-/** Resolves the title of a ```result block against the queries of the same reply. */
-export function resultLookup(parts: ReadonlyArray<ToolPart>): ResultLookup {
-  const steps = parts.filter((p) => isProviderTool(p.type));
-  return (title) => {
-    const key = title.trim().toLowerCase();
-    const titled = steps.filter((p) => typeof p.input?.title === "string" && p.input.title.trim().toLowerCase() === key);
-    const ready = titled.findLast((p) => p.state === "output-available" && stepResults(p).length > 0);
-    if (!ready) return null;
-    return <div className="my-4"><ResultCard part={ready} /></div>;
-  };
 }
 
 function StoppedLine() {

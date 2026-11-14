@@ -1,4 +1,4 @@
-import { test, beforeEach } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import Database from "better-sqlite3-multiple-ciphers";
 import { createNodeDb } from "../db/node-db.js";
@@ -7,7 +7,7 @@ import { chatSessions, toolMemories } from "../db/schema.js";
 import { CONFIG } from "../config.js";
 import { injectMemories } from "../agents/chat/query-records.js";
 import { encodeMessages } from "../lib/messages-codec.js";
-import { clearSessionSets, combineSets, memorySetFor, pickNotes } from "./memory-notes.js";
+import { combineSets, memorySetFor, pickNotes } from "./memory-notes.js";
 
 async function freshDb() {
   const { db, setupDriver } = createNodeDb(new Database(":memory:"));
@@ -17,8 +17,6 @@ async function freshDb() {
 
 const row = (id: number, note: string, createdAt = id) => ({ id, toolName: "newrelic", note, createdAt });
 const many = (n: number) => Array.from({ length: n }, (_, i) => row(i + 1, `note number ${i + 1} about field f${i + 1}`));
-
-beforeEach(() => clearSessionSets());
 
 test("the rendered block is fenced, sanitized and drops normalized duplicates", () => {
   const prompt = injectMemories("Role.\n\nRest.", {
@@ -58,12 +56,12 @@ test("a session keeps its first set; later notes do not appear", async () => {
   const db = await freshDb();
   await db.insert(toolMemories).values({ toolName: "newrelic", note: "First note" }).run();
   const rows = () => db.select().from(toolMemories).all();
-  const first = await memorySetFor(db, "s1", "newrelic", await rows());
+  const first = await memorySetFor(db, "keep-a", "newrelic", await rows());
   await db.insert(toolMemories).values({ toolName: "newrelic", note: "Second note" }).run();
-  const second = await memorySetFor(db, "s1", "newrelic", await rows());
+  const second = await memorySetFor(db, "keep-a", "newrelic", await rows());
   assert.equal(JSON.stringify(second), JSON.stringify(first));
   assert.equal(second.notes.length, 1);
-  const other = await memorySetFor(db, "s2", "newrelic", await rows());
+  const other = await memorySetFor(db, "keep-b", "newrelic", await rows());
   assert.equal(other.notes.length, 2);
   assert.ok((await rows())[0].lastUsedAt);
 });
@@ -73,10 +71,10 @@ test("over budget, the set is picked by the first user message of the session", 
   const rows = many(CONFIG.memoryMaxNotes + 5);
   rows[0].note = "billing invoices use table Invoice";
   await db.insert(chatSessions).values({
-    id: "s1", title: "t", status: "done",
+    id: "pick-a", title: "t", status: "done",
     messages: encodeMessages([{ id: "u1", role: "user", parts: [{ type: "text", text: "Check billing invoices" }] }]),
   }).run();
-  const set = await memorySetFor(db, "s1", "newrelic", rows);
+  const set = await memorySetFor(db, "pick-a", "newrelic", rows);
   assert.ok(set.notes.some((n) => n.id === 1));
 });
 
@@ -93,8 +91,8 @@ test("general notes join a provider's set within one budget and combine without 
     { toolName: "unified", note: "General note" },
   ]).run();
   const rows = await db.select().from(toolMemories).all();
-  const a = await memorySetFor(db, "s1", "newrelic", rows);
-  const b = await memorySetFor(db, "s1", "gcp", rows.filter((r) => r.toolName === "unified"));
+  const a = await memorySetFor(db, "join-a", "newrelic", rows);
+  const b = await memorySetFor(db, "join-a", "gcp", rows.filter((r) => r.toolName === "unified"));
   assert.deepEqual(a.notes.map((n) => n.note), ["Provider note", "General note"]);
   assert.deepEqual(combineSets([a, b]).notes.map((n) => n.note), ["Provider note", "General note"]);
 });

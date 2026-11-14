@@ -92,7 +92,7 @@ export function checkDraft(draft: MonitorDraft): { condition: Condition } | { er
 }
 
 /** Runs the query over the window a real check would use, and tells what the condition makes of it. */
-export async function sampleDraft(providers: ProviderRegistry, draft: MonitorDraft, condition: Condition): Promise<ValidationResult | { error: string }> {
+async function sampleDraft(providers: ProviderRegistry, draft: MonitorDraft, condition: Condition): Promise<ValidationResult | { error: string }> {
   const providerName = draft.provider as MonitorProvider;
   await providers.whenLoaded();
   const provider = providers.getProvider(providerName);

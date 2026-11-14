@@ -1,8 +1,8 @@
 import type { ReactNode, RefObject } from "react";
 import type { UIMessage } from "ai";
-import { Copy, Download, ImageIcon, Share } from "lucide-react";
+import { Copy, ImageIcon, Share } from "lucide-react";
 import { toast } from "sonner";
-import { ANALYSIS_MARKER, askUserText, CLIENT_TOOL_NAMES, findingFromMessages, findingMarkdown, resultRefsToText, splitAtAnalysis } from "@tracer-sh/shared";
+import { askUserText, CLIENT_TOOL_NAMES, findingFromMessages, findingMarkdown, splitAtAnalysis } from "@tracer-sh/shared";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { IS_IOS } from "../../lib/platform";
@@ -38,7 +38,7 @@ export function extractMessageText(parts: UIMessage["parts"]): string {
   if (finding) chunks.push(stripMarkdown(findingMarkdown(finding)));
   for (const part of parts) {
     if (part.type === "text") {
-      chunks.push(stripMarkdown(resultRefsToText(part.text.replace(ANALYSIS_MARKER, ""))));
+      chunks.push(stripMarkdown(part.text));
     } else if (part.type === CLIENT_TOOL_NAMES.ASK_USER) {
       const ask = askUserText((part as { input?: unknown }).input);
       if (ask) chunks.push(ask);
@@ -143,7 +143,7 @@ async function captureNow(el: HTMLElement, boxed: boolean): Promise<Blob> {
 }
 
 /** `<prefix>-YYYY-MM-DD-HH-MM.png` in local time. */
-export function stampedPngName(prefix: string) {
+function stampedPngName(prefix: string) {
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${prefix}-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}-${pad(now.getMinutes())}.png`;
@@ -211,15 +211,11 @@ async function saveFile(blob: Blob, name: string): Promise<boolean> {
   return true;
 }
 
-/** Label of the save-image action; iOS and phone browsers share instead of downloading. */
-export const SAVE_IMAGE_LABEL = SHARES_IMAGE ? "Share image" : "Download image";
-
-/** Action button under a message: icon only on phones, with the label kept for screen readers. */
+/** Icon-only action button under a message; the label is the accessible name and the tooltip. */
 export function MessageActionButton({ icon, label, onClick }: { icon: ReactNode; label: string; onClick: () => void }) {
   return (
-    <Button variant="ghost" size="xs" className="text-muted-foreground max-sm:size-8" onClick={onClick}>
+    <Button variant="ghost" size="icon-xs" className="text-muted-foreground max-sm:size-8" aria-label={label} title={label} onClick={onClick}>
       {icon}
-      <span className="max-sm:sr-only">{label}</span>
     </Button>
   );
 }
@@ -234,7 +230,7 @@ const captureReply = (el: HTMLElement) => {
 };
 
 /** PNG of an element, downloaded as a file; `reply` captures the reply's Analysis box instead. */
-export async function downloadImage(el: HTMLElement, name: string, reply = false) {
+async function downloadImage(el: HTMLElement, name: string, reply = false) {
   try {
     if (await saveFile(await (reply ? captureReply(el) : capture(el)), name)) toast.success("Image saved", { description: name });
   } catch {
@@ -285,14 +281,11 @@ export function MessageActions({
         }}
       />
       {image && (
-        <>
-          <MessageActionButton icon={<ImageIcon />} label="Copy image" onClick={() => contentRef.current && copyImage(contentRef.current)} />
-          <MessageActionButton
-            icon={SHARES_IMAGE ? <Share /> : <Download />}
-            label={SAVE_IMAGE_LABEL}
-            onClick={() => contentRef.current && downloadImage(contentRef.current, stampedPngName("analysis"), true)}
-          />
-        </>
+        <MessageActionButton
+          icon={SHARES_IMAGE ? <Share /> : <ImageIcon />}
+          label={SHARES_IMAGE ? "Share image" : "Copy image"}
+          onClick={() => contentRef.current && (SHARES_IMAGE ? downloadImage(contentRef.current, stampedPngName("analysis"), true) : copyImage(contentRef.current))}
+        />
       )}
       {children}
     </div>

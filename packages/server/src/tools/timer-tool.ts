@@ -19,7 +19,7 @@ export async function hasPendingTimer(db: Db, sessionId: string): Promise<boolea
 }
 
 /** Sets the session's one follow-up timer, replacing a pending one. */
-export async function putTimer(db: Db, sessionId: string, minutes: number, note: string): Promise<number> {
+async function putTimer(db: Db, sessionId: string, minutes: number, note: string): Promise<number> {
   const now = unixNow();
   const fireAt = now + Math.round(minutes * 60);
   const row = { fireAt, note: note.trim(), setAt: now };

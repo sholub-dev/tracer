@@ -3,7 +3,7 @@ import type { ProviderRegistry } from "../providers/registry.js";
 import type { StreamBroadcaster } from "../lib/stream-broadcaster.js";
 import type { SteerState } from "../agents/steer.js";
 
-export interface ActiveStream {
+interface ActiveStream {
   broadcaster: StreamBroadcaster;
   controller: AbortController; // server-owned, for explicit stop
   steer: SteerState;

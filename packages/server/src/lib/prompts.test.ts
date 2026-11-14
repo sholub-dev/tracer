@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { findingSchema } from "@tracer-sh/shared";
 import { ASK_USER_PROMPT, buildUnifiedModePrompt, EVIDENCE_GROUNDING } from "./shared-prompts.js";
 import { directModeSystemPrompt as nrDirect } from "../providers/newrelic/prompts.js";
 import { gcpDirectModeSystemPrompt as gcpDirect } from "../providers/gcp/prompts.js";
@@ -36,7 +37,7 @@ test("grounding rules cover meaning, absence, and fact/deduction separation", ()
 
 test("final reminders reference sections that actually exist", () => {
   for (const [name, prompt] of allPrompts) {
-    assert.ok(prompt.includes("Stay Grounded in Evidence"), `${name}: missing grounding reminder`);
+    assert.ok(prompt.includes("End every reply with the answer card"), `${name}: missing answer-card reminder`);
     // Regression guard: the old reminder cited rules that existed nowhere.
     assert.ok(!prompt.includes("Follow the Detective mindset:"), `${name}: stale Detective mindset reference`);
   }
@@ -75,7 +76,7 @@ test("prompts require competing explanations and a challenge check, and never fo
 test("prompts follow a change in client activity to who drove it, and only where it applies", () => {
   for (const [name, prompt] of allPrompts) {
     assert.equal(prompt.split("### Actor check").length - 1, 1, `${name}: expected one Actor check`);
-    for (const phrase of ["Find who or what sent the extra load (the Actor check)", "Run it when the chain reaches a change in client or user activity", "state the result that rules it out", "legitimate or abuse, and which result decides it"]) {
+    for (const phrase of ["Find who or what sent the extra load (the Actor check)", "Run it when the chain reaches a change in client or user activity", "state the result that rules it out"]) {
       assert.ok(prompt.includes(phrase), `${name}: missing "${phrase}"`);
     }
   }
@@ -102,17 +103,16 @@ test("prompts never let the agent claim an action or owner that no result shows"
   }
 });
 
-test("prompts make the finding card optional and keep its rules", () => {
+test("prompts make the answer card the end of every reply and keep its rules", () => {
   for (const [name, prompt] of allPrompts) {
-    assert.ok(prompt.includes("Answer in plain text without a card only when the answer is one fact read at a glance"), `${name}: missing one-fact exception`);
-    assert.ok(prompt.includes("Then call `report_finding` once, alone in its step. The card is the summary"), `${name}: missing report_finding rule`);
-    assert.ok(prompt.includes("When the reply ran queries to answer the question, end it with the finding card"), `${name}: missing text-answer rule`);
+    assert.ok(prompt.includes("Every reply to the person ends with the answer card"), `${name}: missing every-reply rule`);
+    assert.ok(prompt.includes("Never give the answer in text instead of the card"), `${name}: missing no-text rule`);
+    assert.ok(prompt.includes("A yes or no question gets Yes or No first"), `${name}: missing yes-or-no sizing rule`);
+    assert.ok(prompt.includes("Then call `report_finding` once, alone in its step. The card is the answer"), `${name}: missing report_finding rule`);
+    assert.ok(!prompt.includes("Answer in plain text without a card") && !prompt.includes("Skip it only for a one-fact answer"), `${name}: stale text-answer exception`);
     assert.ok(prompt.includes("Before a `root_cause` card, call the `begin_analysis` tool") && !prompt.includes("once in each reply that investigated"), `${name}: begin_analysis is not tied to the root-cause card`);
-    assert.ok(prompt.includes("`root_cause` when the question asks why") && prompt.includes("`summary` for status"), `${name}: missing finding kinds`);
+    assert.ok(prompt.includes("Fill each field as its description says"), `${name}: missing field rule pointer`);
     assert.ok(!prompt.includes("every turn that ran at least one query") && !prompt.includes("Skip it only when no query ran"), `${name}: stale forced-card rule`);
-    assert.ok(prompt.includes("A statement no result shows is not in the explanation"), `${name}: missing explanation rule`);
-    assert.ok(prompt.includes("never a query you can run yourself: run it before the card") || prompt.includes("or a query you can run yourself: run it before the card"), `${name}: unknown must not hold a runnable query`);
-    assert.ok(prompt.includes("Each number appears once in the whole card"), `${name}: missing no-repeat rule`);
     assert.ok(prompt.includes("Do not run queries after the card"), `${name}: missing card-last rule`);
     for (const stale of ["Supporting visuals", "Nothing after the last visual", "Re-run queries here even if you already ran them", "`headline`", "`chain`"]) {
       assert.ok(!prompt.includes(stale), `${name}: stale rule "${stale}"`);
@@ -120,10 +120,10 @@ test("prompts make the finding card optional and keep its rules", () => {
   }
 });
 
-test("prompts allow markdown tables and result blocks in the written answer", () => {
+test("prompts show data through the card and keep exact values", () => {
   for (const [name, prompt] of allPrompts) {
     assert.ok(!prompt.includes("never render data as markdown tables"), `${name}: stale table ban`);
-    assert.ok(prompt.includes("use a result block with the exact title of a query that succeeded in this reply: ```result"), `${name}: missing result block rule`);
+    assert.ok(prompt.includes("**Show data through the card.**"), `${name}: missing card data rule`);
     assert.ok(prompt.includes("Exact values only."), `${name}: missing exact values rule`);
   }
 });
@@ -149,9 +149,9 @@ test("the answer format names no provider query keyword, and the stale skip exam
   }
 });
 
-test("investigation-only rules say so and the answer format owns the answer", () => {
+test("no rule asks for a text summary of results", () => {
   for (const [name, prompt] of allPrompts) {
-    assert.ok(prompt.includes("During the investigation, after the results arrive, write one brief summary"), `${name}: rule 1 not scoped`);
+    assert.ok(!prompt.includes("write one brief summary"), `${name}: asks for a text summary`);
     assert.ok(prompt.includes("For the investigation phase of multi-step work"), `${name}: discipline not scoped`);
   }
 });
@@ -160,5 +160,17 @@ test("provider domain text names no tool that may be absent", () => {
   for (const [name, prompt] of allPrompts) {
     assert.ok(!prompt.includes("ack_nr_issue") && !prompt.includes("close_nr_issue"), `${name}: names an issue tool`);
     assert.ok(!prompt.includes("Unlike NRQL"), `${name}: compares with NRQL`);
+  }
+});
+
+test("the card field rules live in the schema descriptions, not in the prompt", () => {
+  const d = (k: keyof typeof findingSchema.shape) => (findingSchema.shape[k] as { description?: string }).description ?? "";
+  assert.ok(d("kind").includes("root_cause when the question asks why") && d("kind").includes("summary for status") && d("kind").includes("answer for a direct question"));
+  assert.ok(d("answer").includes("Call something healthy only when") && d("answer").includes("A funnel or a flow") && d("answer").includes("A follow-up question gets its own answer") && d("answer").includes("name it and its lead over the next one"));
+  assert.ok(d("explanation").includes("A statement no result shows is not here") && d("explanation").includes("each number appears once in the whole card"));
+  assert.ok(d("unknown").includes("a query you can run yourself: run it before the card"));
+  assert.ok(!d("unknown").includes("a fix"));
+  for (const [name, prompt] of allPrompts) {
+    assert.ok(!prompt.includes("Call something healthy only when"), `${name}: field rule repeated in the prompt`);
   }
 });

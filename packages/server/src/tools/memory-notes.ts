@@ -16,7 +16,7 @@ const STOPWORDS = new Set(["the", "and", "for", "are", "but", "not", "you", "wit
 const sessionSets = new Map<string, Map<string, MemoryInjection>>();
 
 /** Sanitized notes in creation order, with later copies of the same note dropped. */
-export function prepareNotes(rows: NoteRow[]): Note[] {
+function prepareNotes(rows: NoteRow[]): Note[] {
   const seen = new Set<string>();
   const notes: Note[] = [];
   for (const r of [...rows].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0) || a.id - b.id)) {
@@ -99,9 +99,4 @@ export function combineSets(sets: MemoryInjection[]): MemoryInjection {
   const seen = new Set<number>();
   const notes = sets.flatMap((s) => s.notes).filter((n) => !seen.has(n.id) && seen.add(n.id));
   return { notes, omitted: sets.reduce((sum, s) => sum + s.omitted, 0) };
-}
-
-/** Test hook: forget every session's set. */
-export function clearSessionSets(): void {
-  sessionSets.clear();
 }

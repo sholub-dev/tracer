@@ -40,7 +40,7 @@ function bucketHint(query: string): string {
   return `Use a bucket of at least ${bucketLabel(bucket)} for this window.`;
 }
 
-export function nrqlFixHint(message: string, query: string): string | null {
+function nrqlFixHint(message: string, query: string): string | null {
   if (/unexpected '(ASC|DESC)'/i.test(message)) {
     return "After FACET, write ORDER BY <aggregate> without ASC or DESC; it sorts highest first. For the lowest values use LIMIT MAX and read the whole result.";
   }

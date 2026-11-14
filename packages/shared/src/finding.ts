@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const CONFIDENCE = ["confirmed", "likely", "unverified"] as const;
 
-export const FINDING_KIND = ["root_cause", "summary"] as const;
+export const FINDING_KIND = ["root_cause", "summary", "answer"] as const;
 
 export const VERDICT = ["problem", "no_problem", "unclear"] as const;
 
@@ -16,20 +16,20 @@ const statementSchema = z.object({
 });
 
 export const findingSchema = z.object({
-  kind: z.enum(FINDING_KIND).describe("root_cause when the turn explains why something happened or found a problem; summary for status, counts, trends and lookups"),
+  kind: z.enum(FINDING_KIND).describe("root_cause when the question asks why something happened; summary for status, health, trend and comparison questions, even when the check finds a problem or finds nothing wrong; answer for a direct question (a yes or no, a value, a list, a lookup) and for a reply that ran no query"),
   verdict: z.enum(VERDICT).optional().describe("root_cause only, required for it: problem when something is broken or degraded; no_problem when the signal is expected, normal or noise; unclear when the data stops short."),
   confidence: z.enum(CONFIDENCE).optional().describe("root_cause only: confirmed only when a cited result shows the cause itself and another rules out the strongest alternative; likely when an alternative is still open; unverified otherwise."),
-  title: z.string().describe(`A short title of at most 10 words that names what happened and why, or what was found. Sentence case, no number, no trailing period. ${PLAIN}`),
-  answer: z.string().describe(`The direct answer to the question as asked, in one or two sentences of at most 45 words together. It holds the number that sizes the answer next to its normal level, and for a why question the deepest cause the data shows. ${PLAIN} ${INLINE}`),
-  explanation: z.array(statementSchema).min(1).max(6).describe("The evidence that proves the answer, in reading order. root_cause: each statement answers why the one before it happened, from the symptom down to the deepest cause, and one statement shows the result that rules out the strongest alternative. summary: the facts behind the answer, one per item. Each statement adds a fact the answer and the other statements do not state: never repeat a number."),
-  unknown: z.string().optional().describe(`What no connected source can show and that changes what the reader does next, then what the results show about it. A statement, never a question, a check to run or a fix. Required when confidence is not confirmed, and in a summary when the question names a change (a release, a deploy) whose time or effect no result shows. ${PLAIN} ${INLINE}`),
+  title: z.string().describe(`The card title: at most 10 words that name what happened and why, or what was found. Sentence case, no number, no trailing period. ${PLAIN}`),
+  answer: z.string().describe(`The top section: the direct answer to the question as asked, in one or two sentences of at most 45 words together. A yes or no question starts with Yes or No. When a number sizes the answer, it stands next to one normal level, from one result, in the same unit and window length. A why question: the deepest cause the data shows, never the symptom alone; when the cause explains only part of the symptom, state the share. A worst, biggest or which question: name it and its lead over the next one. When the data contradicts the question, state the measured value first. When the cause is not found, say where the data stops. When the source the question names failed, say so first and answer from the other sources; unknown names what the failure hides. Call something healthy only when no part you measured moved far from its normal level; otherwise name that part first, with its change. A funnel or a flow: name the step that loses the most people and its conversion next to normal. A follow-up question gets its own answer. ${PLAIN} ${INLINE}`),
+  explanation: z.array(statementSchema).max(6).describe("The evidence section: only the facts that prove the top section, in reading order, as few as the question needs. Empty when no query ran. root_cause: each statement answers why the one before it happened, from the symptom down to the deepest cause, then one statement shows the result that rules out the strongest alternative and, when the Actor check ran, one shows who drove it. summary and answer: the facts behind the answer, one per item; in a status answer, each value next to its baseline from a result. A statement no result shows is not here: it goes in unknown. Each statement adds a fact the answer and the other statements do not state: each number appears once in the whole card, with its window."),
+  unknown: z.string().optional().describe(`What no connected source can show and that changes what the reader does next, then what the results show about it. A statement, never a question, a check to run or a query you can run yourself: run it before the card. Required when confidence is not confirmed, and in a summary when the question names a change (a release, a deploy) whose time or effect no result shows. ${PLAIN} ${INLINE}`),
   action: z.string().optional().describe(`An action on a system that a tool call in this turn performed and that succeeded, such as closing an issue. Queries are not actions. Omit it otherwise. ${PLAIN}`),
 });
 
 export type Finding = z.infer<typeof findingSchema>;
 
-/** A saved card: cards from before the explanation field may have none. */
-export const savedFindingSchema = findingSchema.extend({ explanation: z.array(statementSchema).max(6) }).refine((f) => f.title.trim() || f.answer.trim());
+/** A saved card shows a title or an answer. */
+export const savedFindingSchema = findingSchema.refine((f) => f.title.trim() || f.answer.trim());
 
 type PartLike = { type: string; state?: string; input?: unknown; output?: unknown };
 
@@ -79,7 +79,7 @@ export function findingFromMessages(messages: ReadonlyArray<{ parts: ReadonlyArr
       const parsed = savedFindingSchema.safeParse(normalizeFinding(p.input));
       if (!parsed.success) continue;
       const f = cardUnchecked(p.output) ? asUnverified(parsed.data) : parsed.data;
-      return f.kind === "summary" ? { kind: "summary", title: f.title, answer: f.answer, explanation: f.explanation, ...(f.unknown && { unknown: f.unknown }), ...(f.action && { action: f.action }) } : { ...f, confidence: f.confidence ?? "unverified" };
+      return f.kind !== "root_cause" ? { kind: f.kind, title: f.title, answer: f.answer, explanation: f.explanation, ...(f.unknown && { unknown: f.unknown }), ...(f.action && { action: f.action }) } : { ...f, confidence: f.confidence ?? "unverified" };
     }
   }
   return null;
@@ -99,10 +99,10 @@ const VERDICT_LABEL: Record<NonNullable<Finding["verdict"]>, string> = { problem
 
 export function findingMarkdown(f: Finding): string {
   const sources = findingSources(f);
-  const label = f.kind === "summary" ? "Summary" : `${f.verdict ? VERDICT_LABEL[f.verdict] : "Finding"} (${f.confidence ?? "unverified"})`;
+  const label = f.kind !== "root_cause" ? "" : `${f.verdict ? VERDICT_LABEL[f.verdict] : "Finding"} (${f.confidence ?? "unverified"})`;
   const parts = [
-    `**${label}:** ${f.title ? `${f.title}\n\n` : ""}${f.answer}`,
-    f.explanation.length ? `**${f.kind === "summary" ? "Details" : "Why"}:**\n${f.explanation.map((e, i) => `${i + 1}. ${e.statement}`).join("\n")}` : "",
+    `${label ? `**${label}:** ` : ""}${f.title ? `${f.title}\n\n` : ""}${f.answer}`,
+    f.explanation.length ? `${f.explanation.map((e, i) => `${i + 1}. ${e.statement}`).join("\n")}` : "",
     f.action ? `**Action taken:** ${f.action}` : "",
     f.unknown ? `**Unknown:** ${f.unknown}` : "",
     sources.length ? `**Sources:**\n${sources.map((s) => `- ${s}`).join("\n")}` : "",

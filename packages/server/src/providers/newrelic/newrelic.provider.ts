@@ -10,7 +10,7 @@ import { createNewRelicDirectTools } from "./tools.js";
 import { nrUnifiedFragment } from "./prompts.js";
 import { toolKit } from "../../tools/provider-tool-helpers.js";
 
-export interface NrqlOutcome {
+interface NrqlOutcome {
   rows: Record<string, unknown>[];
   futureRemoved: number;
   window: { begin: number; end: number } | null;

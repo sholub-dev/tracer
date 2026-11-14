@@ -9,4 +9,3 @@ export * from "./newrelic-rows.js";
 export * from "./sync-session.js";
 export * from "./steered.js";
 export * from "./version.js";
-export * from "./result-ref.js";

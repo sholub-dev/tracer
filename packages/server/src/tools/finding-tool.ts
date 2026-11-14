@@ -77,9 +77,8 @@ export function reportFindingTool(
   stepReads: () => StepResult[] = () => [],
 ): Tool<Finding, FindingOutput> {
   return tool({
-    description: "Show the summary as a card: call it once, alone in its step, at the end of every reply that ran queries to answer the question. Skip it only when the answer is one fact read at a glance (a yes or no, or one value from one query), or when no query ran. The card ends the reply: write no text after it. "
-      + "Use kind root_cause (with a verdict) when the question asks why something happened; use summary for status, health and trend questions, even when the check finds a problem. Facts from query results only; never a fix. You may state an action you performed in this turn as a fact. "
-      + "The card is sent back, at most twice, when it names a number or a source that no result shows, or calls traffic a bot or automated without actor.indicator and actor.holdsChange in the ledger. The Response Format section holds the writing rules.",
+    description: "Give every answer as this card. Call it once, alone in its step, as the last action of the reply. State facts from query results only, and fill each field as its description says. "
+      + "The card is sent back, at most twice, when it names a number or a source that no result shows, or calls traffic a bot or automated without actor.indicator and actor.holdsChange in the ledger.",
     inputSchema: findingSchema,
     execute: async (card, options): Promise<FindingOutput> => {
       const turn = options.messages.slice(Math.max(0, turnFrom()));

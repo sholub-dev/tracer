@@ -416,7 +416,7 @@ test("a chat card the check sends back gets another step to fix it", async () =>
   assert.equal(r.bodies.length, 3);
 });
 
-test("the memory input of a text answer is the last text part, with result blocks as references", async () => {
+test("the memory input of a text answer is the last text part", async () => {
   const note = sse([
     MESSAGE_START,
     ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
@@ -431,18 +431,18 @@ test("the memory input of a text answer is the last text part, with result block
   const answer = sse([
     MESSAGE_START,
     ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
-    ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Done.\n\n```result\nLookup\n```" } }],
+    ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Done." } }],
     ...end("end_turn"),
   ]);
   const r = await retryRun({ script: [note, answer] }, [], undefined, findingTools, undefined, true, false);
-  assert.equal(r.completedWith?.lastAssistantText, "Done.\n\n[Chart: Lookup]");
+  assert.equal(r.completedWith?.lastAssistantText, "Done.");
 });
 
 test("a chat run at its last step loses its query tools but is not forced to a card", async () => {
   const r = await retryRun({ script: [TOOL_CALL_SSE, SSE] }, [], undefined, findingTools, 2, false, false);
   assert.deepEqual((r.bodies[1].tools as { name: string }[]).map((t) => t.name), ["report_finding"]);
   assert.notDeepEqual(r.bodies[1].tool_choice, forcedCard);
-  assert.match(JSON.stringify(r.bodies[1].messages), /with report_finding, or in text when the answer is one fact/);
+  assert.match(JSON.stringify(r.bodies[1].messages), /Answer now from the results you have with report_finding\. State/);
 });
 
 test("a repair card the check sends back gets one more step to fix it", async () => {
@@ -955,7 +955,7 @@ test("the agent hears once when a tenth of its steps remain, and again on its la
   assert.match(notes[99]!, /last step/);
   assert.deepEqual(Array.from({ length: 5 }, (_, i) => budgetNote(i, 5, ["execute_nrql"], true)).flatMap((n, i) => (n ? [i] : [])), [4]);
   assert.equal(budgetNote(4, 5, [], true), undefined, "a turn with no query is not told to report");
-  assert.match(budgetNote(99, 100, ["execute_nrql"], false)!, /with report_finding, or in text when the answer is one fact/);
+  assert.match(budgetNote(99, 100, ["execute_nrql"], false)!, /Answer now from the results you have with report_finding\. State/);
   assert.doesNotMatch(budgetNote(90, 100, ["execute_nrql"], false)!, /begin_analysis|card/);
 });
 

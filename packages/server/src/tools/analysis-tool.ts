@@ -36,8 +36,8 @@ export type Ledger = z.infer<typeof ledgerSchema>;
 
 export type ConclusionReview = (ledger: Ledger, messages: ModelMessage[], abortSignal: AbortSignal | undefined) => Promise<string | null>;
 
-const STATUS = "Analysis mode active. Follow the analysis rules from your system prompt.";
-const NEXT = "Settle each challenge as the Response Format section says: queries before the card, new links followed to their end, the confidence label matched to the results. A challenge that shows a cause explains only part of the symptom changes the card: name the cause by the share it explains, find what explains the rest, or put the rest in unknown. Never write a card that a challenge contradicts. Do not call begin_analysis again in this reply; a later question gets its own.";
+const STATUS = "Ledger checked.";
+const NEXT = "Settle each challenge with queries before the card, then write a card that no challenge contradicts. A cause that explains only part of the symptom: state its share, find the rest, or put the rest in unknown. Do not call begin_analysis again in this reply.";
 
 // Models often write "None" or "N/A" where the schema asks for an empty string.
 const filled = (text: string) => !/^\W*(none|n\/?a|nothing|not checked|not ruled out|not eliminated)?\W*$/i.test(text);
@@ -105,7 +105,7 @@ export function createBeginAnalysisTool(
 ): Tool<Ledger, AnalysisOutput> {
   return tool({
     description:
-      "Call this tool before a root_cause card, when you are ready to present the conclusion of an investigation. A text answer or a summary card needs no call. Fill in the ledger from the results you have. The tool checks it and may return challenges: settle each one with queries before the card.",
+      "Call this tool before a root_cause card, when you are ready to present the conclusion of an investigation. A summary or answer card needs no call. Fill in the ledger from the results you have. The tool checks it and may return challenges: settle each one with queries before the card.",
     inputSchema: ledgerSchema,
     execute: async (input, options): Promise<AnalysisOutput> => {
       const challenges = challengeLedger(input);

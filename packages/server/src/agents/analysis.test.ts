@@ -24,7 +24,7 @@ const findingCall = (input: unknown) => ({ type: "tool-report_finding", toolCall
 test("extractAnalysis puts the finding of the latest turn first", () => {
   const user = { id: "", role: "user", parts: [{ type: "text", text: "why?" }] } as unknown as UIMessage;
   const out = extractAnalysis([user, msg([marker, findingCall(finding), { type: "text", text: "Details" }])]).analysis;
-  assert.equal(out, "**Problem (likely):** Pool exhausted\n\n**Why:**\n1. 50 of 50 in use at 14:39\n2. p95 rose to 810 ms\n\n**Unknown:** Gateway pool metrics for the spike window\n\n**Sources:**\n- Pool usage\n- Latency\n\nDetails");
+  assert.equal(out, "**Problem (likely):** Pool exhausted\n\n1. 50 of 50 in use at 14:39\n2. p95 rose to 810 ms\n\n**Unknown:** Gateway pool metrics for the spike window\n\n**Sources:**\n- Pool usage\n- Latency\n\nDetails");
   assert.equal(extractAnalysis([msg([marker, findingCall(finding)]), user, msg([marker, { type: "text", text: "Other" }])]).analysis, "Other");
 });
 
@@ -45,11 +45,11 @@ test("extractAnalysis reads the reply a steered message trails", () => {
   assert.equal(extractAnalysis([user, reply, steered]).analysis, extractAnalysis([user, reply]).analysis);
 });
 
-test("extractAnalysis returns a text answer with its queries and turns result blocks into references", () => {
+test("extractAnalysis returns a text answer with its queries", () => {
   const user = { id: "", role: "user", parts: [{ type: "text", text: "count?" }] } as unknown as UIMessage;
   const query = { type: "tool-execute_nrql", toolCallId: "q", state: "output-available", input: { query: "SELECT 1" }, output: { parts: [{ query: "SELECT 1", results: [{ n: 1 }] }], analysis: "n = 1" } };
-  const out = extractAnalysis([user, msg([query, { type: "text", text: "One.\n\n```result\nCount\n```" }])]);
-  assert.equal(out.analysis, "One.\n\n[Chart: Count]");
+  const out = extractAnalysis([user, msg([query, { type: "text", text: "One." }])]);
+  assert.equal(out.analysis, "One.");
   assert.deepEqual(out.queries.map((q) => q.query), ["SELECT 1"]);
 });
 
@@ -71,11 +71,9 @@ test("a card with no begin_analysis opens the analysis section at the card part"
   assert.equal(compactionUpTo([{ role: "user", parts: [] }, { role: "assistant", parts }], 1), 1);
 });
 
-test("begin_analysis and the text marker take precedence over a card", () => {
+test("begin_analysis takes precedence over a card", () => {
   const withTool = [{ type: "tool-report_finding" }, { type: "tool-begin_analysis" }];
   assert.deepEqual(findAnalysisMarker(withTool), { kind: "tool", partIdx: 1 });
-  const withText: { type: string; text?: string }[] = [{ type: "tool-report_finding" }, { type: "text", text: "a <analysis> b" }];
-  assert.equal(findAnalysisMarker(withText)?.kind, "text");
   assert.equal(findAnalysisMarker([{ type: "tool-lookup" }, { type: "text" }]), null);
   assert.equal(splitAtAnalysis([{ type: "text" }]), null);
 });

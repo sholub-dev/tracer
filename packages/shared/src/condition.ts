@@ -1,4 +1,4 @@
-export type ConditionOp = ">" | ">=" | "<" | "<=" | "==" | "!=";
+type ConditionOp = ">" | ">=" | "<" | "<=" | "==" | "!=";
 
 export interface Condition {
   op: ConditionOp;

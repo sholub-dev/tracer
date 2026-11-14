@@ -20,7 +20,7 @@ function generateKeyHex(): string {
 
 type KeychainEntry = { getPassword(): string | null; deletePassword?(): boolean };
 
-export type ResolvedDbKey = { key: string; finishMigration?: () => void };
+type ResolvedDbKey = { key: string; finishMigration?: () => void };
 
 function loadKeychain(): KeychainEntry | null {
   try {

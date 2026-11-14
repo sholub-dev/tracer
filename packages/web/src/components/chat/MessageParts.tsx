@@ -1,16 +1,16 @@
 import React from "react";
 import type { UIMessage } from "ai";
 import { Download, FileText } from "lucide-react";
-import { ANALYSIS_MARKER, findAnalysisMarker, findingSources } from "@tracer-sh/shared";
+import { findAnalysisMarker, findingSources } from "@tracer-sh/shared";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { cn, isInlineFileUrl } from "@/lib/utils";
-import { Markdown, ResultLookupProvider } from "../../lib/markdown";
+import { Markdown } from "../../lib/markdown";
 import type { AskState } from "../../lib/ask-card";
 import { AskCard } from "./AskCard";
 import { FindingCard } from "./FindingCard";
 import { ReasoningBlock } from "./ReasoningBlock";
-import { OtherToolPart, ProviderStep, ResultCard, isAskPart, isHiddenPart, isProviderTool, resultLookup, type ToolPart } from "./ToolParts";
+import { OtherToolPart, ProviderStep, ResultCard, isAskPart, isHiddenPart, isProviderTool, type ToolPart } from "./ToolParts";
 import { latestCard, matchSources } from "../../lib/finding-card";
 import { ANSWER_PROSE, ANSWER_PROSE_COMPACT } from "./prose";
 
@@ -123,9 +123,9 @@ export const MessageParts = React.memo(
     const streamingCard = parts.some((p) => p.type === "tool-report_finding" && (p as ToolPart).state === "input-streaming");
     const sources = live && !streamingCard ? findingSources(live.card) : [];
     const matched = matchSources(sources, stepParts);
+    const cited = new Set(matched.flatMap((p) => (p ? [p.toolCallId] : [])));
     const evidence = sources.length > 0 && (
       <section aria-label="Evidence" className="space-y-3">
-        <p className="text-[11px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">Evidence</p>
         <ol className="space-y-3">
           {sources.map((title, i) => {
             const part = matched[i];
@@ -146,10 +146,6 @@ export const MessageParts = React.memo(
     parts.forEach((part, i) => {
       const key = `${i}`;
       if (marker && i === marker.partIdx) {
-        if (marker.kind === "text" && part.type === "text") {
-          before.push(text(key, part.text.slice(0, marker.charIdx)));
-          inside.push(text(`${key}-after`, part.text.slice(marker.charIdx + ANALYSIS_MARKER.length)));
-        }
         target = inside;
         if (marker.kind !== "card") return;
       }
@@ -161,30 +157,28 @@ export const MessageParts = React.memo(
       if (part.type === "text") target.push(text(key, part.text));
       else if (part.type === "reasoning") target.push({ key, step: true, node: <li key={key}><ReasoningBlock content={part.text} isAnimating={isAnimating} /></li> });
       else if (part.type === "file") target.push({ key, node: <FileAttachment key={key} part={part as FilePartLike} /> });
-      else if (isProviderTool(part.type)) target.push({ key, step: true, node: <ProviderStep key={key} part={snapshot(part)} isAnimating={isAnimating} /> });
+      else if (isProviderTool(part.type)) target.push({ key, step: true, node: <ProviderStep key={key} part={snapshot(part)} isAnimating={isAnimating} cited={cited.has((part as ToolPart).toolCallId)} /> });
       else if (part.type.startsWith("tool-")) target.push({ key, step: true, node: <li key={key} className="empty:hidden"><OtherToolPart part={snapshot(part)} isAnimating={isAnimating} /></li> });
     });
 
     return (
-      <ResultLookupProvider value={resultLookup(stepParts)}>
-        <div className={cn("space-y-4", compact && "space-y-3")}>
-          {flow(before)}
-          {inside.length > 0 && (
-            <section
-              key="analysis"
-              aria-label="Analysis"
-              // On a phone the box runs edge to edge, so the cards inside are as wide as the chat input.
-              className={cn(
-                "space-y-4 rounded-lg border border-primary/20 bg-primary-tint px-5 py-4",
-                compact ? "space-y-3 px-4 py-3" : "max-sm:-mx-4 max-sm:rounded-none max-sm:border-x-0 max-sm:px-4",
-              )}
-            >
-              {flow(inside)}
-            </section>
-          )}
-          {asked && <AskCard input={asked.input} state={isAnimating ? CLOSED : ask} onPick={onAsk} compact={compact} />}
-        </div>
-      </ResultLookupProvider>
+      <div className={cn("space-y-4", compact && "space-y-3")}>
+        {flow(before)}
+        {inside.length > 0 && (
+          <section
+            key="analysis"
+            aria-label="Analysis"
+            // On a phone the box runs edge to edge, so the cards inside are as wide as the chat input.
+            className={cn(
+              "space-y-4 rounded-lg border border-primary/20 bg-primary-tint px-5 py-4",
+              compact ? "space-y-3 px-4 py-3" : "max-sm:-mx-4 max-sm:rounded-none max-sm:border-x-0 max-sm:px-4",
+            )}
+          >
+            {flow(inside)}
+          </section>
+        )}
+        {asked && <AskCard input={asked.input} state={isAnimating ? CLOSED : ask} onPick={onAsk} compact={compact} />}
+      </div>
     );
   },
   (prev, next) => {

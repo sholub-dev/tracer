@@ -52,7 +52,7 @@ export function buildDirectModePrompt(config: ProviderPromptConfig): string {
 ${config.authStopRule}
 
 ## Rules
-${buildRules({ investigation: true, extraRules: config.extraRules })}
+${buildRules({ extraRules: config.extraRules })}
 
 ${CORE_DISCIPLINE}
 

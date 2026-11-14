@@ -65,6 +65,7 @@ analyze options:
 Environment:
   TRACER_PORT            Server port (default 3579)
   TRACER_HOST            Bind/target host (default 127.0.0.1)
+  TRACER_TOKEN           API token of the server; analyze sends it as a bearer token
   TRACER_SKIP_BUILD      Skip the source-checkout rebuild-on-launch check
 
 Examples:
@@ -78,7 +79,9 @@ Examples:
 // node:http has no header or body timeout, unlike fetch (undici stops waiting after 300 s); an analysis can run longer.
 function postJson(url, payload) {
   return new Promise((resolveResponse, reject) => {
-    const req = request(url, { method: "POST", headers: { "content-type": "application/json" } }, (res) => {
+    const headers = { "content-type": "application/json" };
+    if (process.env.TRACER_TOKEN) headers.authorization = `Bearer ${process.env.TRACER_TOKEN}`;
+    const req = request(url, { method: "POST", headers }, (res) => {
       const chunks = [];
       res.on("data", (chunk) => chunks.push(chunk));
       res.on("error", reject);

@@ -71,7 +71,41 @@ describe("guardLocalRequests", () => {
     assert.equal(via("0.0.0.0", {}), 401);
     assert.equal(via("0.0.0.0", { authorization: "Bearer wrong!" }), 401);
     assert.equal(via("0.0.0.0", { authorization: "Bearer s3cret" }), 200);
-    assert.equal(via("127.0.0.1", { host: "localhost" }), 200);
+    assert.equal(via("127.0.0.1", { host: "localhost" }, null), 200);
+  });
+
+  it("requires the token on a loopback server from every request that is not the owner's browser", () => {
+    const via = (headers: Record<string, string>, path = "/api/trpc/settings.get") =>
+      (guardLocalRequests(ok, "127.0.0.1", [], "s3cret")(new Request(`http://x${path}`, { headers }), env("127.0.0.1")) as Response).status;
+    assert.equal(via({ host: "localhost:3579" }), 200);
+    assert.equal(via({ host: "localhost:3579", "x-forwarded-for": "203.0.113.7" }), 401);
+    assert.equal(via({ host: "localhost:3579", "x-forwarded-for": "203.0.113.7", authorization: "Bearer s3cret" }), 200);
+    assert.equal(via({ host: "tunnel.example" }), 403);
+    assert.equal(via({ host: "tunnel.example", authorization: "Bearer wrong!" }), 403);
+    assert.equal(via({ host: "tunnel.example", authorization: "Bearer s3cret" }), 200);
+    assert.equal(via({ host: "localhost:3579", "x-forwarded-for": "203.0.113.7" }, "/"), 200);
+  });
+
+  it("keeps the copy routes from a request with a forwarding header, with the token too", () => {
+    const via = (bind: string, headers: Record<string, string>) =>
+      (guardLocalRequests(ok, bind, [], "s3cret")(new Request("http://x/api/trpc/transfer.send", { headers: { host: "localhost:3579", ...headers } }), env("127.0.0.1")) as Response).status;
+    for (const bind of ["127.0.0.1", "0.0.0.0"]) {
+      assert.equal(via(bind, {}), 200, bind);
+      assert.equal(via(bind, { via: "1.1 proxy", authorization: "Bearer s3cret" }), 403, bind);
+      assert.equal(via(bind, { "x-real-ip": "203.0.113.7", authorization: "Bearer s3cret" }), 403, bind);
+    }
+  });
+
+  it("answers 400 to a path that does not decode", () => {
+    assert.equal(call("127.0.0.1", "http://x/api/trpc/%E0%A4%A", "localhost:3579").status, 400);
+    assert.equal(call("0.0.0.0", "http://x/api/trpc/transfer%2", "192.168.1.5:3579", "192.168.1.9").status, 400);
+  });
+
+  it("requires a JSON body on tRPC writes", () => {
+    assert.equal(send("POST", "/api/trpc/settings.saveApiKey", { "content-type": "text/plain" }).status, 415);
+    assert.equal(send("POST", "/api/trpc/settings.saveApiKey", {}).status, 415);
+    assert.equal(send("POST", "/api/trpc/settings.saveApiKey?batch=1", { "content-type": "application/json" }).status, 200);
+    assert.equal(send("GET", "/api/trpc/settings.getApiKey", {}).status, 200);
   });
 
   it("lets a loopback peer skip the token on an exposed server", () => {

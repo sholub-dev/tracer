@@ -12,7 +12,8 @@ import type { AiIssue } from "../providers/newrelic/nerdgraph.client.js";
 import { buildIssueActionTool } from "../providers/newrelic/tools.js";
 import { clip, readSlackConfig, triageUpdate } from "../integrations/slack.js";
 import { hasPendingTimer } from "../tools/timer-tool.js";
-import { MONITOR_ROLE, reportAlertSummaryTool, SEVERITIES, SLACK_RULE, summaryInstruction } from "./alert-summary.js";
+import { ALERT_DATA_RULE, ALERT_DATA_TAG, MONITOR_ROLE, reportAlertSummaryTool, SEVERITIES, SLACK_RULE, summaryInstruction } from "./alert-summary.js";
+import { fence, oneLine } from "../lib/fence.js";
 import { ensureFollowUp, postEnd, postRecheck, postToSlack } from "./follow-up.js";
 import { outcomeSummary, readOutcome, saveOutcome } from "./repeats.js";
 import { LOCAL_DEVICE, triggerOf } from "./store.js";
@@ -106,12 +107,15 @@ export async function recordIssues(db: Db, ids: { monitorId: string; triggerId: 
 
 type ListedIssue = { issueId: string; conditionName: string; title: string };
 
+// Condition names and titles come from New Relic and can hold planted text: one line each, inside the data block.
+const dataBlock = (lines: string[]) => fence(ALERT_DATA_TAG, lines.join("\n"));
+
 const issueList = (issues: ListedIssue[], closes: Map<string, number> = new Map()) =>
-  issues.map((i) => {
+  dataBlock(issues.map((i) => {
     const n = closes.get(i.issueId) ?? 0;
     const note = n > 0 ? ` | Tracer closed this condition ${n} time${n === 1 ? "" : "s"} on earlier firings in the last ${Math.round(CONFIG.triageLoopWindowSeconds / 3600)}h` : "";
-    return `- ${i.issueId}: ${i.conditionName || "unknown condition"} | ${i.title}${note}`;
-  });
+    return `- ${oneLine(i.issueId)}: ${oneLine(i.conditionName) || "unknown condition"} | ${oneLine(i.title)}${note}`;
+  }));
 
 // In the tool result too, so later chat turns can explain what the report did in New Relic.
 export const TRIAGE_EFFECT = "Alert triage is on: you act on these issues yourself. close_nr_issue acks and closes a stopped issue in New Relic, which closes its JSM alert. Tracer records what happened and reports it after the run. Ongoing or recurring: leave the issue open; set a timer only while the value is still changing, otherwise it is handed to a person and people are pinged. Unknown: leave it open; people are pinged.";
@@ -122,7 +126,7 @@ export function issuesPrompt(open: AiIssue[], closes: Map<string, number>): stri
   return [
     "",
     "New Relic issues of this firing that are still open:",
-    ...issueList(open.map((i) => ({ issueId: i.issueId, conditionName: conditionOf(i), title: titleOf(i) })), closes),
+    issueList(open.map((i) => ({ issueId: i.issueId, conditionName: conditionOf(i), title: titleOf(i) })), closes),
     `After report_finding, ${REPORT_INSTRUCTION} Base it on the data up to now. Make the calls in this order: report_finding, then the close calls, then report_issue_status alone in its own step, then report_alert_summary alone in its own step. Close nothing before report_finding.`,
   ];
 }
@@ -139,7 +143,7 @@ export function closedCheckPrompt(found: FoundIssues | null, slack: boolean): st
     "",
     "First check that this alert is still open. Query NrAiIncident for this firing's incidents up to now, with latest(event) FACET incidentId and the monitor query's filters. An incident whose latest event is 'close' is closed: a person resolved it, or another Tracer device handled it.",
     ...known,
-    `If every incident of this firing is closed, call dismiss_alert alone with the result that shows it, then report_finding with that result, then stop: no investigation, no report_alert_summary${slack ? ", nothing goes to Slack" : ""}. If any incident is still open, or the data does not show its state, investigate. A closed incident is not the end of the problem: when a result in this turn shows the alerted value back over its limit after the close, do not dismiss; investigate it as an open firing.`,
+    `If every incident of this firing is closed, call dismiss_alert alone with the result that shows it, then report_finding with that result, then stop: no investigation, no report_alert_summary${slack ? "; Slack gets one short line with your reason" : ""}. If any incident is still open, or the data does not show its state, investigate. A closed incident is not the end of the problem: when a result in this turn shows the alerted value back over its limit after the close, do not dismiss; investigate it as an open firing.`,
   ];
 }
 
@@ -401,10 +405,16 @@ const monitorName = async (db: Db, monitorId: string) =>
 /** Starts the message of a follow-up timer wake-up; a resumed run uses it to tell a wake-up from a chat turn. */
 export const WAKEUP_MARK = "Follow-up timer (";
 
-export function isWakeupTurn(messages: UIMessage[]): boolean {
+/** Starts the message of a monitor firing. */
+export const FIRING_MARK = 'Monitor "';
+
+function turnStartsWith(messages: UIMessage[], mark: string): boolean {
   const last = messages[turnStart(messages) - 1];
-  return !!last?.parts.some((p) => p.type === "text" && p.text.startsWith(WAKEUP_MARK));
+  return !!last?.parts.some((p) => p.type === "text" && p.text.startsWith(mark));
 }
+
+export const isWakeupTurn = (messages: UIMessage[]) => turnStartsWith(messages, WAKEUP_MARK);
+export const isFiringTurn = (messages: UIMessage[]) => turnStartsWith(messages, FIRING_MARK);
 
 export type Wakeup = { lines: string[]; tools?: Record<string, unknown>; onComplete?: (outcome: { error?: string }) => void; revert?: () => Promise<void> };
 type Watched = { lines: string[]; tools?: Record<string, unknown>; triage?: () => Promise<Triage | null>; revert?: () => Promise<void> };
@@ -438,7 +448,7 @@ async function watchedIssues(context: Context, sessionId: string): Promise<Watch
     lines: [
       "",
       "New Relic issues still being followed up:",
-      ...issueList(active, await closeCounts(db, rows[0].monitorId, sessionId, active)),
+      issueList(active, await closeCounts(db, rows[0].monitorId, sessionId, active)),
       `Look at the whole episode up to now. Then ${REPORT_INSTRUCTION}`,
     ],
     tools: { report_issue_status: reportIssueStatusTool(db, activeIds, sessionId), ...monitorIssueTools(context, activeIds, sessionId) },
@@ -472,7 +482,9 @@ export async function wakeupExtras(context: Context, sessionId: string): Promise
   return {
     lines: [
       "", MONITOR_ROLE, ...watched.lines,
-      ...(closed.length > 0 ? ["", `Tracer already closed ${closed.length === 1 ? "this issue" : "these issues"} of the alert: ${closed.map(nameOf).join("; ")}.`] : []),
+      ...(closed.length > 0 ? ["", `Tracer already closed ${closed.length === 1 ? "this issue" : "these issues"} of the alert:`, dataBlock(closed.map((r) => `- ${oneLine(nameOf(r))}`))] : []),
+      // The first message of the session states the rule; a wake-up with a data block states it again.
+      ...(watched.lines.length > 0 || closed.length > 0 ? [ALERT_DATA_RULE] : []),
       `Answer with report_finding.${summaryInstruction(slack)}`,
     ],
     tools: { report_alert_summary: reportAlertSummaryTool({ slack }), ...watched.tools },

@@ -10,6 +10,7 @@ import { readSlackConfig } from "../integrations/slack.js";
 import { postSlackMessageTool, SLACK_PROMPT_FRAGMENT } from "./slack-tool.js";
 import { DEFAULTS, SETTINGS_KEYS } from "../config.js";
 import { readAppSetting } from "../db/config-reader.js";
+import { errorLine } from "../lib/error-line.js";
 
 export interface BaseToolSetup {
   tools: Record<string, unknown>;
@@ -30,6 +31,8 @@ export async function collectBaseTools(
   mode?: ChatMode,
   activeProvider?: string,
   includeIntegrations = false,
+  /** A run of a monitor session that nobody watches (a firing, its re-run or a wake-up): it reads text an outsider can plant, so it gets no tool that writes outside Tracer. A wake-up of a normal chat session keeps its tools. */
+  unattended = false,
 ): Promise<BaseToolSetup> {
   const [memories, savedMaxSteps] = await Promise.all([
     db.select().from(toolMemories).all(),
@@ -75,10 +78,13 @@ export async function collectBaseTools(
         if (kit.systemPrompt) systemPrompts.push(kit.systemPrompt);
         if (kit.afterComplete) afterCompleteCallbacks.push(kit.afterComplete);
       } catch (err) {
-        console.warn(`[chat-tools] Failed to load tools for ${provider.type}:`, err);
+        console.warn(`[chat-tools] Failed to load tools for ${provider.type}:`, errorLine(err));
       }
     }
   }
+
+  // The scheduler adds the issue tools limited to the firing's own issues.
+  if (unattended) for (const name of ["ack_nr_issue", "close_nr_issue"]) delete tools[name];
 
   const providerFragmentCount = promptFragments.length;
   const hasProviderTools = Object.keys(tools).length > 0;
@@ -87,7 +93,7 @@ export async function collectBaseTools(
   // builder) its tools are always-on, independent of the active-provider filter above, so they're
   // available alongside whatever provider is selected.
   const [jiraKit, slackConfig] = includeIntegrations
-    ? await Promise.all([getJiraChatTools(db), readSlackConfig(db)])
+    ? await Promise.all([getJiraChatTools(db, !unattended), unattended ? null : readSlackConfig(db)])
     : [null, null];
   if (jiraKit) {
     Object.assign(tools, jiraKit.tools);

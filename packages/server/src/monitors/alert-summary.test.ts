@@ -29,6 +29,16 @@ test("dismissalFromMessages returns the reason of a successful call and null wit
   assert.equal(dismissalFromMessages(of(call(valid), part("output-available"))), "incident 1 closed");
 });
 
+test("a dismissal of an earlier run does not apply to a later run", () => {
+  const dismiss = { type: "tool-dismiss_alert", toolCallId: "d", state: "output-available", input: { reason: "incident 1 closed" } };
+  const user = (t: string) => ({ id: "", role: "user", parts: [{ type: "text", text: t }] });
+  const assistant = (...parts: unknown[]) => ({ id: "", role: "assistant", parts });
+  const first = [user("Monitor triggered"), assistant(dismiss)];
+  assert.equal(dismissalFromMessages(first as unknown as UIMessage[]), "incident 1 closed");
+  const later = [...first, user("Follow-up timer (set 10:00, due 10:05, now 10:06): scheduled re-check"), assistant({ type: "text", text: "Errors are back." })];
+  assert.equal(dismissalFromMessages(later as unknown as UIMessage[]), null);
+});
+
 test("alertFindingFromMessages keeps the finding of the alert run, not of a later follow-up", () => {
   const finding = (headline: string) => ({ type: "tool-report_finding", toolCallId: "f", state: "output-available", input: { kind: "summary", title: "", answer: headline, explanation: [{ statement: "x", source: "q" }] } });
   const msg = (...parts: unknown[]) => ({ id: "", role: "assistant", parts });

@@ -30,7 +30,7 @@ export function postSlackMessageTool(db: Db): Tool<{ text: string }, SlackResult
       return {
         posted: true,
         // Tells the agent the post differs from what it wrote, so it does not claim a link or id went out.
-        ...(bare(redact(text)) !== bare(text) && { redacted: "Links, emails, ids and long digit runs were removed or masked. The post carries none of them." }),
+        ...(bare(redact(text)) !== bare(text) && { redacted: "Links, emails, ids, secrets and long digit runs were removed or masked. The post carries none of them." }),
         ...(payload.text.endsWith(" …") && { clipped: "The text was cut at 2900 characters. The post is shorter than the message." }),
       };
     },

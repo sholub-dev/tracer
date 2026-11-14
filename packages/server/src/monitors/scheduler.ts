@@ -14,13 +14,14 @@ import { evaluateGroups, extractGroups, isNoData, parseCondition, type Group } f
 import { classifyGroups, parseTriggerGroups, pastSessions, pastSummary, readOutcome, readPastSessionTool, saveOutcome, type Outcome, type PastSession, type TriggerGroup } from "./repeats.js";
 import { withTimeout } from "../lib/with-timeout.js";
 import { getTimezone } from "../lib/current-context.js";
-import { monitorAlert, readSlackConfig } from "../integrations/slack.js";
-import { dismissAlertTool, MONITOR_ROLE, reportAlertSummaryTool, summaryInstruction } from "./alert-summary.js";
+import { dismissalPost, monitorAlert, readSlackConfig } from "../integrations/slack.js";
+import { ALERT_DATA_RULE, ALERT_DATA_TAG, dismissAlertTool, MONITOR_ROLE, reportAlertSummaryTool, summaryInstruction } from "./alert-summary.js";
+import { escapeTag, fence, oneLine } from "../lib/fence.js";
 import { fireDueTimers } from "./timers.js";
 import { ensureFollowUp, handedOver, postToSlack } from "./follow-up.js";
 import { ingestLagSeconds, isIncidentQuery, nextWindow, openWindow } from "./window.js";
 import {
-  ackRemaining, checkWatches, closeCounts, closedCheckPrompt, conditionOf, findIssues, forgetReports, triageEnabled, issuesPrompt, isWakeupTurn, pendingIssueIds, recordIssues, sessionStates, wakeupFailed,
+  ackRemaining, checkWatches, closeCounts, closedCheckPrompt, conditionOf, findIssues, FIRING_MARK, forgetReports, triageEnabled, issuesPrompt, isWakeupTurn, pendingIssueIds, recordIssues, sessionStates, wakeupFailed,
   monitorIssueTools, reportIssueStatusTool, TERMINAL_STATES, triageAfterRun, type FoundIssues, type Triage,
 } from "./triage.js";
 
@@ -51,25 +52,32 @@ export function buildMessage(
   dismissible = false,
   slack = false,
 ): string {
-  const lines = [
-    `Monitor "${monitor.name}" triggered.`,
-    "",
+  // The monitor name, the query, the group keys and the past summaries can hold planted text: each stays on its line, inside the data block.
+  const data = [
     `Query (${monitor.provider === "posthog" ? "PostHog HogQL" : "New Relic"}):`,
     "```",
     monitor.query,
     "```",
-    `Value: ${value} (condition: value ${monitor.condition})`,
+    `Value: ${value} (condition: value ${oneLine(monitor.condition)})`,
     `Window: ${iso(window.start)} to ${iso(window.end)} (the query's {{SINCE}}/{{UNTIL}} are this window in epoch ${monitor.provider === "posthog" ? "seconds" : "ms"})`,
     "",
     "Groups that fired:",
-    ...classified.map((g) => `- ${groupLabel(g)}${g.repeat ? " (fired before)" : ""}`),
+    ...classified.map((g) => `- ${oneLine(groupLabel(g))}${g.repeat ? " (fired before)" : ""}`),
   ];
   if (past.length > 0) {
-    lines.push("", "Recent past sessions of this monitor (open one with read_past_session if it helps):");
+    data.push("", "Recent past sessions of this monitor (open one with read_past_session if it helps):");
     for (const p of past) {
-      lines.push(`- ${iso(p.triggeredAt)} groups: ${p.keys.join(", ") || "none"} session ${p.sessionId}: ${pastSummary(p) || "no summary"}`);
+      data.push(`- ${iso(p.triggeredAt)} groups: ${oneLine(p.keys.join(", ")) || "none"} session ${p.sessionId}: ${oneLine(pastSummary(p)) || "no summary"}`);
     }
   }
+  // The trailing blank line ends the group list for the chat view, which reads it up to the first empty line.
+  data.push("");
+  const lines = [
+    `${FIRING_MARK}${escapeTag(oneLine(monitor.name), ALERT_DATA_TAG)}" triggered.`,
+    "",
+    fence(ALERT_DATA_TAG, data.join("\n")),
+    ALERT_DATA_RULE,
+  ];
   lines.push(...triageLines);
   lines.push(
     "",
@@ -129,7 +137,9 @@ async function completeFiring(
     const outcome = await readOutcome(context.db, sessionId);
     await saveOutcome(context.db, sessionId, outcome);
     if (outcome.dismissed !== null) {
-      console.log(`[monitor] "${monitor.name}" alert already closed, not posted: ${outcome.dismissed}`);
+      // A dismissal is posted, so a wrong one is visible to a person.
+      const reason = outcome.dismissed;
+      await postToSlack(context.db, `"${monitor.name}"`, async () => dismissalPost({ name: monitor.name, reason }));
       return;
     }
     const end = await ensureFollowUp(context, sessionId, outcome.latestReport);

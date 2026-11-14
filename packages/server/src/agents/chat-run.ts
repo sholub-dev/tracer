@@ -60,7 +60,8 @@ export async function buildRunOptions(context: Context, spec: RunSpec): Promise<
     // Slack and the triage read the card, so only a monitor run has to end with one.
     requireFinding: monitor,
     collectTools: async () => {
-      const collected = await collectChatTools(context.providers, context.db, sessionId, mode, scopedProvider);
+      // A firing, its re-run and a wake-up read alert data with nobody watching, so they get no write tool beyond the ones the firing supplies. A person's own turn keeps every tool.
+      const collected = await collectChatTools(context.providers, context.db, sessionId, mode, scopedProvider, monitor && (!interactive || !!onComplete));
       const afterComplete: typeof collected.afterComplete = onComplete
         ? (params) => { collected.afterComplete?.(params); onComplete({}); }
         : collected.afterComplete;

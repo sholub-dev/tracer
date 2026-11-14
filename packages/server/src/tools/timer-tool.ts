@@ -8,6 +8,8 @@ import { CONFIG } from "../config.js";
 import { formatLocalTime, getTimezone } from "../lib/current-context.js";
 import { sessionChanged } from "../lib/session-events.js";
 
+const NOTE_MAX_CHARS = 2000;
+
 type TimerInput = { minutes: number; message: string };
 type TimerResult = { error: string } | { cancelled: true } | { dueAt: string };
 
@@ -29,10 +31,10 @@ export async function putTimer(db: Db, sessionId: string, minutes: number, note:
 
 export function setTimerTool(db: Db, sessionId: string): Tool<TimerInput, TimerResult> {
   return tool({
-    description: "Wake this chat later to follow up. Use it only when a follow-up is truly needed (e.g. the value is still changing, a deploy is rolling out). Choose the interval from how fast the value changes and the impact. Set none when the alert is resolved or handed to a person.",
+    description: "Wake this chat later to follow up. Use it only when a follow-up is truly needed (e.g. the value is still changing, a deploy is rolling out). Choose the interval from how fast the value changes and the impact. Set none when the alert is resolved or handed to a person. After a wake-up, set another timer only when the last check showed a change that a further check can resolve, and say that change in the message.",
     inputSchema: z.object({
       minutes: z.number().describe(`Minutes from now, ${CONFIG.timerMinMinutes} to ${CONFIG.timerMaxMinutes}; 0 cancels the pending timer`),
-      message: z.string().describe("The message you get when the timer fires: what to check and why, written to yourself. No customer data"),
+      message: z.string().describe(`The message you get when the timer fires: what to check and why, written to yourself, at most ${NOTE_MAX_CHARS} characters. No customer data`),
     }),
     execute: async ({ minutes, message }) => {
       if (minutes === 0) {
@@ -43,6 +45,7 @@ export function setTimerTool(db: Db, sessionId: string): Tool<TimerInput, TimerR
       if (minutes < CONFIG.timerMinMinutes || minutes > CONFIG.timerMaxMinutes) {
         return { error: `minutes must be 0 or ${CONFIG.timerMinMinutes} to ${CONFIG.timerMaxMinutes}` };
       }
+      if (message.length > NOTE_MAX_CHARS) return { error: `message must be at most ${NOTE_MAX_CHARS} characters` };
       const session = await db.select({ createdAt: chatSessions.createdAt }).from(chatSessions).where(eq(chatSessions.id, sessionId)).get();
       if (!session) return { error: "This session no longer exists" };
       const limit = session.createdAt + CONFIG.timerMaxAfterSessionSeconds;

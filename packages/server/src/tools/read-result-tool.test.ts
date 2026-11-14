@@ -16,5 +16,5 @@ test("read_result returns the original text of a known id", async () => {
 });
 
 test("read_result reports an unknown id", async () => {
-  assert.equal(await run(new Map(), "zz"), "Error: No result with that id.");
+  assert.equal(await run(new Map(), "zz"), "<tool_result>\nError: No result with that id.\n</tool_result>");
 });

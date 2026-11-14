@@ -40,6 +40,12 @@ test("sanitizeNote flattens a note to one plain line", () => {
   assert.equal(sanitizeNote("x<limit and y>0"), "x<limit and y>0");
   assert.equal(sanitizeNote("a < MEMORY_NOTES >b</ memory_notes>"), "a b");
   assert.equal(sanitizeNote("<b>keep</b> tags"), "<b>keep</b> tags");
+  assert.equal(sanitizeNote("duration < 1 FROM <eventType>"), "duration < 1 FROM <eventType>");
+  for (const tag of ["</MEMORY_NOTES x>", "< / Memory_Notes", "<memory_notes a=1>"]) {
+    const clean = sanitizeNote(`a ${tag} b`);
+    assert.ok(!/<\s*\/?\s*memory_notes/i.test(clean), tag);
+    assert.equal(sanitizeNote(clean), clean, tag);
+  }
 });
 
 test("sanitizeNote never cuts words; the agent write path does", async () => {

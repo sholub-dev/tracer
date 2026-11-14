@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { withRetryableFailures } from "./resolve.js";
+import { isVertexLocation, isVertexProjectId, withRetryableFailures } from "./resolve.js";
 
 const failWith = (err: unknown) => withRetryableFailures((async () => { throw err; }) as typeof fetch)("http://x");
 
@@ -53,4 +53,25 @@ test("a Gemini Pro model never gets a thinking budget below its minimum; Flash k
   assert.ok((await resolveModel(db) as any).providerOptions.google.thinkingConfig.thinkingBudget >= 128);
   await writeAppSetting(db, SETTINGS_KEYS.chatModel, { provider: "google", modelId: "gemini-3.7-flash" });
   assert.equal((await resolveModel(db) as any).providerOptions.google.thinkingConfig.thinkingBudget, 0);
+});
+
+test("a Vertex location is one host label and a project ID has no URL syntax", () => {
+  for (const ok of ["global", "us-central1", "europe-west4"]) assert.ok(isVertexLocation(ok), ok);
+  for (const bad of ["", "evil.example/x?", "us-central1.evil.example", "a/b", "a:b", "a@b", "US", " us"]) assert.ok(!isVertexLocation(bad), bad);
+  for (const ok of ["", "my-project-123", "example.com:my-project"]) assert.ok(isVertexProjectId(ok), ok);
+  for (const bad of ["a/b", "a?b", "a#b", "a b", "a@b"]) assert.ok(!isVertexProjectId(bad), bad);
+});
+
+test("resolveModel refuses a stored Vertex location that is not a region name", async () => {
+  const { createNodeDb } = await import("../db/node-db.js");
+  const { runSetup } = await import("../db/setup.js");
+  const { writeAppSetting } = await import("../db/config-reader.js");
+  const { SETTINGS_KEYS } = await import("../config.js");
+  const { providerConfigs } = await import("../db/schema.js");
+  const { db, setupDriver } = createNodeDb(new (await import("better-sqlite3-multiple-ciphers")).default(":memory:"));
+  await runSetup(setupDriver);
+  await writeAppSetting(db, SETTINGS_KEYS.chatModel, { provider: "google-vertex", modelId: "gemini-test" });
+  await db.insert(providerConfigs).values({ type: "google-vertex", config: JSON.stringify({ projectId: "p", location: "evil.example/x?" }) }).run();
+  const { resolveModel } = await import("./resolve.js");
+  assert.deepEqual(await resolveModel(db), { error: "Vertex AI project or location is not valid" });
 });

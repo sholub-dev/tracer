@@ -30,7 +30,7 @@ function Root({ links }: { links?: TRPCLink<AppRouter>[] }) {
             retryLink({ retry: () => true, retryDelayMs: (attempt) => Math.min(1_000 * attempt, WEB_CONFIG.subscriptionRetryMaxMs) }),
             httpSubscriptionLink({ url: "/api/trpc", transformer: superjson }),
           ],
-          false: httpBatchStreamLink({ url: "/api/trpc", transformer: superjson }),
+          false: httpBatchStreamLink({ url: "/api/trpc", transformer: superjson, maxItems: WEB_CONFIG.trpcBatchMaxItems }),
         }),
       ],
     }),

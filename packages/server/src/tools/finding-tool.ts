@@ -18,14 +18,16 @@ const succeeded = (messages: ModelMessage[], is: (toolName: string) => boolean) 
 // A dismissed firing is answered without an investigation, so it needs no ledger.
 const analysisRan = (messages: ModelMessage[]) => succeeded(messages, (name) => name === ANALYSIS_TOOL_NAME || name === "dismiss_alert");
 
-function lastAnalysis(turn: ModelMessage[]): { ledger?: Partial<Ledger>; challenges: string[] } {
-  const last: { ledger?: Partial<Ledger>; challenges: string[] } = { challenges: [] };
+function lastAnalysis(turn: ModelMessage[]): { ledger?: Partial<Ledger>; challenges: string[]; unreviewed: boolean } {
+  const last: { ledger?: Partial<Ledger>; challenges: string[]; unreviewed: boolean } = { challenges: [], unreviewed: false };
   for (const m of turn) {
     if (m.role === "assistant" && typeof m.content !== "string") for (const p of m.content) if (p.type === "tool-call" && p.toolName === ANALYSIS_TOOL_NAME) last.ledger = p.input as Partial<Ledger>;
     if (m.role === "tool") for (const p of m.content) {
       if (p.type !== "tool-result" || p.toolName !== ANALYSIS_TOOL_NAME) continue;
-      const raw = (p.output as { value?: { challenges?: unknown } } | null)?.value?.challenges;
+      const value = (p.output as { value?: { challenges?: unknown; unreviewed?: unknown } } | null)?.value;
+      const raw = value?.challenges;
       last.challenges = Array.isArray(raw) ? raw.filter((c): c is string => typeof c === "string") : [];
+      last.unreviewed = value?.unreviewed === true;
     }
   }
   return last;
@@ -85,8 +87,10 @@ export function reportFindingTool(
       const evidence = cardProblems(card, turn, queryResults(turn, originals, stepReads()), analysisAvailable(), final());
       const open = sentBack === 0 || unchanged(card, turn) ? openChallenges(turn) : [];
       if (open.length) evidence.push(`begin_analysis raised challenges. Settle each one with a query, or change the card so that none contradicts it:\n- ${open.join("\n- ")}`);
-      if (sentBack >= MAX_SEND_BACKS) return evidence.length ? { recorded: true, unchecked: evidence.join("\n") } : { recorded: true };
-      return evidence.length ? { recorded: false, problems: evidence.join("\n"), next: NEXT } : { recorded: true };
+      if (evidence.length && sentBack < MAX_SEND_BACKS) return { recorded: false, problems: evidence.join("\n"), next: NEXT };
+      // A conclusion whose review failed or timed out was not checked, so its card shows as unverified.
+      const unchecked = [...evidence, ...(lastAnalysis(turn).unreviewed ? ["The review of the conclusion did not run, so the conclusion is not checked."] : [])];
+      return unchecked.length ? { recorded: true, unchecked: unchecked.join("\n") } : { recorded: true };
     },
   });
 }

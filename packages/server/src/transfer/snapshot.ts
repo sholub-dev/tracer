@@ -1,3 +1,4 @@
+import { isPlainObject } from "@tracer-sh/shared";
 import { and, asc, getTableColumns, gt, gte, ne, notInArray, sql, type SQL } from "drizzle-orm";
 import type { SQLiteTable } from "drizzle-orm/sqlite-core";
 import { runInTransaction, type Db } from "../db/driver.js";
@@ -21,7 +22,7 @@ export const TABLES: [string, SQLiteTable][] = [
   ["agent_runs", schema.agentRuns],
 ];
 
-export const FORMAT = 5;
+export const FORMAT = 6;
 
 export interface Snapshot {
   format: number;
@@ -34,6 +35,20 @@ export interface SyncRow {
   row_key: string;
   changed_at: number;
   deleted: number;
+}
+
+/** Throws unless the data from the other device has the shape of a snapshot or a sync payload. */
+export function checkShape(data: unknown): asserts data is Snapshot {
+  if (!isPlainObject(data) || typeof data.format !== "number" || !isPlainObject(data.tables) || !Array.isArray(data.rows)) throw new Error("The data is damaged.");
+  for (const [name, rows] of Object.entries(data.tables)) {
+    if (!Array.isArray(rows) || !rows.every(isPlainObject)) throw new Error(`The data has an invalid row in ${name}.`);
+  }
+  for (const entry of data.rows) {
+    if (!isPlainObject(entry) || typeof entry.tbl !== "string" || typeof entry.row_key !== "string"
+      || typeof entry.changed_at !== "number" || !Number.isFinite(entry.changed_at) || (entry.deleted !== 0 && entry.deleted !== 1)) {
+      throw new Error("The data has an invalid change entry.");
+    }
+  }
 }
 
 /** Vertex AI authenticates through gcloud on the desktop, so a phone cannot use it. */
@@ -149,6 +164,7 @@ export function* batches<T>(rows: T[]) {
  * Follow-up timers belong to the source device, so none are copied: the same re-check must not run on both devices.
  */
 export async function importSnapshot(db: Db, snapshot: Snapshot): Promise<Record<string, number>> {
+  checkShape(snapshot);
   if (snapshot.format !== FORMAT) throw new Error("The copy comes from a different Tracer version. Update both apps to the same version.");
   const counts: Record<string, number> = {};
   const localAt = Date.now();
@@ -167,7 +183,7 @@ export async function importSnapshot(db: Db, snapshot: Snapshot): Promise<Record
     }
     // The triggers logged the import itself; the receiver takes the sender's log, so the next merge finds no difference.
     await tx.delete(schema.syncRows).run();
-    for (const batch of batches(snapshot.rows ?? [])) {
+    for (const batch of batches(snapshot.rows)) {
       await tx.insert(schema.syncRows).values(batch.map((r) => ({ tbl: r.tbl, rowKey: r.row_key, changedAt: r.changed_at, localAt, deleted: r.deleted }))).run();
     }
   });

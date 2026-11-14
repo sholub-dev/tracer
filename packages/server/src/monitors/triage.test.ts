@@ -331,11 +331,12 @@ test("a retried firing gets report_issue_status for its pending issues, triages 
   });
 });
 
-test("a retried incident firing with no open issue can be dismissed, and a dismissed run posts nothing", async () => {
+test("a retried incident firing with no open issue can be dismissed, and a dismissed run posts one line with the reason", async () => {
   const { context } = fakeNewRelic({});
   await context.db.update(schema.monitors).set({ query: MONITOR_QUERY }).run();
   const dismissal = { type: "tool-dismiss_alert", toolCallId: "d", state: "output-available", input: { reason: "incident 1 closed at 13:58" }, output: { recorded: true } };
-  await context.db.update(schema.chatSessions).set({ messages: JSON.stringify([{ id: "", role: "assistant", parts: [dismissal] }]) }).run();
+  const card = { type: "tool-report_finding", toolCallId: "f", state: "output-available", input: { kind: "summary", title: "Incident already closed", answer: "The incident closed before the check.", explanation: [{ statement: "latest event is close", source: "q" }] }, output: { recorded: true } };
+  await context.db.update(schema.chatSessions).set({ messages: JSON.stringify([{ id: "", role: "assistant", parts: [dismissal, card] }]) }).run();
   await withSlack(context.db, async (posts) => {
     const rerun = (await firingRerun(context, "s1"))!;
     assert.ok(rerun.tools.dismiss_alert);
@@ -343,8 +344,13 @@ test("a retried incident firing with no open issue can be dismissed, and a dismi
     assert.equal(rerun.tools.close_nr_issue, undefined);
     assert.equal(rerun.tools.ack_nr_issue, undefined);
     rerun.onComplete({});
-    await settle(() => false);
-    assert.equal(posts.length, 0);
+    await settle(() => posts.length > 0);
+    assert.equal(posts.length, 1);
+    const post = JSON.parse(posts[0]) as { text: string; blocks: unknown[] };
+    assert.match(post.text, /^\*.+\* dismissed without an investigation: incident 1 closed at 13:58$/);
+    assert.equal(post.blocks.length, 1);
+    assert.doesNotMatch(post.text, /\n/);
+    assert.doesNotMatch(posts[0], /Incident already closed|latest event is close|The incident closed|Action:/);
     assert.equal(await reported(context.db), "done");
   });
 });
@@ -856,7 +862,7 @@ test("the prompts name the three outcomes and the wake-up does not presume the a
   await addIssue(context.db, "a", { state: "closed" });
   await addIssue(context.db, "b", { state: "watching", watchUntil: nowSeconds() + 3600 });
   const lines = (await wakeupExtras(context, "s1")).lines.join("\n");
-  assert.match(lines, /Tracer already closed this issue of the alert: Errors\./);
+  assert.match(lines, /Tracer already closed this issue of the alert:\n<alert_data>\n- Errors\n<\/alert_data>/);
   assert.doesNotMatch(lines, /since the last check only/);
   assert.doesNotMatch(TRIAGE_EFFECT, /follow up with a timer/);
 });

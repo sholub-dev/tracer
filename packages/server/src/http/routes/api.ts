@@ -10,9 +10,11 @@ import { startAgentSession } from "../../agents/start-session.js";
 import { extractAnalysis } from "../../agents/analysis.js";
 import { decodeMessages } from "../../lib/messages-codec.js";
 
+const MAX_MESSAGE_CHARS = 1_000_000;
+
 const analyzeBody = z.object({
-  message: z.string().optional(),
-  sessionId: z.string().min(1).refine((id) => !id.startsWith("__"), "reserved session id").nullish(),
+  message: z.string().max(MAX_MESSAGE_CHARS).optional(),
+  sessionId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/).refine((id) => !id.startsWith("__"), "reserved session id").nullish(),
   provider: z.string().nullish(),
 });
 

@@ -387,3 +387,32 @@ test("setup drops the old dashboard tables, their log rows and their builder ses
   assert.equal((sqlite.prepare(`SELECT count(*) AS n FROM sync_rows WHERE tbl IN ('dashboards', 'dashboard_widgets')`).get() as { n: number }).n, 0);
   assert.deepEqual(sqlite.prepare(`SELECT id FROM chat_sessions`).all(), [{ id: "s1" }]);
 });
+
+test("data with the wrong shape is rejected by the merge and by the import", async () => {
+  const { a, b } = await pair();
+  const good = await wire(a.db);
+  const entry = { tbl: "chat_sessions", row_key: "s1", changed_at: T0, deleted: 0 };
+  const cases: [unknown, RegExp][] = [
+    [undefined, /damaged/],
+    [null, /damaged/],
+    [[], /damaged/],
+    [{ ...good, format: "6" }, /damaged/],
+    [{ ...good, tables: [] }, /damaged/],
+    [{ ...good, rows: {} }, /damaged/],
+    [{ ...good, tables: { chat_sessions: {} } }, /invalid row in chat_sessions/],
+    [{ ...good, tables: { chat_sessions: [null] } }, /invalid row in chat_sessions/],
+    [{ ...good, tables: { chat_sessions: [[]] } }, /invalid row in chat_sessions/],
+    [{ ...good, rows: [null] }, /invalid change entry/],
+    [{ ...good, rows: [{ ...entry, tbl: 1 }] }, /invalid change entry/],
+    [{ ...good, rows: [{ ...entry, row_key: 1 }] }, /invalid change entry/],
+    [{ ...good, rows: [{ ...entry, changed_at: "1" }] }, /invalid change entry/],
+    [{ ...good, rows: [{ ...entry, changed_at: null }] }, /invalid change entry/],
+    [{ ...good, rows: [{ ...entry, deleted: 2 }] }, /invalid change entry/],
+    [{ ...good, rows: [{ ...entry, deleted: true }] }, /invalid change entry/],
+  ];
+  for (const [data, message] of cases) {
+    await assert.rejects(mergeSyncPayload(b.db, data as never), message);
+    await assert.rejects(importSnapshot(b.db, data as never), message);
+  }
+  assert.equal((await b.db.select().from(chatSessions).all()).length, 1);
+});

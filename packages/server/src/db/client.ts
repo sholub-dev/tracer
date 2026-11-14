@@ -29,6 +29,12 @@ export const sqlite: DatabaseType = new Database(dbPath);
 applyKey(sqlite, keyHex); // must precede every other statement on this connection
 sqlite.pragma("journal_mode = WAL");
 sqlite.prepare("SELECT count(*) FROM sqlite_master").get(); // throws if the key is wrong
+// Temporary tables and indexes otherwise go to unencrypted files in the system temp directory.
+sqlite.pragma("temp_store = MEMORY");
+// Owner-only whatever the umask; SQLite gives a -wal or -shm file it creates later the mode of the database file.
+for (const suffix of ["", "-wal", "-shm"]) {
+  if (existsSync(dbPath + suffix)) chmodSync(dbPath + suffix, 0o600);
+}
 finishMigration?.();
 // NORMAL skips the per-commit WAL fsync; with WAL a crash can lose the last
 // commit but never corrupts the database.

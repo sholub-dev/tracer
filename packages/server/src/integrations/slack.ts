@@ -2,6 +2,7 @@ import type { Db } from "../db/driver.js";
 import { fetchText } from "../lib/fetch-retry.js";
 import { formatLocalTime } from "../lib/current-context.js";
 import { resultRefsToText, type Finding } from "@tracer-sh/shared";
+import { oneLine } from "../lib/fence.js";
 import { type AlertSummary } from "../monitors/alert-summary.js";
 import { deleteAppSetting, readAppSetting, writeAppSetting } from "../db/config-reader.js";
 
@@ -41,6 +42,8 @@ export async function postSlack(webhookUrl: string, payload: SlackPayload): Prom
     // A retry after a lost response can post twice; that beats a lost alert.
     const res = await fetchText(webhookUrl, {
       method: "POST",
+      // The post must not follow a redirect to another host.
+      redirect: "error",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     }, { timeoutMs: 10_000 });
@@ -51,16 +54,35 @@ export async function postSlack(webhookUrl: string, payload: SlackPayload): Prom
   }
 }
 
+const SECRET_KEY = /(password|passwd|secret|token|api[_-]?key)(["']?\s*[:=]\s*)(?:"([^"\s]+)"|'([^'\s]+)'|([^\s"'&|<>,;)}]+))/gi;
+// A short value, a number or a plain word after the key is prose ("token = 401", "token=missing"), not a secret.
+const secretValue = (v: string) => v.length >= 8 && /[a-z]/i.test(v) && !/^[a-z-]+$/i.test(v);
+
 const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 // Slack is outside Tracer's access controls and a post must not point anywhere: ids, links and step citations are removed, and personal data is masked.
 export function redact(text: string): string {
   return text
-    .replace(/<https?:\/\/[^|>\s]*\|([^>]*)>/g, "$1")
-    .replace(/<https?:\/\/[^>\s]*>/g, "")
-    .replace(/https?:\/\/\S+/g, "")
-    // A bare host needs a slash after the TLD, so "app.ts", "v1.2" and "end.Next" stay.
-    .replace(/(?<![\w/@.-])(?:[a-z0-9-]+\.)+[a-z]{2,}\/\S*/gi, "")
+    // Secrets first: a later rule can cut one into parts that no longer match. Each key shape has a boundary and a minimum length, so prose such as "risk-based" stays.
+    .replace(/\beyJ[\w-]{8,}\.eyJ[\w-]{8,}\.[\w-]*/g, "[secret]")
+    .replace(/\bsk-[A-Za-z0-9_-]{16,}/g, "[secret]")
+    .replace(/\bNR[A-Z]{2}-[A-Za-z0-9]{20,}/g, "[secret]")
+    .replace(/\bxox[a-z]-[A-Za-z0-9-]{10,}/g, "[secret]")
+    .replace(/\bA[KS]IA[A-Z0-9]{16}\b/g, "[secret]")
+    .replace(/\b(?:gh[pousr]|github_pat)_\w{20,}/g, "[secret]")
+    .replace(/\bAIza[\w-]{30,}/g, "[secret]")
+    // "Bearer" as the scheme has a capital and a token-shaped value; "the bearer authentication-middleware check" is prose.
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{20,}/g, "Bearer [secret]")
+    .replace(/\b(Authorization["']?\s*[:=]\s*["']?Basic\s+)[A-Za-z0-9+/=]{8,}/gi, "$1[secret]")
+    .replace(SECRET_KEY, (all, key: string, sep: string, double?: string, single?: string, bare?: string) => {
+      const quote = double !== undefined ? '"' : single !== undefined ? "'" : "";
+      return secretValue(double ?? single ?? bare ?? "") ? `${key}${sep}${quote}[secret]${quote}` : all;
+    })
+    .replace(/<https?:\/\/[^|>\s]*\|([^>]*)>/gi, "$1")
+    .replace(/<https?:\/\/[^>\s]*>/gi, "")
+    .replace(/https?:\/\/\S+/gi, "")
+    // A bare host needs a slash or a query with "=" after the TLD, so "app.ts", "v1.2", "end.Next", "app.ts?" and "data?.items" stay.
+    .replace(/(?<![\w/@.-])(?:[a-z0-9-]+\.)+[a-z]{2,24}(?:\/\S*|\?\S*=\S*)/gi, "")
     .replace(/(?<![\w.+-])[\w.+-]+@[\w-]+\.[\w.-]+/g, "[email]")
     .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, "[ip]")
     // A hex letter is required so times like 15:41:47 stay.
@@ -231,6 +253,11 @@ export function triageUpdate(u: { name: string; action: string; ping: boolean; m
   // Clip after escaping: entities lengthen the text past Slack's section limit.
   const text = prefix + clip(escape(redact(u.action)), SECTION_MAX_CHARS - prefix.length);
   return post(text);
+}
+
+/** The one line for a firing the agent dismissed; it names no other post. */
+export function dismissalPost(u: { name: string; reason: string }): SlackPayload {
+  return post(`${headOf(u.name, undefined, false)} dismissed without an investigation: ${escape(oneLine(tidy(u.reason)))}`);
 }
 
 /** Post for free text from the agent: redacted and escaped, so it carries no link, id or mention. */

@@ -6,6 +6,7 @@ import { CONFIG } from "../../config.js";
 import { readAppSettings, writeAppSetting } from "../../db/config-reader.js";
 import { normalizeNote, sanitizeNote } from "../../tools/memory-executor.js";
 import { runMemoryOptimizer } from "./memory-optimizer.js";
+import { errorLine } from "../../lib/error-line.js";
 
 const DAY_SECONDS = 24 * 60 * 60;
 const markerKey = (toolName: string) => `memory_optimized:${toolName}`;
@@ -63,6 +64,6 @@ export async function maintainMemories(db: Db): Promise<void> {
     const names = [...new Set((await db.select({ toolName: toolMemories.toolName }).from(toolMemories).all()).map((r) => r.toolName))];
     for (const name of names) await optimizeIfDue(db, name);
   } catch (err) {
-    console.warn("[memory-maintenance] failed:", err);
+    console.warn("[memory-maintenance] failed:", errorLine(err));
   }
 }

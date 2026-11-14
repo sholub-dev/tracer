@@ -4,7 +4,7 @@ import { Download, FileText } from "lucide-react";
 import { ANALYSIS_MARKER, findAnalysisMarker, findingSources } from "@tracer-sh/shared";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { cn, isInlineFileUrl } from "@/lib/utils";
 import { Markdown, ResultLookupProvider } from "../../lib/markdown";
 import type { AskState } from "../../lib/ask-card";
 import { AskCard } from "./AskCard";
@@ -21,6 +21,7 @@ export function FileAttachment({ part, className }: { part: FilePartLike; classN
   const [open, setOpen] = React.useState(false);
   const isImage = part.mediaType?.startsWith("image/");
   const label = part.filename ?? part.mediaType ?? "attachment";
+  if (!isInlineFileUrl(part.url)) return <span className={cn("text-sm text-muted-foreground", className)}>{label}</span>;
   return (
     <>
       {isImage ? (

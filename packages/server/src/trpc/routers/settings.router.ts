@@ -1,10 +1,11 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { publicProcedure, router } from "../trpc.js";
 import type { Db } from "../../db/driver.js";
 import { readProviderConfig, writeProviderConfig, deleteProviderConfig, readAppSetting, readAppSettings, writeAppSetting } from "../../db/config-reader.js";
 import { maskSecret } from "../../lib/mask-secret.js";
 import { getTimezone, isValidTimezone } from "../../lib/current-context.js";
-import { ANTHROPIC_MIN_THINKING_BUDGET } from "../../llm/resolve.js";
+import { ANTHROPIC_MIN_THINKING_BUDGET, isValidVertexConfig, isVertexLocation, isVertexProjectId } from "../../llm/resolve.js";
 import { CONFIG, DEFAULTS, SETTINGS_KEYS, type ModelConfig } from "../../config.js";
 
 const apiKeyType = z.enum(["anthropic", "google"]);
@@ -75,16 +76,19 @@ export const settingsRouter = router({
   saveVertexConfig: publicProcedure
     .input(
       z.object({
-        projectId: z.string().optional(),
-        location: z.string().optional(),
+        projectId: z.string().refine(isVertexProjectId, "Invalid project ID").optional(),
+        location: z.string().refine(isVertexLocation, "Invalid location").optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const existing = await readProviderConfig(ctx.db, "google-vertex") ?? {};
-      await writeProviderConfig(ctx.db, "google-vertex", {
-        projectId: input.projectId ?? existing.projectId ?? "",
-        location: input.location ?? existing.location ?? "global",
-      });
+      const projectId = input.projectId ?? existing.projectId ?? "";
+      const location = input.location ?? (existing.location || "global");
+      // A stored value from an older version or a sync is checked too, so a save of one field does not keep a bad other field.
+      if (!isValidVertexConfig(projectId, location)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "The stored Vertex AI project or location is not valid. Set both again." });
+      }
+      await writeProviderConfig(ctx.db, "google-vertex", { projectId, location });
       return { success: true };
     }),
 

@@ -10,6 +10,7 @@ import { sessionChanged } from "../lib/session-events.js";
 import { loadSessionMessages, runChatAgent } from "./base-agent.js";
 import { buildRunOptions } from "./chat-run.js";
 import { generateSessionTitle } from "./utility/title.js";
+import { errorLine } from "../lib/error-line.js";
 
 export interface StartSessionOptions {
   sessionId: string;
@@ -33,7 +34,7 @@ export async function startAgentSession(
   try {
     return await start(context, options);
   } catch (err) {
-    console.warn(`[chat] Could not start ${options.sessionId}:`, err);
+    console.warn(`[chat] Could not start ${options.sessionId}:`, errorLine(err));
     return { error: err instanceof Error ? err.message : String(err) };
   }
 }

@@ -10,6 +10,7 @@ import { decodeMessages } from "../lib/messages-codec.js";
 import { redact } from "../integrations/slack.js";
 import { alertFindingFromMessages, dismissalFromMessages, firstSentence, latestRunSummary, summaryFromMessages, type AlertSummary } from "./alert-summary.js";
 import type { Group } from "./condition.js";
+import { fence } from "../lib/fence.js";
 
 export interface TriggerGroup extends Omit<Group, "additive"> {
   sessionId: string | null;
@@ -173,6 +174,8 @@ export function readPastSessionTool(load: () => PastSession[] | Promise<PastSess
       if (!s) return { error: `Session ${sessionId} is not one of the listed past sessions` };
       return { sessionId, triggeredAt: new Date(s.triggeredAt * 1000).toISOString(), groups: s.keys, summary: s.report, finding: s.finding, analysis: s.analysis, note: "Earlier model-written analysis. Not re-checked. Re-query before quoting its numbers." };
     },
+    // A past analysis can quote text from the data it read.
+    toModelOutput: ({ output }) => ({ type: "text", value: fence("tool_result", JSON.stringify(output)) }),
   });
 }
 

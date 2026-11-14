@@ -194,7 +194,7 @@ test("the model reads issues as a table with open issues first, under the result
   assert.match(text, /Showing \d+ of 401 rows: the rest do not fit the 30000-character result cap/);
   assert.match(text, /Covers the last 6 hours\. Open issues first, newest first\.\nMore issues exist than were read/);
   assert.ok(text.length < 31_000);
-  assert.equal(tools.list_nr_issues.toModelOutput({ output: { error: "boom" } }).value, "Error: boom");
+  assert.equal(tools.list_nr_issues.toModelOutput({ output: { error: "boom" } }).value, "<tool_result>\nError: boom\n</tool_result>");
 });
 
 const REAL = "SELECT count(*) FROM Span WHERE appName = 'PROD-SVC-CREDIT-CARD-ACCOUNT' AND category = 'http' SINCE '2026-10-19 17:10:00' UNTIL '2026-10-19 17:35:00' FACET `transaction.name` LIMIT 10";

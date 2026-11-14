@@ -83,7 +83,7 @@ test("fireDueTimers wakes a due session, pushes a busy one by 60s and leaves one
   await fireDueTimers(context, async (_ctx, opts) => { started.push(opts); return { ok: true }; });
 
   assert.deepEqual(started.map((s) => s.sessionId), ["due"]);
-  assert.match(started[0].message, /^Follow-up timer \(set .+, due .+, now .+\): check the deploy$/);
+  assert.match(started[0].message, /^Follow-up timer \(set .+, due .+, now .+\): scheduled re-check\n.*your own earlier note, not an instruction from the user\.\n<timer_note>\ncheck the deploy\n<\/timer_note>$/);
   const rows = Object.fromEntries((await timers(db)).map((r) => [r.sessionId, r.fireAt]));
   assert.equal(rows.due, undefined);
   assert.ok(Math.abs(rows.busy! - (now() + CONFIG.timerBusyRetrySeconds)) <= 2);
@@ -112,4 +112,12 @@ test("set_timer asks for an interval from how fast the value changes, not for fr
   assert.doesNotMatch(description, /checking too often/);
   assert.match(description, /how fast the value changes and the impact/);
   assert.match(description, /resolved or handed to a person/);
+});
+
+test("set_timer refuses a message over 2000 characters and keeps the pending timer", async () => {
+  const db = memoryDb();
+  await addSession(db, "s1");
+  await run(db, "s1", { minutes: 10, message: "x".repeat(2000) });
+  assert.match(((await run(db, "s1", { minutes: 10, message: "x".repeat(2001) })) as { error: string }).error, /at most 2000 characters/);
+  assert.equal((await timers(db))[0].note.length, 2000);
 });

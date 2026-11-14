@@ -1,6 +1,7 @@
 import type { ModelMessage } from "ai";
 import { resultText, type StepResult } from "../agents/utility/review.js";
 import { WRITE_TOOLS } from "./tool-gate.js";
+import { isErrorText } from "./provider-tool-helpers.js";
 
 // Every tool call is a query unless it writes state or only reads another session or a cut result.
 export const NON_QUERY_TOOLS: ReadonlySet<string> = new Set([...WRITE_TOOLS, "read_past_session", "read_result"]);
@@ -10,7 +11,7 @@ export const key = (title: string) => title.trim().toLowerCase();
 
 function failed(output: unknown, text: string): boolean {
   const type = (output as { type?: unknown } | null)?.type;
-  return (typeof type === "string" && type.startsWith("error")) || /^Error:/.test(text);
+  return (typeof type === "string" && type.startsWith("error")) || isErrorText(text);
 }
 
 /** The full result text of each successful titled query call in the turn, by lowercase title; `stepReads` are the current step's reads, which `messages` lacks. */

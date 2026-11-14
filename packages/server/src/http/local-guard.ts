@@ -27,9 +27,9 @@ function tokenMatches(header: string | null, token: string): boolean {
 
 /**
  * Rejects requests whose Host header is not a loopback name while the server listens on loopback, so a web page
- * that rebinds its own domain to 127.0.0.1 cannot call the API. The copy routes hand out every stored secret,
- * so they also need a loopback Host and a loopback peer when the server is exposed with TRACER_HOST.
- * An exposed server requires the bearer `token` on every /api request from a non-loopback peer.
+ * that rebinds its own domain to 127.0.0.1 cannot call the API; a request with the bearer `token` is not such a page.
+ * The copy routes hand out every stored secret, so only the owner's own browser reaches them.
+ * When a `token` is set, every other /api request must carry it, on a loopback server too.
  * A loopback peer with a loopback Host and no forwarding header is the owner's own browser, so the bundled web UI
  * works there without the token. A same-host reverse proxy or tunnel also shows a loopback peer, so a forwarding
  * header or a foreign Host marks the request as remote.
@@ -43,16 +43,17 @@ export function guardLocalRequests(
   const listensOnLoopback = isLoopbackBind(bindHost);
   return (req: Request, env: Bindings) => {
     const localHost = LOOPBACK_NAMES.has(hostName(req.headers.get("host")));
-    if (listensOnLoopback && !localHost) return new Response("Forbidden", { status: 403 });
+    const tokenOk = () => !!token && tokenMatches(req.headers.get("authorization"), token);
+    if (listensOnLoopback && !localHost && !tokenOk()) return new Response("Forbidden", { status: 403 });
     // tRPC percent-decodes the procedure path, so "transfer%2Esend" must match too.
-    let path = new URL(req.url).pathname;
-    try { path = decodeURIComponent(path); } catch { /* tRPC rejects a malformed path too */ }
+    let path: string;
+    try { path = decodeURIComponent(new URL(req.url).pathname); } catch { return new Response("Bad Request", { status: 400 }); }
     const loopbackPeer = isLoopbackAddress(env.incoming.socket.remoteAddress);
     const ownBrowser = localHost && loopbackPeer && !FORWARDING_HEADERS.some((h) => req.headers.has(h));
-    if (!listensOnLoopback && token && !ownBrowser && path.startsWith("/api/") && !tokenMatches(req.headers.get("authorization"), token)) {
+    if (token && !ownBrowser && path.startsWith("/api/") && !tokenOk()) {
       return new Response("Unauthorized", { status: 401 });
     }
-    if (path.startsWith("/api/trpc/") && path.includes("transfer.") && !(localHost && loopbackPeer)) {
+    if (path.startsWith("/api/trpc/") && path.includes("transfer.") && !ownBrowser) {
       return new Response("Forbidden", { status: 403 });
     }
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
@@ -61,7 +62,7 @@ export function guardLocalRequests(
       const sameOrigin = !!origin && origin.replace(/^https?:\/\//, "") === req.headers.get("host");
       if (origin && !sameOrigin && !allowedOrigins.includes(origin)) return new Response("Forbidden", { status: 403 });
       if (req.headers.get("sec-fetch-site") === "cross-site") return new Response("Forbidden", { status: 403 });
-      if (path.startsWith("/api/") && !path.startsWith("/api/trpc/")) {
+      if (path.startsWith("/api/")) {
         const type = (req.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
         if (type !== "application/json") return new Response("Unsupported Media Type", { status: 415 });
       }

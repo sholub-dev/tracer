@@ -1,3 +1,5 @@
+import { TRPC_MAX_BATCH_SIZE } from "@tracer-sh/shared";
+
 /** Tunable UI constants, kept here instead of as magic numbers in components. */
 export const WEB_CONFIG = {
   /** Also the global react-query staleTime default (main.tsx). */
@@ -5,6 +7,7 @@ export const WEB_CONFIG = {
   /** Coalesces bursts of live session change events into one refetch. */
   sessionEventCoalesceMs: 500,
   subscriptionRetryMaxMs: 10_000,
+  trpcBatchMaxItems: TRPC_MAX_BATCH_SIZE,
   sourcesStaleMs: 60_000,
   /** How often the gcloud auth status repeats. */
   gcpAuthPollMs: 30_000,

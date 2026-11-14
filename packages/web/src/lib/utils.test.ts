@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { selectedLabel } from "./utils";
+import { isInlineFileUrl, selectedLabel } from "./utils";
 
 const options = [{ value: "a", label: "Alpha (a)", displayLabel: "Alpha" }, { value: "b", label: "Beta" }];
 
@@ -26,4 +26,9 @@ test("singleFlight joins calls made while one runs", async () => {
   await Promise.all([a, b]);
   await run();
   assert.equal(runs, 2);
+});
+
+test("only data: and blob: URLs count as inline file URLs", () => {
+  for (const url of ["data:image/png;base64,AA==", "DATA:application/pdf;base64,AA==", "blob:http://localhost:3579/1b2c"]) assert.ok(isInlineFileUrl(url), url);
+  for (const url of ["javascript:alert(1)", "https://example.com/a.png", "//example.com/a.png", "/api/x", " data:text/html,x", "", undefined]) assert.ok(!isInlineFileUrl(url), String(url));
 });

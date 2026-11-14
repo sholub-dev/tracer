@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { clip, isSlackWebhook, known, monitorAlert, parseMentions, postSlack, messagePost, recheckUpdate, redact, routeOf, triageUpdate, verdictOf } from "./slack.js";
+import { clip, dismissalPost, isSlackWebhook, known, monitorAlert, parseMentions, postSlack, messagePost, recheckUpdate, redact, routeOf, triageUpdate, verdictOf } from "./slack.js";
 import type { Finding } from "@tracer-sh/shared";
 import type { AlertSummary } from "../monitors/alert-summary.js";
 
@@ -263,4 +263,61 @@ test("redact stays fast on a long dotted string", () => {
   const start = performance.now();
   redact("a.".repeat(20_000));
   assert.ok(performance.now() - start < 200);
+});
+
+test("redact removes secrets that are not links", () => {
+  const jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+  assert.equal(redact("password=hunter2pass"), "password=[secret]");
+  assert.equal(redact(`auth ${jwt} failed`), "auth [secret] failed");
+  // Key-shaped fixtures are assembled at run time, so no scanner reads them as real keys.
+  assert.equal(redact(`key ${"sk"}-abcdefghijklmnopqrstuvwx1234 leaked`), "key [secret] leaked");
+  assert.equal(redact(`${"NRAK"}-ABCDEFGHIJKLMNOPQRSTUVWXYZ0 and ${"xoxb"}-123456789012-abcdefghij and ${"AKIA"}IOSFODNN7EXAMPLE`), "[secret] and [secret] and [secret]");
+  assert.equal(redact("header Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345"), "header Authorization: Bearer [secret]");
+  assert.equal(redact("<https://a.example/x?token=abc12345|the chart> (token=abc12345), \"password=x1234567\"; secret=y1234567."), "the chart (token=[secret]), \"password=[secret]\"; secret=[secret]");
+  assert.equal(redact("db_password = hunter2pass client_secret=abc12345 apiKey=xyz12345 API_KEY=q1234567 access_token=t1234567"), "db_password = [secret] client_secret=[secret] apiKey=[secret] API_KEY=[secret] access_token=[secret]");
+});
+
+test("redact masks quoted, JSON and colon secrets, a Basic header and vendor keys", () => {
+  assert.equal(redact('password="hunter2pass"'), 'password="[secret]"');
+  assert.equal(redact("api_key='abcd1234efgh'"), "api_key='[secret]'");
+  assert.equal(redact('{"token":"abcdef1234567890"}'), '{"token":"[secret]"}');
+  assert.equal(redact("password: hunter2pass"), "password: [secret]");
+  assert.equal(redact("Authorization: Basic dXNlcjpodW50ZXIycGFzcw=="), "Authorization: Basic [secret]");
+  assert.equal(redact(`key ${"ghp"}_abcdefghijklmnopqrstuvwxyz0123456789 and ${"AIza"}SyA1b2C3d4E5f6G7h8I9j0KlMnOpQrStUvWx leaked`), "key [secret] and [secret] leaked");
+});
+
+test("redact keeps optional chaining and prose around bearer and token", () => {
+  for (const text of ["response.data?.items", "the bearer authentication-middleware check", "token = 401", "csrf token=missing", 'token: "missing or invalid"']) {
+    assert.equal(redact(text), text);
+  }
+});
+
+test("a dismissed firing is one line with the monitor name and the redacted reason", () => {
+  const payload = dismissalPost({ name: "Errors", reason: "every incident closed at 13:58\nsee <https://x.example/a|here> token=abc12345" });
+  assert.equal(payload.text, "*Errors* dismissed without an investigation: every incident closed at 13:58 see here token=[secret]");
+  assert.equal(payload.blocks?.length, 1);
+});
+
+test("redact removes links with an uppercase scheme and bare hosts with a query", () => {
+  assert.equal(redact("evil.com?d=secretdata"), "");
+  assert.equal(redact("see HTTPS://evil.com/x now"), "see now");
+  assert.equal(redact("open <HTTP://evil.com/x|the page> and <Https://evil.com>."), "open the page and.");
+});
+
+test("redact keeps alert prose that looks like a secret or a host", () => {
+  for (const text of ["A risk-based rule fired", "Bearer token expired at 10:05", "Is it app.ts? No, config.json.", "The token is missing and the password was wrong", "task sk-1 done"]) {
+    assert.equal(redact(text), text);
+  }
+});
+
+test("postSlack does not follow a redirect", async () => {
+  const realFetch = globalThis.fetch;
+  let init: RequestInit | undefined;
+  globalThis.fetch = (async (_url: unknown, i?: RequestInit) => { init = i; return new Response("ok"); }) as typeof fetch;
+  try {
+    assert.deepEqual(await postSlack("https://hooks.slack.com/services/T/B/x", { text: "hi" }), { ok: true });
+    assert.equal(init?.redirect, "error");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

@@ -10,6 +10,7 @@ import { memoryOperations } from "../../db/schema.js";
 import { isEmptyQuery, isFailedQuery, type ProviderQuery } from "../chat/query-records.js";
 import { getDomainKnowledge } from "./memory-domain-knowledge.js";
 import { optimizeIfDue } from "./memory-maintenance.js";
+import { errorLine } from "../../lib/error-line.js";
 import { timeoutSignal } from "../../lib/timeout-signal.js";
 
 interface MemoryAgentOptions {
@@ -169,10 +170,10 @@ ${tailInstruction}`;
       onLanguageModelCallEnd: sessionId ? recordEachCall(db, sessionId, "memory", resolved.modelId) : undefined,
     });
   } catch (err) {
-    console.warn(`[memory-agent] ${providerType} failed:`, err);
+    console.warn(`[memory-agent] ${providerType} failed:`, errorLine(err));
   } finally {
     await markCompleted(db, sessionId);
-    void optimizeIfDue(db, providerType).catch((err) => console.warn("[memory-maintenance] failed:", err));
+    void optimizeIfDue(db, providerType).catch((err) => console.warn("[memory-maintenance] failed:", errorLine(err)));
   }
 }
 

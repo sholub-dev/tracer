@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ModelMessage, UIMessage } from "ai";
-import { buildTranscript, cardProblems, harnessNote, questionIndex, reviewProblems } from "./review.js";
+import { buildTranscript, cardProblems, harnessNote, questionIndex, reviewConclusion, reviewProblems, REVIEW_FAILED } from "./review.js";
 import { CONFIG } from "../../config.js";
 
 const history: ModelMessage[] = [
@@ -157,4 +157,14 @@ test("an alert summary review reply is parsed like a card review, and the summar
     { role: "tool", content: [{ type: "tool-result", toolCallId: "s", toolName: "report_alert_summary", output: { type: "json", value: { recorded: false, problems: "x", next: "y" } } }] },
   ];
   assert.doesNotMatch(buildTranscript(messages, 0), /report_alert_summary|draft/);
+});
+
+test("a review call that fails returns the failed marker, and a stop by the user returns null", async () => {
+  const failing = { specificationVersion: "v3", provider: "test", modelId: "m", supportedUrls: {}, doGenerate: async () => { throw new Error("boom"); }, doStream: async () => { throw new Error("boom"); } };
+  const ask = (signal?: AbortSignal) => reviewConclusion({} as never, "s1", failing as never, "m", {} as never, [{ role: "user", content: "why?" }], signal, undefined, 0, []);
+  assert.equal(await ask(), REVIEW_FAILED);
+  assert.equal(reviewProblems(REVIEW_FAILED), REVIEW_FAILED, "the marker is never read as a pass");
+  const stopped = new AbortController();
+  stopped.abort();
+  assert.equal(await ask(stopped.signal), null);
 });

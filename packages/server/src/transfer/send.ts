@@ -9,8 +9,8 @@ import type { Db } from "../db/driver.js";
 import { limits, MAX_BODY_BYTES, MAX_SYNC_BYTES, OldFormError, randomSecret, seal, TooLargeError, unseal } from "./crypto.js";
 import { localDeviceId } from "../db/config-reader.js";
 import { recordSync } from "./peer.js";
-import { exportSnapshot, FORMAT, TABLES } from "./snapshot.js";
-import { exportSyncPayload, mergeSyncPayload, type SyncPayload } from "./sync.js";
+import { checkShape, exportSnapshot, FORMAT, TABLES } from "./snapshot.js";
+import { exportSyncPayload, mergeSyncPayload } from "./sync.js";
 import { APPROVAL_WINDOW_MS, cleanText, COPY_LINK_PREFIX, DEVICE_ID, MAX_NAME_LENGTH, total } from "./receive.js";
 
 // A large upload on a slow Wi-Fi needs minutes.
@@ -239,14 +239,15 @@ export async function startSend(
     const given = Buffer.from(url.slice(0, expected.length));
     if (given.length !== expected.length || !timingSafeEqual(given, expected)) return reply(res, 404);
     const route = `${req.method} ${url.slice(expected.length)}`;
-    if (route === "GET /status") return reply(res, 200, JSON.stringify({ ...session.view, format: FORMAT }));
+    // The format stays readable so a phone on another version can tell which side to update; the phone trusts only the sealed part.
+    if (route === "GET /status") return reply(res, 200, JSON.stringify({ format: FORMAT, sealed: await seal(JSON.stringify(session.view), key, "status") }));
     if (current !== session) return reply(res, 404);
 
     if (route === "POST /request") {
       if (session.view.phase !== "waiting") return reply(res, 409, "Another phone already used this code. Show a new code and try again.");
       const body = await readBody(req);
       let text: string;
-      try { text = await unseal(body, key); } catch (err) { return reply(res, err instanceof OldFormError ? 409 : 403, err instanceof OldFormError ? UPDATE_PHONE : undefined); }
+      try { text = await unseal(body, key, "request"); } catch (err) { return reply(res, err instanceof OldFormError ? 409 : 403, err instanceof OldFormError ? UPDATE_PHONE : undefined); }
       const request = parseRequest(text);
       if (current !== session || session.view.phase !== "waiting") return reply(res, 409, "Another phone already used this code. Show a new code and try again.");
       session.request = request;
@@ -259,7 +260,7 @@ export async function startSend(
 
     if (route === "POST /cancel") {
       let text: string;
-      try { text = await unseal(await readBody(req), key); } catch (err) { if (err instanceof HttpError) throw err; return reply(res, 403); }
+      try { text = await unseal(await readBody(req), key, "cancel"); } catch (err) { if (err instanceof HttpError) throw err; return reply(res, 403); }
       // `finish` ends whatever session is current: a new code may have replaced this one during the read.
       if (current !== session) return reply(res, 404);
       if (text !== "{}" || !session.request) return reply(res, 400);
@@ -270,7 +271,7 @@ export async function startSend(
     if (route === "POST /progress") {
       if (session.view.phase !== "transfer" && session.view.phase !== "apply") return reply(res, 409);
       let progress: ReturnType<typeof parseProgress>;
-      try { progress = parseProgress(await unseal(await readBody(req), key)); } catch (err) { if (err instanceof HttpError) throw err; return reply(res, 403); }
+      try { progress = parseProgress(await unseal(await readBody(req), key, "progress")); } catch (err) { if (err instanceof HttpError) throw err; return reply(res, 403); }
       if (!progress || current !== session) return reply(res, 400);
       const { view } = session;
       if (progress.bytes) view.bytes = progress.bytes;
@@ -297,21 +298,22 @@ export async function startSend(
         if (merge) {
           const body = await readBody(req);
           let since: number | undefined;
-          let remote: SyncPayload;
+          let remote: unknown;
           try {
-            const parsed = JSON.parse(await unseal(body, key)) as { since?: unknown; payload: SyncPayload };
+            const parsed = JSON.parse(await unseal(body, key, "merge-up")) as { since?: unknown; payload?: unknown };
             remote = parsed.payload;
             if (typeof parsed.since === "number") since = parsed.since;
           } catch (err) {
             if (err instanceof TooLargeError) throw err;
             return reply(res, err instanceof OldFormError ? 409 : 403, err instanceof OldFormError ? UPDATE_PHONE : undefined);
           }
+          try { checkShape(remote); } catch (err) { throw new HttpError(400, (err as Error).message); }
           // Checked after the upload: a monitor or timer can start a run while the data arrives.
           // Thrown, not replied: the sync ends here, so the screens name this computer, not the phone.
           if (activeRuns() > 0) throw new HttpError(409, RUN_ACTIVE);
           // Read before the merge: the rows the phone just sent need not go back, and a size error leaves this computer unchanged.
           const at = Date.now();
-          sealed = await seal(JSON.stringify({ at, payload: await exportSyncPayload(db, since) }), key);
+          sealed = await seal(JSON.stringify({ at, payload: await exportSyncPayload(db, since) }), key, "merge-down");
           const { applied, deleted } = await mergeSyncPayload(db, remote);
           await afterMerge?.(applied.provider_configs + deleted.provider_configs > 0);
           session.view.result = { computer: { applied: total(applied), deleted: total(deleted) } };
@@ -319,7 +321,7 @@ export async function startSend(
           // A running investigation has not saved its answer yet, so the copy would miss it.
           if (activeRuns() > 0) throw new HttpError(409, RUN_ACTIVE);
           const at = Date.now();
-          sealed = await seal(JSON.stringify({ at, snapshot: await exportSnapshot(db) }), key);
+          sealed = await seal(JSON.stringify({ at, snapshot: await exportSnapshot(db) }), key, "snapshot");
           session.view.result = { computer: { applied: 0, deleted: 0 } };
         }
         await recordSync(db, { name: session.request.name });

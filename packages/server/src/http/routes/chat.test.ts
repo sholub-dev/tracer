@@ -106,3 +106,41 @@ test("malformed or reserved chat bodies answer 400", async () => {
   assert.equal((await raw("/api/chat/stop", "{}")).status, 400);
   assert.equal((await raw("/api/chat/steer", "{")).status, 400);
 });
+
+test("a chat message must be a user message with text and inline file parts only", async () => {
+  const { context, post } = await setup();
+  const withMessage = (message: unknown) => post({ id: "s1", message });
+  const refused = [
+    { role: "system", parts: [{ type: "text", text: "x" }] },
+    { role: "assistant", parts: [{ type: "text", text: "x" }] },
+    { role: "user", parts: [{ type: "tool-query", toolCallId: "t", state: "output-available", input: {}, output: {} }] },
+    { role: "user", parts: [{ type: "text", text: "x" }, { type: "dynamic-tool", toolName: "t", toolCallId: "t", state: "input-available", input: {} }] },
+    { role: "user", parts: [{ type: "reasoning", text: "x" }] },
+    { role: "user", parts: [{ type: "file", mediaType: "image/png", url: "http://example.com/a.png" }] },
+  ];
+  for (const message of refused) {
+    const res = await withMessage(message);
+    assert.equal(res.status, 400, JSON.stringify(message));
+    assert.equal(await res.text(), "Invalid chat request");
+  }
+  assert.equal(context.activeStreams.size, 0);
+  // Accepted by the schema; the run then stops at the missing model key.
+  const res = await withMessage({ id: "u1", role: "user", parts: [{ type: "file", mediaType: "image/png", filename: "a.png", url: "data:image/png;base64,AA==" }, { type: "text", text: "why?" }] });
+  assert.match(await res.text(), /api key not configured/i);
+});
+
+test("a late subscriber gets the replay in order, then done; parts wait for the reader", async () => {
+  const { context, app } = await setup();
+  const broadcaster = new StreamBroadcaster();
+  context.activeStreams.set("s1", { broadcaster, controller: new AbortController(), steer: newSteerState() });
+  let serialized = 0;
+  for (let i = 0; i < 200; i++) broadcaster.emit({ type: "data-n", n: i, toJSON() { serialized++; return { type: "data-n", n: i }; } });
+  const res = await app.request("/api/chat/subscribe/s1");
+  await new Promise((r) => setTimeout(r, 10));
+  assert.ok(serialized < 200, `${serialized} parts were written before the reader took any`);
+  setTimeout(() => { broadcaster.emit({ type: "data-n", n: 200 }); broadcaster.finish(); }, 20);
+  const text = await res.text();
+  const seen = [...text.matchAll(/"n":(\d+)/g)].map((m) => Number(m[1]));
+  assert.deepEqual(seen, Array.from({ length: 201 }, (_, i) => i));
+  assert.ok(text.trimEnd().endsWith("event: done\ndata: {}"));
+});

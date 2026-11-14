@@ -45,7 +45,7 @@ const SMALL_TOOLS: Record<string, { done: string; errorLabel: string; icon: Luci
   "tool-read_past_session": { done: "Read a past investigation", errorLabel: "Past investigation not available", icon: History },
   "tool-report_issue_status": { done: "Reported alert status", errorLabel: "Alert status not recorded", icon: ClipboardCheck },
   "tool-report_alert_summary": { done: "Reported alert summary", errorLabel: "Alert summary not recorded", icon: ClipboardCheck },
-  "tool-dismiss_alert": { done: "Alert already closed, not posted", errorLabel: "Alert not dismissed", icon: ClipboardCheck },
+  "tool-dismiss_alert": { done: "Alert already closed, dismissed", errorLabel: "Alert not dismissed", icon: ClipboardCheck },
   "tool-post_slack_message": { done: "Posted to Slack", errorLabel: "Slack post failed", icon: Send },
   "tool-set_timer": { done: "Follow-up timer set", errorLabel: "Follow-up timer not set", icon: Timer },
 };

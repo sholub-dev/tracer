@@ -19,10 +19,10 @@ importers:
   .:
     dependencies:
       '@napi-rs/keyring':
-        specifier: ^2.1.0
+        specifier: 2.1.0
         version: 2.1.0
       better-sqlite3-multiple-ciphers:
-        specifier: ^13.0.3
+        specifier: 13.0.3
         version: 13.0.3
     devDependencies:
       '@biomejs/biome':

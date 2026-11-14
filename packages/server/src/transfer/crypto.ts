@@ -18,8 +18,12 @@ export class OldFormError extends Error {}
 const mb = (bytes: number) => (bytes < 10 * 1024 * 1024 ? (bytes / 1024 / 1024).toFixed(1) : String(Math.round(bytes / 1024 / 1024)));
 const ADVICE = "Delete sessions you do not need, then try again.";
 
-// An older version seals as "iv.data" without this tag.
-const TAG = "z";
+// Older versions seal as "iv.data", or as "z.iv.data" with no label.
+const TAG = "a";
+const OLD_TAG = "z";
+
+/** What a sealed message is for. The label is authenticated, so a message of one kind is never accepted as another. */
+export type SealLabel = "request" | "cancel" | "progress" | "status" | "merge-up" | "merge-down" | "snapshot";
 
 /** 32 random bytes as base64url, for a one-time token or an AES-256 key. */
 export function randomSecret(): string {
@@ -28,7 +32,7 @@ export function randomSecret(): string {
 
 const importKey = (key: string) => crypto.subtle.importKey("raw", decode(key), "AES-GCM", false, ["encrypt", "decrypt"]);
 
-export async function seal(text: string, key: string): Promise<string> {
+export async function seal(text: string, key: string, label: SealLabel): Promise<string> {
   const plain = new TextEncoder().encode(text);
   if (plain.length > limits.unpacked) {
     throw new TooLargeError(`The data to sync is ${mb(plain.length)} MB before compression. The limit is ${mb(limits.unpacked)} MB. ${ADVICE}`);
@@ -38,7 +42,7 @@ export async function seal(text: string, key: string): Promise<string> {
     throw new TooLargeError(`The data to sync is ${mb(packed.length)} MB after compression. The limit is ${mb(limits.packed)} MB. ${ADVICE}`);
   }
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await importKey(key), packed);
+  const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: new TextEncoder().encode(label) }, await importKey(key), packed);
   return `${TAG}.${encode(iv)}.${encode(new Uint8Array(data))}`;
 }
 
@@ -59,11 +63,11 @@ function unpack(packed: Uint8Array): string {
   return new TextDecoder().decode(text);
 }
 
-/** Throws when the key is wrong or the payload was changed. */
-export async function unseal(payload: string, key: string): Promise<string> {
+/** Throws when the key is wrong, the payload was changed or it was sealed for another purpose. */
+export async function unseal(payload: string, key: string, label: SealLabel): Promise<string> {
   const parts = payload.split(".");
-  if (parts.length === 2) throw new OldFormError("The data comes from an older Tracer version.");
+  if (parts.length === 2 || (parts.length === 3 && parts[0] === OLD_TAG)) throw new OldFormError("The data comes from an older Tracer version.");
   const [tag, iv, data] = parts;
   if (parts.length !== 3 || tag !== TAG || !iv || !data) throw new Error("The copy is damaged.");
-  return unpack(new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: decode(iv) }, await importKey(key), decode(data))));
+  return unpack(new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: decode(iv), additionalData: new TextEncoder().encode(label) }, await importKey(key), decode(data))));
 }

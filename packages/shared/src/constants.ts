@@ -18,6 +18,9 @@ export const DEFAULT_SESSION_TITLE = "New chat";
  */
 export const UNIFIED_SCOPE = "__unified__";
 
+/** Most calls in one tRPC batch request; the server refuses a larger batch and the web client splits at this size. */
+export const TRPC_MAX_BATCH_SIZE = 50;
+
 export const SESSION_PREFIX = {
   MONITORS: "__monitors__",
 } as const;

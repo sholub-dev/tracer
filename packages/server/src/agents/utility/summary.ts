@@ -4,6 +4,7 @@ import { resolveModel } from "../../llm/resolve.js";
 import { recordEachCall } from "../../llm/usage.js";
 import type { Db } from "../../db/driver.js";
 import { timeoutSignal } from "../../lib/timeout-signal.js";
+import { errorLine } from "../../lib/error-line.js";
 
 const SUMMARY_SYSTEM_PROMPT = `You are compacting an AI debugging-assistant conversation into a detailed summary. Your summary will permanently REPLACE the original messages as the assistant's only memory of them, so anything you omit is lost forever. The assistant must be able to continue the investigation from your summary alone without redoing any completed work.
 
@@ -166,7 +167,7 @@ export async function generateSessionSummary(
     if (!summary) return { error: "Summary generation returned no content" };
     return { summary };
   } catch (err) {
-    console.warn("[summary] Failed to generate summary:", err);
+    console.warn("[summary] Failed to generate summary:", errorLine(err));
     return { error: "Summary generation failed" };
   }
 }

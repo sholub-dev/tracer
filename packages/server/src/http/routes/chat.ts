@@ -35,9 +35,15 @@ async function replyWithRun(c: HonoContext, start: () => Promise<RunResult | Res
 const anySessionId = z.string().min(1);
 const chatSessionId = anySessionId.refine((id) => !id.startsWith("__"), "reserved session id");
 
+// What the web client sends: text and inline files. Any other role or part would enter the history as if the model or a tool wrote it.
+const userPart = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("text"), text: z.string() }),
+  z.object({ type: z.literal("file"), mediaType: z.string(), filename: z.string().optional(), url: z.string().startsWith("data:") }),
+]);
+
 const chatBody = z.object({
   id: chatSessionId,
-  message: z.looseObject({ role: z.string(), parts: z.array(z.unknown()) }),
+  message: z.looseObject({ role: z.literal("user"), parts: z.array(userPart) }),
   activeProvider: z.string().optional(),
 });
 
@@ -152,14 +158,21 @@ export function registerChatRoutes(app: Hono, context: Context): void {
       await new Promise<void>((resolve) => {
         let unDone: () => void = () => {};
         const end = () => { clearInterval(heartbeat); unsub(); unDone(); resolve(); };
+        // The replay arrives in one synchronous burst. One write waits for the one before it, so a slow reader
+        // holds the parts back here and not as encoded copies in the response stream.
+        let writes = Promise.resolve();
+        const write = (event: string, data: () => string) => {
+          writes = writes.then(() => stream.writeSSE({ event, data: data() }));
+          return writes;
+        };
         const heartbeat = setInterval(() => {
-          stream.writeSSE({ event: "ping", data: "{}" }).catch(end);
+          write("ping", () => "{}").catch(end);
         }, CONFIG.sseHeartbeatMs);
         const unsub = active.broadcaster.subscribe((part) => {
-          stream.writeSSE({ event: "part", data: JSON.stringify(part) }).catch(end);
+          write("part", () => JSON.stringify(part)).catch(end);
         });
         unDone = active.broadcaster.onDone(async () => {
-          try { await stream.writeSSE({ event: "done", data: "{}" }); } catch {}
+          try { await write("done", () => "{}"); } catch {}
           end();
         });
         c.req.raw.signal.addEventListener("abort", end, { once: true });

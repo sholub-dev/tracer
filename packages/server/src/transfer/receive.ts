@@ -1,7 +1,7 @@
 import type { SyncCounts, SyncMode, SyncSession } from "@tracer-sh/shared";
 import type { Db } from "../db/driver.js";
 import { localDeviceId } from "../db/config-reader.js";
-import { MAX_BODY_BYTES, OldFormError, seal, TooLargeError, unseal } from "./crypto.js";
+import { MAX_BODY_BYTES, OldFormError, seal, TooLargeError, unseal, type SealLabel } from "./crypto.js";
 import { getMark, getSetting, recordSync, setMark } from "./peer.js";
 import { FORMAT, importSnapshot, type Snapshot } from "./snapshot.js";
 import { exportSyncPayload, mergeSyncPayload, type SyncPayload } from "./sync.js";
@@ -124,9 +124,9 @@ function check({ status, text }: { status: number; text: string }): string {
 const UPDATE_COMPUTER = "Update Tracer on the computer to the same version as the phone, then show a new code.";
 const UPDATE_PHONE = "Update Tracer on the phone to the same version as the computer, then scan the code again.";
 
-async function open<T>(text: string, key: string): Promise<T> {
+async function open<T>(text: string, key: string, label: SealLabel): Promise<T> {
   try {
-    return JSON.parse(await unseal(text, key)) as T;
+    return JSON.parse(await unseal(text, key, label)) as T;
   } catch (err) {
     if (err instanceof OldFormError) throw new Error(UPDATE_COMPUTER);
     if (err instanceof TooLargeError) throw err;
@@ -134,7 +134,11 @@ async function open<T>(text: string, key: string): Promise<T> {
   }
 }
 
-type PhoneSession = SyncSession & { format?: number };
+/** The time on the computer's clock becomes the sync mark, so it must be a real number before anything is written. */
+function checkTime(at: unknown): asserts at is number {
+  if (typeof at !== "number" || !Number.isFinite(at)) throw new Error("The data from the computer is damaged. Show a new code and try again.");
+}
+
 type OwnPhase = "approval" | "transfer" | "apply" | "done" | "failed" | "cancelled";
 
 /** What this phone knows about the running sync; the computer's last answer fills in the rest. */
@@ -185,19 +189,21 @@ const ENDED_BY_COMPUTER: Record<string, string> = {
   failed: "The sync failed on the computer. Show a new code and try again.",
 };
 
-/** An older computer does not report its format. */
-function checkVersion(status: PhoneSession): void {
-  if (status.format === undefined || status.format < FORMAT) throw new Error(UPDATE_COMPUTER);
-  if (status.format > FORMAT) throw new Error(UPDATE_PHONE);
+/** An older computer does not report its format, or reports a lower one. */
+function checkVersion(format: unknown): void {
+  if (typeof format !== "number" || format < FORMAT) throw new Error(UPDATE_COMPUTER);
+  if (format > FORMAT) throw new Error(UPDATE_PHONE);
 }
 
-async function readStatus(current: Job, url: URL, options: CallOptions): Promise<PhoneSession> {
-  const status = JSON.parse(check(await call(url, {}, options))) as PhoneSession;
-  if (typeof status.phase === "string") {
-    const { format: _format, ...session } = status;
-    current.remote = session;
-  }
-  return status;
+/** The format is plain text and only selects the update message. The session itself comes sealed. */
+async function readStatus(current: Job, url: URL, options: CallOptions): Promise<SyncSession> {
+  let reply: { format?: unknown; sealed?: unknown } = {};
+  try { reply = (JSON.parse(check(await call(url, {}, options))) ?? {}) as typeof reply; } catch (err) { if (!(err instanceof SyntaxError)) throw err; }
+  checkVersion(reply.format);
+  const session = await open<SyncSession>(String(reply.sealed), current.copy.key, "status");
+  if (typeof session?.phase !== "string") throw new Error("The data does not decrypt. Show a new code on the computer and scan it again.");
+  current.remote = session;
+  return session;
 }
 
 async function awaitApproval(current: Job, url: URL, options: CallOptions): Promise<void> {
@@ -233,15 +239,15 @@ async function run(db: Db, current: Job, beforeImport?: () => void): Promise<{ m
     current.reports = current.reports.then(async () => {
       try {
         // Not tied to the cancel signal: the report that follows a cancel still has to leave.
-        check(await call(at("/progress"), { method: "POST", body: await seal(JSON.stringify(body), key) }, { timeoutMs: 5000 }));
+        check(await call(at("/progress"), { method: "POST", body: await seal(JSON.stringify(body), key, "progress") }, { timeoutMs: 5000 }));
       } catch { /* best effort: the computer learns of a lost report when its wait ends */ }
     });
     return current.reports;
   };
 
   try {
-    checkVersion(await readStatus(current, at("/status"), { signal }));
-    const request = await seal(JSON.stringify({ deviceId, name: current.phoneName, mode, format: FORMAT }), key);
+    await readStatus(current, at("/status"), { signal });
+    const request = await seal(JSON.stringify({ deviceId, name: current.phoneName, mode, format: FORMAT }), key, "request");
     check(await call(at("/request"), { method: "POST", body: request }, { signal }));
     await awaitApproval(current, at("/status"), { signal });
 
@@ -262,7 +268,8 @@ async function run(db: Db, current: Job, beforeImport?: () => void): Promise<{ m
       await beforeWrite();
       own.phase = "apply";
       void report({ phase: "apply", bytes: own.bytes });
-      const { at: theirs, snapshot } = await open<{ at: number; snapshot: Snapshot }>(text, key);
+      const { at: theirs, snapshot } = await open<{ at: unknown; snapshot: Snapshot }>(text, key, "snapshot");
+      checkTime(theirs);
       beforeImport?.();
       counts = await importSnapshot(db, snapshot);
       result = { applied: total(counts), deleted: 0 };
@@ -272,12 +279,13 @@ async function run(db: Db, current: Job, beforeImport?: () => void): Promise<{ m
       const mark = device ? await getMark(db, device) : undefined;
       // Taken before the export: a change made while the exchange runs is sent next time.
       const startedAt = Date.now();
-      const sent = await seal(JSON.stringify({ since: mark?.theirs, payload: await exportSyncPayload(db, mark?.mine) }), key);
+      const sent = await seal(JSON.stringify({ since: mark?.theirs, payload: await exportSyncPayload(db, mark?.mine) }), key, "merge-up");
       const text = check(await call(at("/merge"), { method: "POST", body: sent }, transfer));
       await beforeWrite();
       own.phase = "apply";
       void report({ phase: "apply", bytes: own.bytes });
-      const { at: theirs, payload } = await open<{ at: number; payload: SyncPayload }>(text, key);
+      const { at: theirs, payload } = await open<{ at: unknown; payload: SyncPayload }>(text, key, "merge-down");
+      checkTime(theirs);
       beforeImport?.();
       const merged = await mergeSyncPayload(db, payload);
       counts = merged.applied;
@@ -296,7 +304,7 @@ async function run(db: Db, current: Job, beforeImport?: () => void): Promise<{ m
     if (own.phase !== "done" && own.phase !== "failed" && own.phase !== "cancelled") own.reached = own.phase;
     if (signal.aborted) {
       own.phase = "cancelled";
-      try { await call(at("/cancel"), { method: "POST", body: await seal("{}", key) }, { timeoutMs: 5000 }); } catch { /* best effort: the wait on the computer ends by itself */ }
+      try { await call(at("/cancel"), { method: "POST", body: await seal("{}", key, "cancel") }, { timeoutMs: 5000 }); } catch { /* best effort: the wait on the computer ends by itself */ }
     } else {
       // The computer may have ended the sync and may say why.
       if (!endedByComputer(current)) await readStatus(current, at("/status"), { timeoutMs: 3000 }).catch(() => undefined);

@@ -13,6 +13,8 @@ export interface Context {
   db: Db;
   providers: ProviderRegistry;
   activeStreams: Map<string, ActiveStream>;
+  /** Set by the in-app server only: a copy replaces the whole local database. */
+  receivesCopy?: boolean;
 }
 
 export function createContext(deps: { db: Db; providers: ProviderRegistry }): Context {

@@ -86,3 +86,16 @@ test("Slack adds post_slack_message and its prompt fragment to chat, and not to 
   assert.equal("post_slack_message" in (await collectBaseTools(fakeRegistry([provider]), db, undefined, "unified")).tools, false);
   assert.equal("post_slack_message" in (await collectBaseTools(fakeRegistry([provider]), memoryDb(), undefined, "unified", undefined, true)).tools, false);
 });
+
+test("an unattended run gets no Slack post, no Jira comment and no ack or close of any issue", async () => {
+  const db = memoryDb();
+  await writeJiraConfig(db, JIRA);
+  await writeSlackConfig(db, { webhookUrl: "https://hooks.slack.com/services/T/B/x" });
+  const nr = { ...provider, getChatTools: () => ({ ...provider.getChatTools(), tools: { execute_nrql: {}, ack_nr_issue: {}, close_nr_issue: {} } }) };
+  const attended = await collectBaseTools(fakeRegistry([nr]), db, undefined, "unified", undefined, true);
+  assert.deepEqual(Object.keys(attended.tools).sort(), ["ack_nr_issue", "add_jira_comment", "close_nr_issue", "execute_nrql", "get_jira_issue", "post_slack_message"]);
+  const unattended = await collectBaseTools(fakeRegistry([nr]), db, undefined, "unified", undefined, true, true);
+  assert.deepEqual(Object.keys(unattended.tools).sort(), ["execute_nrql", "get_jira_issue"]);
+  assert.doesNotMatch(unattended.systemPrompt!, /post_slack_message|add_jira_comment|## Slack/);
+  assert.match(unattended.systemPrompt!, /## Jira/);
+});

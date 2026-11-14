@@ -5,6 +5,8 @@ import { publicProcedure, router } from "../trpc.js";
 import { providerConfigs } from "../../db/schema.js";
 import { readProviderConfig, writeProviderConfig, deleteProviderConfig } from "../../db/config-reader.js";
 import { toChartRows } from "../../providers/posthog/posthog-formatter.js";
+import { isPosthogHost, isPosthogProjectId } from "../../providers/posthog/posthog.client.js";
+import { isValidVertexConfig } from "../../llm/resolve.js";
 import { maskSecret } from "../../lib/mask-secret.js";
 import { timeoutSignal } from "../../lib/timeout-signal.js";
 
@@ -18,6 +20,11 @@ function serialized<T>(type: string, run: () => Promise<T>): Promise<T> {
   const tail = result.catch(() => {}).finally(() => { if (saveQueues.get(type) === tail) saveQueues.delete(type); });
   saveQueues.set(type, tail);
   return result;
+}
+
+function isSecretField(fields: Array<{ key: string; type: string }> | undefined, key: string): boolean {
+  const declared = fields?.find((f) => f.key === key);
+  return declared ? declared.type === "password" : /key|secret|token|password/i.test(key);
 }
 
 export const providerRouter = router({
@@ -62,9 +69,7 @@ export const providerRouter = router({
       const masked: Record<string, string> = {};
       const fields = registered.find((t) => t.type === row.type)?.configFields;
       for (const [key, value] of Object.entries(config)) {
-        const declared = fields?.find((f) => f.key === key);
-        const secret = declared ? declared.type === "password" : /key|secret/i.test(key);
-        masked[key] = secret ? maskSecret(value) : value;
+        masked[key] = isSecretField(fields, key) ? maskSecret(value) : value;
       }
       configs.push({ type: row.type, config: masked });
     }
@@ -79,14 +84,30 @@ export const providerRouter = router({
       }),
     )
     .mutation(({ ctx, input }) => serialized(input.type, async () => {
-      if (!ctx.providers.getRegisteredTypes().some(t => t.type === input.type)) {
+      const registered = ctx.providers.getRegisteredTypes().find(t => t.type === input.type);
+      if (!registered) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: `Unknown provider type: "${input.type}"`,
         });
       }
 
-      const config = Object.fromEntries(Object.entries(input.config).map(([key, value]) => [key, value.trim()]));
+      // The client holds only the masked form of a stored secret and sends it back when another field changes.
+      const stored = await readProviderConfig(ctx.db, input.type);
+      const config = Object.fromEntries(Object.entries(input.config).map(([key, raw]) => {
+        const value = raw.trim();
+        const kept = stored?.[key];
+        return [key, kept && isSecretField(registered.configFields, key) && value === maskSecret(kept) ? kept : value];
+      }));
+
+      if (input.type === "posthog") {
+        if (config.host && !isPosthogHost(config.host.replace(/\/+$/, ""))) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "PostHog host must be an https URL" });
+        }
+        if (config.projectId !== undefined && !isPosthogProjectId(config.projectId)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "PostHog project ID must be a number" });
+        }
+      }
 
       await writeProviderConfig(ctx.db, input.type, config);
 
@@ -200,6 +221,11 @@ export const providerRouter = router({
     const projectId = config?.projectId;
     if (!projectId) return [];
     const location = config.location || "global";
+    // The location becomes part of the host name that receives the gcloud token.
+    if (!isValidVertexConfig(projectId, location)) {
+      console.warn("[vertex] listVertexModels: the stored project or location is not valid");
+      return [];
+    }
 
     try {
       const auth = await getGcpAuth();

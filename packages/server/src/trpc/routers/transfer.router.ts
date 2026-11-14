@@ -7,6 +7,11 @@ import { cancelReceive, inspectCopy, receiveStatus, startReceive } from "../../t
 // Loaded on demand: it opens a network listener, which only the desktop server can do.
 const sender = () => import("../../transfer/send.js");
 
+const receiverProcedure = publicProcedure.use(({ ctx, next }) => {
+  if (!ctx.receivesCopy) throw new TRPCError({ code: "FORBIDDEN", message: "This device does not receive a copy." });
+  return next();
+});
+
 export const transferRouter = router({
   send: publicProcedure.mutation(async ({ ctx }) => (await sender()).startSend(ctx.db, () => ctx.activeStreams.size, async (providersChanged) => {
     if (providersChanged) await ctx.providers.reloadFromDb(ctx.db);
@@ -25,7 +30,7 @@ export const transferRouter = router({
     return at ? { name: (await getSetting(ctx.db, "sync_peer_name")) ?? "", at } : null;
   }),
 
-  inspect: publicProcedure.input(z.object({ link: z.string() })).query(async ({ ctx, input }) => {
+  inspect: receiverProcedure.input(z.object({ link: z.string() })).query(async ({ ctx, input }) => {
     try {
       return await inspectCopy(ctx.db, input.link);
     } catch (err) {
@@ -34,7 +39,7 @@ export const transferRouter = router({
   }),
 
   /** Starts the sync and returns at once; `receiveStatus` shows how it goes. */
-  receive: publicProcedure.input(z.object({ link: z.string() })).mutation(async ({ ctx, input }) => {
+  receive: receiverProcedure.input(z.object({ link: z.string() })).mutation(async ({ ctx, input }) => {
     const assertIdle = () => {
       if (ctx.activeStreams.size > 0) {
         throw new TRPCError({ code: "CONFLICT", message: "An investigation is running. Stop it or wait for it to finish, then scan again." });
@@ -52,6 +57,6 @@ export const transferRouter = router({
       throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : String(err) });
     }
   }),
-  receiveStatus: publicProcedure.query(() => receiveStatus()),
-  cancelReceive: publicProcedure.mutation(() => cancelReceive()),
+  receiveStatus: receiverProcedure.query(() => receiveStatus()),
+  cancelReceive: receiverProcedure.mutation(() => cancelReceive()),
 });

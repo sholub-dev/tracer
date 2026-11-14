@@ -1,6 +1,7 @@
-import { exec, execFile } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { join, dirname, sep } from "node:path";
+import { execFile } from "node:child_process";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, join, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isNewerVersion } from "@tracer-sh/shared";
 import { CONFIG } from "./config.js";
@@ -9,13 +10,16 @@ import { CONFIG } from "./config.js";
  * How this instance of tracer-sh is running, which determines how we upgrade it:
  * - `global`: installed via `npm install -g tracer-sh`. Re-running the install
  *   overwrites the package files and the launcher re-spawns the new server.
+ *   Only the copy in npm's own global folder counts: `npm install -g` would not
+ *   touch a project-local, pnpm or yarn install.
  * - `npx`: run via `npx tracer-sh` from npm's cache. Bare `npx tracer-sh` reuses
  *   that cache WITHOUT checking the registry, so it never updates on its own —
  *   but the cache dir is a regular npm prefix we can upgrade in place with
  *   `npm install --prefix`, after which both the running copy and future bare
  *   npx runs use the new version.
- * - `dev`: running from a source checkout (workspace repo / npm link). Self-update
- *   is disabled — the developer manages the version.
+ * - `dev`: running from a source checkout (workspace repo / npm link) or from an
+ *   install npm does not manage globally. Self-update is disabled — the developer
+ *   or the package manager that installed it manages the version.
  */
 export type InstallMethod = "global" | "npx" | "dev";
 
@@ -75,30 +79,86 @@ function readCurrentVersion(): string {
 /**
  * Classify how this process was launched. Node resolves symlinks when computing
  * import.meta.url, so a global `npm link` checkout reports its real repo path —
- * which is why we key off path shape rather than symlink-ness:
+ * which is why we key off the path rather than symlink-ness:
  * - `.../_npx/<hash>/node_modules/tracer-sh` → npx
- * - `.../node_modules/tracer-sh`             → a real (global) install
- * - anything else (the source repo)          → dev
+ * - `<npm global root>/tracer-sh`            → a real (global) install
+ * - anything else (the source repo, a project-local, pnpm or yarn install) → dev
+ * `globalRoot` is the real path that `npm root -g` reports, or null when unknown.
  */
-export function detectInstallMethod(root: string | null): InstallMethod {
+export function detectInstallMethod(root: string | null, globalRoot: string | null = null): InstallMethod {
   if (!root) return "dev";
   if (root.includes(`${sep}_npx${sep}`)) return "npx";
-  if (root.includes(`${sep}node_modules${sep}tracer-sh`)) return "global";
+  if (globalRoot) {
+    const [here, global] = [root, join(globalRoot, "tracer-sh")].map((p) => (process.platform === "win32" ? p.toLowerCase() : p));
+    if (here === global) return "global";
+  }
   return "dev";
 }
 
-export function getInstallMethod(): InstallMethod {
-  return detectInstallMethod(resolvePackage().root);
+// undefined: npm was not asked yet.
+let npmGlobalRoot: string | null | undefined;
+
+/** Asks npm for its global folder once, and only for a copy that sits in some node_modules folder. */
+async function resolveGlobalRoot(root: string | null): Promise<void> {
+  if (npmGlobalRoot !== undefined || !root || detectInstallMethod(root) === "npx" || basename(dirname(root)) !== "node_modules") return;
+  const { err, stdout } = await runNpm(["root", "-g"], { timeout: CONFIG.npmViewTimeoutMs });
+  // A failed call stays unanswered, so the next check asks again.
+  if (err || !stdout.trim()) return;
+  try {
+    npmGlobalRoot = realpathSync(stdout.trim());
+  } catch {
+    npmGlobalRoot = null;
+  }
 }
 
-function fetchLatestNpmVersion(): Promise<string | null> {
+/** Before the first update check completes, a global install reports `dev`. */
+export function getInstallMethod(): InstallMethod {
+  return detectInstallMethod(resolvePackage().root, npmGlobalRoot ?? null);
+}
+
+/**
+ * npm's own entry script, to run with this Node binary: no shell, and no lookup in PATH or in the
+ * current directory. Null when npm is not where the Node installers put it.
+ */
+export function findNpmCli(execPath = process.execPath, npmExecPath = process.env.npm_execpath, onWindows = process.platform === "win32"): string | null {
+  // pnpm and yarn set npm_execpath to themselves.
+  if (npmExecPath && basename(npmExecPath) === "npm-cli.js" && existsSync(npmExecPath)) return npmExecPath;
+  const bin = dirname(execPath);
+  try {
+    // Windows keeps npm beside node.exe; elsewhere `npm` beside `node` is a link to the script.
+    const cli = onWindows ? join(bin, "node_modules", "npm", "bin", "npm-cli.js") : realpathSync(join(bin, "npm"));
+    return basename(cli) === "npm-cli.js" && existsSync(cli) ? cli : null;
+  } catch {
+    return null;
+  }
+}
+
+/** For cmd.exe: inside double quotes only a quote ends the argument, and no argument here needs one. */
+export const quoteForCmd = (arg: string) => `"${arg.replace(/"/g, "")}"`;
+
+let npmCli: string | null | undefined;
+
+function runNpm(args: string[], options: { timeout: number; maxBuffer?: number }): Promise<{ err: Error | null; stdout: string; stderr: string }> {
+  if (npmCli === undefined) npmCli = findNpmCli();
+  const cli = npmCli;
+  // npm.cmd runs only through a shell. cmd.exe searches the current directory first, so the directory is fixed below.
+  const viaShell = !cli && process.platform === "win32";
+  const [file, fileArgs] = cli ? [process.execPath, [cli, ...args]] : ["npm", viaShell ? args.map(quoteForCmd) : args];
   return new Promise((resolve) => {
-    exec("npm view tracer-sh version", { encoding: "utf-8", timeout: CONFIG.npmViewTimeoutMs }, (err, stdout) => {
-      if (err) { resolve(null); return; }
-      const version = stdout.trim();
-      resolve(version || null);
-    });
+    // Not the launch directory: an .npmrc or an npm.cmd in a project folder must not take part.
+    execFile(file, fileArgs, { encoding: "utf-8", cwd: homedir(), shell: viaShell, ...options }, (err, stdout, stderr) => resolve({ err, stdout, stderr }));
   });
+}
+
+/** A version that is safe to pass to npm as `tracer-sh@<version>`. */
+export const isPlainVersion = (version: string) => /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version);
+
+/** The version check names no registry, so it reads the same npm config as the install. */
+export const VIEW_ARGS = ["view", "tracer-sh", "version"];
+
+async function fetchLatestNpmVersion(): Promise<string | null> {
+  const { err, stdout } = await runNpm(VIEW_ARGS, { timeout: CONFIG.npmViewTimeoutMs });
+  return err ? null : stdout.trim() || null;
 }
 
 /** Returns the cached update status, or a safe default before the first check completes. */
@@ -123,18 +183,21 @@ export async function checkForUpdate(fetchLatest: () => Promise<string | null> =
   checkInFlight = true;
   try {
     const current = readCurrentVersion();
+    await resolveGlobalRoot(resolvePackage().root);
     const method = getInstallMethod();
     const latest = current === "unknown" ? null : await fetchLatest().catch(() => null);
-    if (!latest) {
+    if (!latest || !isPlainVersion(latest)) {
       cachedStatus ??= { available: false, currentVersion: current, latestVersion: null, method };
       return;
     }
     const available = isNewerVersion(latest, current);
     cachedStatus = { available, currentVersion: current, latestVersion: latest, method };
     if (available) {
-      const hint = method === "dev"
-        ? "git pull, then restart tracer-sh — the launcher rebuilds automatically"
-        : "click the version in the sidebar to update from the app";
+      const hint = method !== "dev"
+        ? "click the version in the sidebar to update from the app"
+        : resolvePackage().root?.includes(`${sep}node_modules${sep}`)
+          ? "update it with the package manager that installed it"
+          : "git pull, then restart tracer-sh — the launcher rebuilds automatically";
       console.log(`Update available: v${current} → v${latest} (${hint})`);
     }
   } finally {
@@ -160,30 +223,26 @@ function npxPrefixDir(root: string): string {
   return dirname(dirname(root));
 }
 
-function runNpmInstall(installArgs: string[]): Promise<{ ok: boolean; error?: string }> {
-  // npm is npm.cmd on Windows, which runs only through a shell; the shell then needs quotes around paths with spaces.
-  const onWindows = process.platform === "win32";
-  return new Promise((resolve) => {
-    execFile(
-      "npm",
-      // Quiet flags keep output small (a verbose install can otherwise overflow
-      // the stdout buffer and look like a failure); maxBuffer adds headroom for
-      // native rebuild logs so a successful install is never misreported.
-      [...installArgs, "--no-fund", "--no-audit", "--loglevel=error", "--fetch-retries=5"]
-        .map((arg) => (onWindows && /\s/.test(arg) ? `"${arg}"` : arg)),
-      { encoding: "utf-8", timeout: CONFIG.npmInstallTimeoutMs, maxBuffer: CONFIG.npmInstallMaxBufferBytes, shell: onWindows },
-      (err, _stdout, stderr) => {
-        if (err) {
-          // Keep the tail — npm prints the actual error last, and full stderr
-          // can run to megabytes across retries.
-          const full = (stderr || "").trim() || err.message;
-          resolve({ ok: false, error: full.length > 2000 ? `…${full.slice(-2000)}` : full });
-          return;
-        }
-        resolve({ ok: true });
-      },
-    );
-  });
+/** The install for one exact version: the one the update check found, never a moving tag. */
+export function installArgs(method: "global" | "npx", root: string, version: string): string[] {
+  return method === "global"
+    ? ["install", "-g", `tracer-sh@${version}`]
+    : ["install", "--prefix", npxPrefixDir(root), `tracer-sh@${version}`];
+}
+
+async function runNpmInstall(args: string[]): Promise<{ ok: boolean; error?: string }> {
+  // Quiet flags keep output small (a verbose install can otherwise overflow
+  // the stdout buffer and look like a failure); maxBuffer adds headroom for
+  // native rebuild logs so a successful install is never misreported.
+  const { err, stderr } = await runNpm(
+    [...args, "--no-fund", "--no-audit", "--loglevel=error", "--fetch-retries=5"],
+    { timeout: CONFIG.npmInstallTimeoutMs, maxBuffer: CONFIG.npmInstallMaxBufferBytes },
+  );
+  if (!err) return { ok: true };
+  // Keep the tail — npm prints the actual error last, and full stderr
+  // can run to megabytes across retries.
+  const full = (stderr || "").trim() || err.message;
+  return { ok: false, error: full.length > 2000 ? `…${full.slice(-2000)}` : full };
 }
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -217,29 +276,35 @@ export async function withRetries(
 /**
  * Upgrade this install in place, then let the caller request a restart so the
  * launcher (bin/tracer.mjs) re-spawns the freshly installed server:
- * - global → `npm install -g tracer-sh@latest`
- * - npx    → `npm install --prefix <npx cache dir> tracer-sh@latest`; the same
+ * - global → `npm install -g tracer-sh@<version>`
+ * - npx    → `npm install --prefix <npx cache dir> tracer-sh@<version>`; the same
  *   files bare `npx tracer-sh` resolves to, so future runs also get the update.
- * - dev    → refused; the developer manages the checkout.
+ * - dev    → refused; the developer or another package manager manages the copy.
+ * `<version>` is the one the update check found.
  */
 export async function performSelfUpdate(): Promise<SelfUpdateResult> {
   const { root } = resolvePackage();
-  const method = detectInstallMethod(root);
+  await resolveGlobalRoot(root);
+  const method = getInstallMethod();
   if (method === "dev" || !root) {
     return {
       ok: false,
       method,
-      error: "Running from a local source checkout, so in-app update is disabled.",
+      error: root?.includes(`${sep}node_modules${sep}`)
+        ? "This copy was not installed with `npm install -g`, so in-app update is disabled. Update it with the package manager that installed it."
+        : "Running from a local source checkout, so in-app update is disabled.",
     };
+  }
+  const version = cachedStatus?.latestVersion;
+  if (!version) {
+    return { ok: false, method, error: "No newer version is known yet. Try again in a moment." };
   }
   // Serialize installs: a second click or tab must not start a concurrent npm
   // process on the shared cache — the very failure mode the retries fight.
   if (installInFlight) {
     return { ok: false, method, error: "An update is already in progress." };
   }
-  const install = method === "global"
-    ? ["install", "-g", "tracer-sh@latest"]
-    : ["install", "--prefix", npxPrefixDir(root), "tracer-sh@latest"];
+  const install = installArgs(method, root, version);
 
   installInFlight = true;
   try {

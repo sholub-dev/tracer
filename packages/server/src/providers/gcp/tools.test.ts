@@ -74,16 +74,16 @@ test("a call that hits the limit leaves the clients open while another call stil
       const p = new McpProvider({} as never, {}, "x");
       let closed = 0;
       const tools = {
-        hung: { description: "d", inputSchema: z.object({}), execute: () => new Promise(() => {}) },
-        slow: { description: "d", inputSchema: z.object({}), execute: async () => { await new Promise((r) => setTimeout(r, 25)); return { content: [{ type: "text", text: "late" }] }; } },
+        list_log_entries: { description: "d", inputSchema: z.object({}), execute: () => new Promise(() => {}) },
+        list_time_series: { description: "d", inputSchema: z.object({}), execute: async () => { await new Promise((r) => setTimeout(r, 25)); return { content: [{ type: "text", text: "late" }] }; } },
       };
       (p as any).client = { tools: async () => tools, close: async () => { closed++; } };
       await (p as any).discoverTools();
       p.connected = true;
       const kit = createGcpDirectTools(p, undefined, undefined, "p").tools as Record<string, { execute: (i: unknown, o?: unknown) => Promise<{ error?: string }> }>;
-      const hungCall = kit.hung.execute({}, {});
+      const hungCall = kit.list_log_entries.execute({}, {});
       await new Promise((r) => setTimeout(r, 15));
-      const [hung, slow] = await Promise.all([hungCall, kit.slow.execute({}, {})]);
+      const [hung, slow] = await Promise.all([hungCall, kit.list_time_series.execute({}, {})]);
       assert.match(hung.error!, /timed out/);
       assert.equal(slow.error, undefined);
       assert.equal(closed, 0);
@@ -130,4 +130,13 @@ test("a normal result still formats", async () => {
     assert.equal(out.error, undefined);
     assert.ok(out.analysis?.includes("hi"));
   });
+});
+
+test("a tool the server lists beyond the documented read tools does not reach the agent", () => {
+  const entry = { description: "d", inputSchema: z.object({}), execute: async () => ({}) };
+  const provider = { connected: true, callsRunning: 0, invalidateTools: () => {}, getCachedTools: () => ({ list_log_entries: entry, get_trace: entry, delete_log: entry, run_shell: entry }) };
+  const tools = createGcpDirectTools(provider as never, undefined, undefined, "p").tools;
+  assert.deepEqual(Object.keys(tools).filter((n) => n !== "begin_analysis").sort(), ["get_trace", "list_log_entries"]);
+  const none = createGcpDirectTools({ ...provider, getCachedTools: () => ({ run_shell: entry }) } as never, undefined, undefined, "p");
+  assert.deepEqual(none.tools, {});
 });

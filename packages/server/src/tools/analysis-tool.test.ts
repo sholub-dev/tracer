@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { challengeLedger, createBeginAnalysisTool, type Ledger } from "./analysis-tool.js";
+import { REVIEW_FAILED } from "../agents/utility/review.js";
 
 const clean: Ledger = {
   question: "cause",
@@ -185,4 +186,11 @@ test("a split part can cite a query that ran in the same step", async () => {
 
 test("a conclusion that rules out bots is not a bot claim", () => {
   assert.ok(!challengeLedger({ ...clean, conclusion: "The data rules out bots: the rise is spread over 4,000 clients." }).some((c) => /actor\.indicator/.test(c)));
+});
+
+test("a review that did not run is marked on the output and is not a challenge", async () => {
+  const out = await run(clean, async () => REVIEW_FAILED);
+  assert.equal(out.unreviewed, true);
+  assert.equal(out.challenges, undefined);
+  assert.equal((await run(clean, async () => "OK")).unreviewed, undefined);
 });

@@ -258,3 +258,16 @@ test("a bot word the user asked about needs no ledger proof", async () => {
   const asked = [{ role: "user" as const, content: "how many bot requests yesterday?" }, ...turn().slice(1)];
   assert.deepEqual(await askWith(bot, asked), { recorded: true });
 });
+
+test("a card after a review that did not run is recorded as unverified", async () => {
+  const analysis = (value: object) => [
+    { role: "assistant" as const, content: [{ type: "tool-call" as const, toolCallId: "ba", toolName: "begin_analysis", input: {} }] },
+    { role: "tool" as const, content: [{ type: "tool-result" as const, toolCallId: "ba", toolName: "begin_analysis", output: { type: "json" as const, value } }] },
+  ];
+  const out = await ask(valid, [...turn(), ...analysis({ status: "x", unreviewed: true })]);
+  assert.equal(out.recorded, true);
+  assert.match(out.unchecked, /review of the conclusion did not run/);
+  const card = findingFromMessages(msgs({ ...call(valid), output: out }));
+  assert.equal(card?.confidence, "unverified");
+  assert.deepEqual(await ask(valid, [...turn(), ...analysis({ status: "x", unreviewed: true }), ...analysis({ status: "x" })]), { recorded: true }, "a later review that ran clears it");
+});

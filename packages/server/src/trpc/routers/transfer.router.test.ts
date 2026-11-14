@@ -9,7 +9,7 @@ import { transferRouter } from "./transfer.router.js";
 async function caller() {
   const { db, setupDriver } = createNodeDb(new Database(":memory:"));
   await runSetup(setupDriver);
-  return { db, api: transferRouter.createCaller({ db, activeStreams: new Map() } as never) };
+  return { db, api: transferRouter.createCaller({ db, activeStreams: new Map(), receivesCopy: true } as never) };
 }
 
 test("both statuses are null when no sync runs", async () => {
@@ -41,6 +41,16 @@ test("lastSync is null on an empty database and reports the stored peer", async 
 
 test("receive refuses while an investigation runs", async () => {
   const { db } = await caller();
-  const api = transferRouter.createCaller({ db, activeStreams: new Map([["s", {}]]) } as never);
+  const api = transferRouter.createCaller({ db, activeStreams: new Map([["s", {}]]), receivesCopy: true } as never);
   await assert.rejects(api.receive({ link: "tracer://copy" }), /investigation is running/);
+});
+
+test("a server that does not receive copies refuses the receiving procedures", async () => {
+  const { db } = await caller();
+  const api = transferRouter.createCaller({ db, activeStreams: new Map() } as never);
+  await assert.rejects(api.inspect({ link: "tracer://copy" }), /does not receive/);
+  await assert.rejects(api.receive({ link: "tracer://copy" }), /does not receive/);
+  await assert.rejects(api.receiveStatus(), /does not receive/);
+  await assert.rejects(api.cancelReceive(), /does not receive/);
+  assert.equal(await api.sendStatus(), null);
 });

@@ -37,6 +37,14 @@ test("cleanup rewrites notes, removes copies, keeps the oldest and is idempotent
   assert.deepEqual(await cleanupMemories(db), { rewritten: 0, removed: 0 });
 });
 
+test("cleanup leaves a query hint with angle brackets as it is", async () => {
+  const db = await freshDb();
+  const note = "Use duration < 1 with FROM <eventType>, not <b>HAVING</b>";
+  await db.insert(toolMemories).values({ toolName: "t", note }).run();
+  assert.deepEqual(await cleanupMemories(db), { rewritten: 0, removed: 0 });
+  assert.equal((await db.select().from(toolMemories).get())!.note, note);
+});
+
 test("cleanup never cuts a long note", async () => {
   const db = await freshDb();
   const long = Array.from({ length: 60 }, (_, i) => `w${i}`).join(" ");

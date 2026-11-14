@@ -62,7 +62,12 @@ real.close();
 const EXCLUDED_SETTING = /slack|jira|device_id/i;
 
 const scratchPath = join(outDir, ".scratch.db");
-for (const suffix of ["", "-wal", "-shm"]) rmSync(scratchPath + suffix, { force: true });
+// The scratch database holds provider API keys in plain form: it must not outlive the run, however the run ends.
+const removeScratch = () => { for (const suffix of ["", "-wal", "-shm"]) rmSync(scratchPath + suffix, { force: true }); };
+removeScratch();
+process.on("exit", removeScratch);
+process.on("SIGINT", () => process.exit(130));
+process.on("SIGTERM", () => process.exit(143));
 const scratch = new Database(scratchPath);
 const { db, setupDriver } = createNodeDb(scratch);
 await runSetup(setupDriver);
@@ -172,7 +177,7 @@ try {
   console.log(`total cost $${totalCost.toFixed(4)}`);
 } finally {
   scratch.close();
-  for (const suffix of ["", "-wal", "-shm"]) rmSync(scratchPath + suffix, { force: true });
+  removeScratch();
   for (const p of providers.getAllProviders()) await p.dispose().catch(() => {});
   process.exit(0);
 }

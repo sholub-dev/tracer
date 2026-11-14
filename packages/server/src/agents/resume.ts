@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import type { UIMessage } from "ai";
 import { SESSION_KIND, unixNow } from "@tracer-sh/shared";
 import type { Db } from "../db/driver.js";
 import { chatSessions } from "../db/schema.js";
@@ -7,9 +8,10 @@ import { pendingResume } from "../lib/pending-resume.js";
 import type { Context } from "../trpc/context.js";
 import { loadSessionMessages, runChatAgent, SESSION_BUSY } from "./base-agent.js";
 import { buildRunOptions } from "./chat-run.js";
-import { isWakeupTurn, wakeupExtras } from "../monitors/triage.js";
+import { isFiringTurn, isWakeupTurn, wakeupExtras } from "../monitors/triage.js";
 import { settleMonitorRun } from "../monitors/scheduler.js";
 import { CONFIG } from "../config.js";
+import { errorLine } from "../lib/error-line.js";
 import { endsWithAsk } from "../tools/ask-tool.js";
 
 export interface InterruptedRun {
@@ -50,6 +52,11 @@ export async function settleInterruptedRuns(db: Db): Promise<{ interrupted: Inte
   return { interrupted, settled };
 }
 
+/** True when a person started the interrupted turn of a monitor session: it began with neither the firing nor a wake-up. */
+export function personTurn(kind: string | null, messages: UIMessage[]): boolean {
+  return kind === SESSION_KIND.MONITOR && !isWakeupTurn(messages) && !isFiringTurn(messages);
+}
+
 /** Continues each run from its last saved step, with no new user message. Needs the providers for the tools. */
 export async function resumeRuns(context: Context, runs: InterruptedRun[], settled: string[] = []): Promise<void> {
   const failed = async (id: string, error: string) => {
@@ -70,14 +77,15 @@ export async function resumeRuns(context: Context, runs: InterruptedRun[], settl
         }
         // A resumed wake-up gets the same tools and hooks as the timer gave it.
         const wake = kind === SESSION_KIND.MONITOR && isWakeupTurn(messages) ? await wakeupExtras(context, id) : null;
-        const options = await buildRunOptions(context, { sessionId: id, kind, scope, extras: wake?.tools, onComplete: wake?.onComplete });
+        // A person's own turn keeps the tools it had before the restart.
+        const options = await buildRunOptions(context, { sessionId: id, kind, scope, interactive: personTurn(kind, messages), extras: wake?.tools, onComplete: wake?.onComplete });
         const result = messages.length === 0
           ? { error: "Nothing to resume" }
           : await runChatAgent({ sessionId: id, messages, summary, summaryUpTo, context, resumed: true, ...options });
         // Another run already owns the session (a timer or a person started it first): it is not interrupted.
         if ("error" in result && result.error !== SESSION_BUSY) await failed(id, result.error ?? "Could not resume");
       } catch (err) {
-        console.warn(`[chat] Failed to resume ${id}:`, err);
+        console.warn(`[chat] Failed to resume ${id}:`, errorLine(err));
         await failed(id, err instanceof Error ? err.message : String(err));
       } finally {
         pendingResume.delete(id);

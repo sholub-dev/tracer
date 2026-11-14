@@ -8,6 +8,7 @@ import { recordEachCall } from "../../llm/usage.js";
 import type { Db } from "../../db/driver.js";
 import { sessionChanged } from "../../lib/session-events.js";
 import { timeoutSignal } from "../../lib/timeout-signal.js";
+import { errorLine } from "../../lib/error-line.js";
 
 export async function generateSessionTitle(db: Db, sessionId: string, userMessage: string): Promise<string | null> {
   try {
@@ -37,7 +38,7 @@ export async function generateSessionTitle(db: Db, sessionId: string, userMessag
     }
     return null;
   } catch (err) {
-    console.warn("[title] Failed to generate title:", err);
+    console.warn("[title] Failed to generate title:", errorLine(err));
     return null;
   }
 }

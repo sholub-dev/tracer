@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import Database from "better-sqlite3-multiple-ciphers";
 import { createNodeDb } from "../../db/node-db.js";
 import { runSetup } from "../../db/setup.js";
-import { appSettings } from "../../db/schema.js";
+import { appSettings, providerConfigs } from "../../db/schema.js";
 import { settingsRouter } from "./settings.router.js";
 
 async function caller() {
@@ -29,4 +29,23 @@ test("saveAgentConfig writes only changed fields", async () => {
   await api.saveAgentConfig({ ...current, directModeMaxSteps: 7 });
   const keys = (await db.select().from(appSettings).all()).map((r) => r.key);
   assert.deepEqual(keys.filter((k) => k !== "device_id"), ["direct_mode_max_steps"]);
+});
+
+test("saveVertexConfig accepts only a host-safe location and project", async () => {
+  const { db, api } = await caller();
+  await api.saveVertexConfig({});
+  await api.saveVertexConfig({ projectId: "example.com:my-project", location: "us-central1" });
+  assert.deepEqual(await api.getVertexConfig(), { projectId: "example.com:my-project", location: "us-central1" });
+  for (const location of ["evil.example/x?", "us-central1.evil.example", "US-CENTRAL1", "a b", ""]) {
+    await assert.rejects(api.saveVertexConfig({ location }), /location/i, location);
+  }
+  for (const projectId of ["p/../x", "p?x", "p#x", "p x"]) {
+    await assert.rejects(api.saveVertexConfig({ projectId }), /project/i, projectId);
+  }
+  assert.deepEqual(await api.getVertexConfig(), { projectId: "example.com:my-project", location: "us-central1" });
+
+  await db.update(providerConfigs).set({ config: JSON.stringify({ projectId: "p", location: "evil.example/x?" }) }).run();
+  await assert.rejects(api.saveVertexConfig({ projectId: "other" }), /not valid/);
+  await api.saveVertexConfig({ location: "global" });
+  assert.deepEqual(await api.getVertexConfig(), { projectId: "p", location: "global" });
 });

@@ -16,9 +16,10 @@ export async function collectChatTools(
   sessionId: string | undefined,
   mode: ChatMode,
   activeProvider?: string,
+  unattended = false,
 ): Promise<ChatToolsResult> {
   const { tools, promptFragments, systemPrompt, maxSteps, afterComplete, connectedProviders, providerTypes } =
-    await collectBaseTools(registry, db, sessionId, mode, activeProvider, true);
+    await collectBaseTools(registry, db, sessionId, mode, activeProvider, true, unattended);
 
   // Debug chat returns undefined tools when no providers are connected,
   // so server.ts can show a "no providers configured" fallback prompt.

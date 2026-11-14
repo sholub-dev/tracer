@@ -22,6 +22,8 @@ import { MAX_SEND_BACKS, reportFindingTool } from "../tools/finding-tool.js";
 import { isSlackSummaryTool, reportAlertSummaryTool } from "../monitors/alert-summary.js";
 import { readResultTool } from "../tools/read-result-tool.js";
 import { citedOriginals, maskContext, restoreContext } from "./context-mask.js";
+import { fence } from "../lib/fence.js";
+import { errorLine } from "../lib/error-line.js";
 
 /** Appended to the system prompt only when an attachment is present. */
 const IMAGE_ANALYSIS_GUIDANCE = `## Working with attached images and files
@@ -367,7 +369,7 @@ async function processLLMStream(
   }
 
   if (summaryForPrompt) {
-    systemPrompt += `\n\n## Earlier conversation summary\nThe earlier part of this conversation was compacted to save context. The summary below replaces those messages: the work it describes is already done — do NOT redo it. Reuse its identifiers and queries. Its numbers are second-hand: re-run the query before you quote a number in a finding card. Its conclusions are earlier claims: keep them while the data agrees, and test them again when a new result contradicts them.\n\n<conversation_summary>\n${summaryForPrompt}\n</conversation_summary>`;
+    systemPrompt += `\n\n## Earlier conversation summary\nThe earlier part of this conversation was compacted to save context. The summary below replaces those messages: the work it describes is already done — do NOT redo it. Reuse its identifiers and queries. Its numbers are second-hand: re-run the query before you quote a number in a finding card. Its conclusions are earlier claims: keep them while the data agrees, and test them again when a new result contradicts them.\n\n${fence("conversation_summary", summaryForPrompt)}`;
   }
 
   const questionStart = questionIndex(modelInput, modelMessages);
@@ -438,6 +440,8 @@ async function processLLMStream(
     },
     providerOptions: cached.providerOptions,
     abortSignal: attemptAbort.signal,
+    // Without a handler the SDK prints the whole error object, with the request body.
+    onError: ({ error }) => console.warn(`[chat] Model error for ${sessionId}:`, errorLine(error)),
     onLanguageModelCallEnd: recordEachCall(context.db, sessionId, "chat", modelId),
   });
 
@@ -575,7 +579,7 @@ async function processLLMStream(
             }
           }
         } catch (err) {
-          console.warn(`[chat] Failed to save session ${sessionId}:`, err);
+          console.warn(`[chat] Failed to save session ${sessionId}:`, errorLine(err));
           saveFailure = err;
         } finally {
           resolveFinish();
@@ -672,7 +676,7 @@ async function processLLMStream(
       }
     }
   } catch (err) {
-    console.warn(`[chat] Stream error for ${sessionId}:`, err);
+    console.warn(`[chat] Stream error for ${sessionId}:`, errorLine(err));
     failure ??= err;
   } finally {
     serverAbort.signal.removeEventListener("abort", onRunAbort);
@@ -799,7 +803,7 @@ export async function runChatAgent({
       }
     }
   })().catch((err) => {
-    console.error(`[chat] Unhandled error in LLM processing for ${sessionId}:`, err);
+    console.error(`[chat] Unhandled error in LLM processing for ${sessionId}:`, errorLine(err));
   }).finally(() => {
     // After the DB write so clients reloading on "done" read the final messages.
     finalizeSession(sessionId, context, broadcaster).catch((err) => {

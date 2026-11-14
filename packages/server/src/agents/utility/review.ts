@@ -8,6 +8,11 @@ import type { Db } from "../../db/driver.js";
 import type { Ledger } from "../../tools/analysis-tool.js";
 import type { AlertSummary } from "../../monitors/alert-summary.js";
 import { truncate } from "./summary.js";
+import { errorLine } from "../../lib/error-line.js";
+import { TOOL_RESULT_TAG } from "../../lib/fence.js";
+
+/** What a conclusion review returns when its call failed or timed out: nothing was checked, so the card must not show as checked. */
+export const REVIEW_FAILED = "The review did not run.";
 
 
 const TOOL_INPUT_MAX_CHARS = 2000;
@@ -122,7 +127,7 @@ export function resultText(output: unknown): string {
   let text: string;
   if (o && typeof o.type === "string" && "value" in o) text = typeof o.value === "string" ? o.value : JSON.stringify(o.value) ?? "";
   else text = typeof output === "string" ? output : JSON.stringify(output) ?? "";
-  return text.replace(/^<tool_result>\n/, "").replace(/\n<\/tool_result>$/, "");
+  return text.replace(new RegExp(`^<${TOOL_RESULT_TAG}>\\n`), "").replace(new RegExp(`\\n</${TOOL_RESULT_TAG}>$`), "");
 }
 
 /** A result of a read that ran in the same step as the reviewed call, which the step input lacks. */
@@ -149,7 +154,7 @@ function renderMessage(m: ModelMessage, shown: Set<string> = new Set()): Line[] 
   return [];
 }
 
-/** Independent check of the Slack fields of the alert summary against the run's tool results. Fails open: any error returns null. */
+/** Independent check of the Slack fields of the alert summary against the run's tool results. Fails open: any error returns null, since the summary has no unverified state. */
 export function reviewSummary(
   db: Db,
   sessionId: string,
@@ -163,7 +168,7 @@ export function reviewSummary(
   stepResults: StepResult[] = [],
 ): Promise<string | null> {
   const content = `<run>\n${buildTranscript(messages, questionStart, stepResults)}\n</run>\n\n<details>\n${JSON.stringify({ started: summary.started, status: summary.status, issues: summary.issues }, null, 2)}\n</details>`;
-  return review(db, sessionId, model, modelId, SUMMARY_INSTRUCTIONS, content, abortSignal, providerOptions, cardProblems);
+  return review(db, sessionId, model, modelId, SUMMARY_INSTRUCTIONS, content, abortSignal, providerOptions, cardProblems, null);
 }
 
 /** The ids of the cards the person saw: a follow-up refers to these, not to the drafts the review sent back. */
@@ -204,7 +209,7 @@ export function buildTranscript(messages: ModelMessage[], start: number, stepRes
   return question + omitted + lines.filter((_, i) => keep[i]).map((l) => l.text).join("\n");
 }
 
-/** Independent check of a cause conclusion against the run's tool results. Fails open: any error returns null. */
+/** Independent check of a cause conclusion against the run's tool results. A failed or timed-out call returns REVIEW_FAILED; a user stop returns null. */
 export function reviewConclusion(
   db: Db,
   sessionId: string,
@@ -219,7 +224,7 @@ export function reviewConclusion(
   stepResults: StepResult[] = [],
 ): Promise<string | null> {
   const content = `<tools>\n${toolNames.join(", ")}\n</tools>\n\n<run>\n${buildTranscript(messages, questionStart, stepResults)}\n</run>\n\n<ledger>\n${JSON.stringify(ledger, null, 2)}\n</ledger>`;
-  return review(db, sessionId, model, modelId, INSTRUCTIONS, content, abortSignal, providerOptions, reviewProblems);
+  return review(db, sessionId, model, modelId, INSTRUCTIONS, content, abortSignal, providerOptions, reviewProblems, REVIEW_FAILED);
 }
 
 /** The review reads only the text, so the run's thinking budget stays and the streamed thoughts go. */
@@ -243,6 +248,7 @@ async function review(
   abortSignal: AbortSignal | undefined,
   providerOptions: ProviderOptions | undefined,
   verdict: (text: string) => string | null,
+  onFailure: string | null,
 ): Promise<string | null> {
   if (abortSignal?.aborted) return null;
   const { signal, clear } = abortAfter(abortSignal, CONFIG.reviewTimeoutMs, "The review timed out");
@@ -258,8 +264,9 @@ async function review(
     });
     return verdict(text);
   } catch (err) {
-    if (!abortSignal?.aborted) console.warn("[review] Failed to review:", err);
-    return null;
+    if (abortSignal?.aborted) return null;
+    console.warn("[review] Failed to review:", errorLine(err));
+    return onFailure;
   } finally {
     clear();
   }

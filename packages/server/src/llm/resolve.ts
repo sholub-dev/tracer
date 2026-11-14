@@ -35,6 +35,18 @@ export function withRetryableFailures(fetchImpl: typeof fetch): typeof fetch {
   }) as typeof fetch;
 }
 
+/** The Vertex host name is built from the location, and the gcloud token goes to that host. */
+export function isVertexLocation(location: string): boolean {
+  return /^[a-z0-9-]+$/.test(location);
+}
+
+/** Empty means no project is picked yet. Older project ids have a domain prefix, such as "example.com:project". */
+export const isValidVertexConfig = (projectId: string, location: string) => isVertexProjectId(projectId) && isVertexLocation(location);
+
+export function isVertexProjectId(projectId: string): boolean {
+  return /^[a-z0-9.:-]*$/i.test(projectId);
+}
+
 /**
  * Each factory receives the provider's stored config record and returns a model
  * builder, or an error if required credentials are missing. API-key providers read
@@ -57,8 +69,10 @@ const LLM_FACTORIES: Record<string, (config: Record<string, string> | null) => M
   // Loaded on demand: it pulls in google-auth-library, which needs Node.
   "google-vertex": async (config) => {
     if (!config?.projectId) return { error: "Vertex AI project not configured" };
+    const location = config.location || "global";
+    if (!isValidVertexConfig(config.projectId, location)) return { error: "Vertex AI project or location is not valid" };
     const { createVertex } = await import("@ai-sdk/google-vertex");
-    return createVertex({ project: config.projectId, location: config.location || "global" });
+    return createVertex({ project: config.projectId, location });
   },
 };
 

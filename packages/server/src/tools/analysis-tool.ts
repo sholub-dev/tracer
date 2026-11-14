@@ -2,7 +2,7 @@ import { z } from "zod";
 import { tool, type ModelMessage, type Tool } from "ai";
 import { CONFIDENCE, TOOL_NAMES } from "@tracer-sh/shared";
 import { groundingProblems, queryResults } from "./grounding.js";
-import type { StepResult } from "../agents/utility/review.js";
+import { REVIEW_FAILED, type StepResult } from "../agents/utility/review.js";
 
 const part = (describe: string) => z.object({ statement: z.string(), sources: z.array(z.string()).min(1).max(3).describe("The exact titles of the queries in this turn whose results show the numbers, for example the affected window and the normal window.") }).describe(describe);
 
@@ -90,7 +90,7 @@ export function challengeLedger(input: Ledger): string[] {
   return challenges;
 }
 
-type AnalysisOutput = { status: string; challenges?: string[]; next?: string; cited?: string };
+type AnalysisOutput = { status: string; challenges?: string[]; next?: string; cited?: string; unreviewed?: true };
 
 /** The whole text of results the ledger cites that were cut from the context, so the card quotes them, not a memory of them. */
 export type CitedResults = (ledger: Ledger, messages: ModelMessage[]) => string | undefined;
@@ -115,12 +115,15 @@ export function createBeginAnalysisTool(
         for (const [name, c] of claims) if (c && filled(c.statement)) challenges.push(...groundingProblems(name, c.statement, c.sources, results));
       }
       // Every ledger is reviewed: the reviewer also catches a cause question filed as a lookup.
+      let unreviewed = false;
       if (review) {
         const text = (await review(input, options.messages, options.abortSignal))?.trim();
-        if (text && !/^\W*OK\W*$/i.test(text)) challenges.push(text);
+        // Not a challenge: the agent has nothing to settle. The card reads the flag and shows as unverified.
+        if (text === REVIEW_FAILED) unreviewed = true;
+        else if (text && !/^\W*OK\W*$/i.test(text)) challenges.push(text);
       }
       const cited = citedResults?.(input, options.messages);
-      return { status: STATUS, ...(challenges.length && { challenges, next: NEXT }), ...(cited && { cited }) };
+      return { status: STATUS, ...(challenges.length && { challenges, next: NEXT }), ...(cited && { cited }), ...(unreviewed && { unreviewed }) };
     },
   });
 }

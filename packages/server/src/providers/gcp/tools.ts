@@ -26,6 +26,13 @@ function withTitleField(schema: any) {
   });
 }
 
+// The read tools the prompt documents. A tool the server lists beyond these never reaches the agent.
+const ALLOWED_TOOLS: ReadonlySet<string> = new Set([
+  "list_log_entries", "list_log_names", "list_buckets", "list_views", "list_sinks", "list_log_scopes",
+  "list_metric_descriptors", "list_time_series", "list_alert_policies", "list_alerts",
+  "list_traces", "get_trace", "list_group_stats",
+]);
+
 /** The server marks a cut result in its text. */
 const detectTruncation = (text: string) => text.includes("truncated due to") && text.includes("character limit");
 
@@ -46,8 +53,8 @@ export function createGcpDirectTools(
   db?: unknown,
   projectId?: string,
 ): DirectTools {
-  const rawMcpTools = provider.getCachedTools();
-  if (!rawMcpTools || Object.keys(rawMcpTools).length === 0) {
+  const rawMcpTools = Object.fromEntries(Object.entries(provider.getCachedTools() ?? {}).filter(([name]) => ALLOWED_TOOLS.has(name)));
+  if (Object.keys(rawMcpTools).length === 0) {
     return {
       tools: {},
       systemPrompt: "GCP MCP tools are not available. The provider may not be connected.",

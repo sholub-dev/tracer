@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { claimedNumbers, groundingProblems } from "./grounding.js";
+import { claimedNumbers, groundingProblems, queryResults } from "./grounding.js";
+import { toolModelOutput } from "./provider-tool-helpers.js";
 
 const results = new Map([["requests by ip", "ip,Requests\na,1241\ntotal,1507"]]);
 
@@ -16,4 +17,17 @@ test("a share, a difference or a change worked out from grounded numbers passes;
 test("short window forms are not claimed numbers, and answer numbers can back a worked-out change", () => {
   assert.deepEqual(claimedNumbers("Errors peaked at 340 in the last 24h and over the 30-min window.").map((n) => n.text), ["340"]);
   assert.deepEqual(groundingProblems("s", "Errors rose 77% this hour.", ["Requests by IP"], results, [1241, 700]), []);
+});
+
+test("a failed query is not a source: in the messages, as a masked original and as a read of the same step", () => {
+  const failed = toolModelOutput({ error: "bad query" });
+  const ok = toolModelOutput({ analysis: "a,1" });
+  const call = (id: string, title: string) => ({ type: "tool-call" as const, toolCallId: id, toolName: "execute_nrql", input: { title } });
+  const result = (id: string, output: unknown) => ({ type: "tool-result" as const, toolCallId: id, toolName: "execute_nrql", output });
+  const messages = [
+    { role: "assistant", content: [call("1", "Failed"), call("2", "Masked"), call("3", "Good")] },
+    { role: "tool", content: [result("1", failed), result("2", { type: "text", value: "stub" }), result("3", ok)] },
+  ] as never;
+  const reads = [{ toolName: "execute_nrql", input: { title: "Same step" }, text: failed.value }];
+  assert.deepEqual([...queryResults(messages, new Map([["2", failed.value]]), reads).keys()], ["good"]);
 });

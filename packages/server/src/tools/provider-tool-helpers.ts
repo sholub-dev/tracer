@@ -11,6 +11,15 @@ import { runMemoryAgent } from "../agents/utility/memory.js";
 import { injectMemories, isEmptyQuery, isFailedQuery, type ProviderQuery } from "../agents/chat/query-records.js";
 import { capQuery } from "../lib/messages-codec.js";
 import { beginAnalysisTool, ANALYSIS_TOOL_NAME } from "./analysis-tool.js";
+import { fence, TOOL_RESULT_TAG } from "../lib/fence.js";
+import { errorLine } from "../lib/error-line.js";
+
+const ERROR_PREFIX = "Error:";
+
+/** True for the text `toolModelOutput` gives a failed call, with or without its wrapper. */
+export function isErrorText(text: string): boolean {
+  return text.startsWith(ERROR_PREFIX) || text.startsWith(`<${TOOL_RESULT_TAG}>\n${ERROR_PREFIX}`);
+}
 
 /**
  * Converts tool output into a text part for model context.
@@ -18,12 +27,12 @@ import { beginAnalysisTool, ANALYSIS_TOOL_NAME } from "./analysis-tool.js";
  */
 export function toolModelOutput(output: unknown): { type: "text"; value: string } {
   if (output && typeof output === "object" && "analysis" in output) {
-    // Analysis carries raw query data, so a closing tag inside it must not end the wrapper.
-    const analysis = (output as { analysis: string }).analysis.replaceAll("</tool_result>", "&lt;/tool_result&gt;");
-    return { type: "text", value: `<tool_result>\n${analysis}\n</tool_result>` };
+    // Analysis carries raw query data, so a tag inside it must not end the wrapper.
+    return { type: "text", value: fence(TOOL_RESULT_TAG, (output as { analysis: string }).analysis) };
   }
   if (output && typeof output === "object" && "error" in output) {
-    return { type: "text", value: `Error: ${(output as { error: string }).error}` };
+    // Error text comes from the data source too.
+    return { type: "text", value: fence(TOOL_RESULT_TAG, `${ERROR_PREFIX} ${(output as { error: string }).error}`) };
   }
   return { type: "text", value: output !== null && typeof output === "object" ? JSON.stringify(output) : String(output) };
 }
@@ -66,7 +75,7 @@ export function buildAfterComplete(opts: {
         sessionId,
       });
     })().catch((err) => {
-      console.warn(`[memory-agent] ${providerType} direct-mode failed:`, err);
+      console.warn(`[memory-agent] ${providerType} direct-mode failed:`, errorLine(err));
     });
   };
 }

@@ -90,6 +90,8 @@ export class JiraClient {
   private async request(path: string, init?: RequestInit): Promise<string> {
     const res = await fetchText(`${this.baseUrl}${path}`, {
       ...init,
+      // The Authorization header must not follow a redirect to another host.
+      redirect: "error",
       headers: {
         Authorization: this.authHeader,
         Accept: "application/json",

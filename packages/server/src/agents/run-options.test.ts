@@ -8,8 +8,9 @@ import { CONFIG } from "../config.js";
 import { UNIFIED_SCOPE } from "@tracer-sh/shared";
 import type { Context } from "../trpc/context.js";
 import { buildRunOptions, chatRunOptions } from "./chat-run.js";
-import { settleInterruptedRuns } from "./resume.js";
+import { personTurn, settleInterruptedRuns } from "./resume.js";
 import { writeSlackConfig } from "../integrations/slack.js";
+import { writeJiraConfig } from "../integrations/jira/config.js";
 import { isWakeupTurn } from "../monitors/triage.js";
 
 async function env() {
@@ -46,15 +47,49 @@ test("only a monitor run must end with a finding card", async () => {
   assert.equal((await chatRunOptions(context, "none")).requireFinding, false);
 });
 
-test("a monitor session and an interactive session get the same tools", async () => {
+test("a chat turn gets every tool; an unattended run of a monitor session gets no write tool of its own", async () => {
   const { db, context } = await env();
   await writeSlackConfig(db, { webhookUrl: "https://hooks.slack.com/services/T/B/x" });
-  await db.update(monitorTriggers).set({ reported: "done" }).run();
+  await writeJiraConfig(db, { domain: "example", email: "a@b.c", apiToken: "t" });
   const names = async (options: Awaited<ReturnType<typeof buildRunOptions>>) => Object.keys(await collect(options)).sort();
-  const monitor = await names(await buildRunOptions(context, { sessionId: "s1", kind: "monitor", scope: UNIFIED_SCOPE }));
-  const chat = await names(await buildRunOptions(context, { sessionId: "s1", scope: UNIFIED_SCOPE, interactive: true }));
-  assert.deepEqual(monitor, chat);
-  for (const name of ["query", "close_nr_issue", "set_timer", "report_finding", "ask_user", "post_slack_message"]) assert.ok(monitor.includes(name), name);
+  const session = ["ask_user", "report_finding", "set_timer"];
+
+  const chat = await names(await buildRunOptions(context, { sessionId: "c1", scope: UNIFIED_SCOPE, interactive: true }));
+  assert.deepEqual(chat, ["add_jira_comment", "close_nr_issue", "get_jira_issue", "post_slack_message", "query", ...session].sort());
+
+  // A firing or a wake-up: the scheduler supplies the tools of the run.
+  const scoped = { close_nr_issue: { id: "scoped" }, report_alert_summary: {} };
+  const firing = await collect(await buildRunOptions(context, { sessionId: "s1", kind: "monitor", scope: UNIFIED_SCOPE, extras: scoped, onComplete: () => {} }));
+  assert.deepEqual(Object.keys(firing).sort(), ["close_nr_issue", "get_jira_issue", "query", "read_past_session", "report_alert_summary", ...session].sort());
+  assert.deepEqual(firing.close_nr_issue, { id: "scoped" }, "only the close tool limited to the firing's issues");
+
+  const wakeup = await names(await buildRunOptions(context, { sessionId: "s1", kind: "monitor", scope: UNIFIED_SCOPE, extras: { report_alert_summary: {} }, onComplete: () => {} }));
+  assert.deepEqual(wakeup, ["get_jira_issue", "query", "read_past_session", "report_alert_summary", ...session].sort());
+
+  // A re-run of a firing that never reported, started from the chat.
+  const rerun = await names(await chatRunOptions(context, "s1"));
+  assert.deepEqual(rerun, ["get_jira_issue", "query", "read_past_session", "report_alert_summary", ...session].sort());
+
+  // A person's later turn in the session of a reported firing keeps every tool.
+  await db.update(monitorTriggers).set({ reported: "done" }).run();
+  const later = await names(await chatRunOptions(context, "s1"));
+  assert.deepEqual(later, [...chat, "read_past_session"].sort());
+});
+
+test("the prompt of a monitor run names no tool the run lacks", async () => {
+  const { db, context } = await env();
+  await writeSlackConfig(db, { webhookUrl: "https://hooks.slack.com/services/T/B/x" });
+  await writeJiraConfig(db, { domain: "example", email: "a@b.c", apiToken: "t" });
+  const prompt = async (options: Awaited<ReturnType<typeof buildRunOptions>>) => {
+    const collected = await options.collectTools({} as never);
+    return [collected.systemPrompt ?? "", ...(collected.promptFragments ?? [])].join("\n");
+  };
+  const monitor = await prompt(await buildRunOptions(context, { sessionId: "s1", kind: "monitor", scope: UNIFIED_SCOPE }));
+  assert.doesNotMatch(monitor, /post_slack_message|add_jira_comment|post comments/);
+  assert.match(monitor, /get_jira_issue/);
+  const chat = await prompt(await buildRunOptions(context, { sessionId: "c1", scope: UNIFIED_SCOPE, interactive: true }));
+  assert.match(chat, /post_slack_message/);
+  assert.match(chat, /add_jira_comment/);
 });
 
 test("a monitor run gets its extras and its completion hook, also when resumed", async () => {
@@ -84,6 +119,18 @@ test("a restart returns the kind of a resumable run and lists ended monitor sess
   const { interrupted: runs, settled } = await settleInterruptedRuns(db);
   assert.deepEqual(runs, [{ id: "fresh", scope: UNIFIED_SCOPE, kind: "monitor" }]);
   assert.deepEqual(settled, ["old"]);
+});
+
+test("a resumed turn of a monitor session is a person's own only when neither the firing nor a wake-up began it", () => {
+  const user = (t: string) => ({ id: "", role: "user" as const, parts: [{ type: "text" as const, text: t }] });
+  const firing = user('Monitor "Errors" triggered.\n\n<alert_data>');
+  const reply = { id: "", role: "assistant" as const, parts: [] };
+  assert.equal(personTurn("monitor", [firing, reply]), false);
+  assert.equal(personTurn("monitor", [firing, reply, user("Follow-up timer (set 10:00): scheduled re-check")]), false);
+  assert.equal(personTurn("monitor", [firing, reply, user("why did it fire?"), reply]), true);
+  assert.equal(personTurn("monitor", [firing, reply, user("why did it fire?"), { ...user("and now?"), metadata: { steered: true } }]), true);
+  assert.equal(personTurn("chat", [user("hi")]), false);
+  assert.equal(personTurn(null, [user("hi")]), false);
 });
 
 test("a wake-up message is told from a chat turn", () => {

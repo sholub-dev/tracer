@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 
 // Loaded lazily, only for the one-time move out of the keychain. Named to avoid
 // colliding with the `require` shim tsup injects into the bundle banner.
@@ -53,9 +53,10 @@ export function resolveDbKey(
 
   if (!hasEncryptedDb) {
     const fresh = generateKeyHex();
-    writeKeyFile(keyPath, fresh);
-    console.warn(`[tracer] Created the database key file ${keyPath} (owner-only). If you lose it, you lose the database.`);
-    return { key: fresh };
+    // No database depends on the file here, so one that holds no valid key is replaced.
+    const key = writeKeyFile(keyPath, fresh, true);
+    if (key === fresh) console.warn(`[tracer] Created the database key file ${keyPath} (owner-only). If you lose it, you lose the database.`);
+    return { key };
   }
 
   const entry = keychain === undefined ? loadKeychain() : keychain;
@@ -78,8 +79,7 @@ export function resolveDbKey(
         `Restart Tracer and allow the keychain request, or set TRACER_DB_KEY.`,
     );
   }
-  const key = stored.toLowerCase();
-  writeKeyFile(keyPath, key);
+  const key = writeKeyFile(keyPath, stored.toLowerCase());
   return {
     key,
     finishMigration() {
@@ -100,19 +100,42 @@ export function resolveDbKey(
 
 function readKeyFile(keyPath: string): string | null {
   if (!existsSync(keyPath)) return null;
+  // Windows has no mode bits to check.
+  if (process.platform !== "win32" && statSync(keyPath).mode & 0o077) {
+    chmodSync(keyPath, 0o600);
+    console.warn(`[tracer] The database key file ${keyPath} was readable by other users. It is now owner-only.`);
+  }
   const fromFile = readFileSync(keyPath, "utf8").trim();
   return isValidKeyHex(fromFile) ? fromFile.toLowerCase() : null;
 }
 
-// Temp file + rename so a crash never leaves a partial key; "wx" refuses to follow a planted file.
-function writeKeyFile(keyPath: string, key: string): void {
+const NO_LINK_CODES = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV"]);
+
+// Temp file + link so a crash never leaves a partial key; "wx" refuses to follow a planted file.
+// A link, unlike a rename, fails when the key file exists: a process that starts at the same moment
+// then uses the key of the first one. A file system without hard links gets a rename. Returns the key in the file.
+function writeKeyFile(keyPath: string, key: string, replaceInvalid = false): string {
   const tmp = `${keyPath}.${process.pid}.tmp`;
   try {
     writeFileSync(tmp, key, { mode: 0o600, flag: "wx" });
-    renameSync(tmp, keyPath);
-  } catch (err) {
+    let exists = false;
+    try {
+      linkSync(tmp, keyPath);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code ?? "";
+      if (code !== "EEXIST" && !NO_LINK_CODES.has(code)) throw err;
+      exists = code === "EEXIST" || existsSync(keyPath);
+      if (!exists) renameSync(tmp, keyPath);
+    }
+    if (exists) {
+      const existing = readKeyFile(keyPath);
+      if (existing) return existing;
+      if (!replaceInvalid) throw new Error(`The key file ${keyPath} exists but does not hold a valid key. Nothing was changed.`);
+      renameSync(tmp, keyPath);
+    }
+  } finally {
     try { unlinkSync(tmp); } catch { /* temp file may not exist */ }
-    throw err;
   }
   if (readFileSync(keyPath, "utf8") !== key) throw new Error(`Could not verify the key file at ${keyPath}.`);
+  return key;
 }

@@ -21,6 +21,7 @@ Structure it with these sections:
 Base the report entirely on the investigation data and findings from this conversation. Be specific — include actual error messages, metric values, service names, and query results where relevant.`;
 
 const MONITOR_FIRED = /^Monitor "(.+)" triggered\./;
+const FOLLOW_UP_MAX_CHARS = 120;
 const FOLLOW_UP = /^Follow-up timer \(set .+?, due .+?, now (.+?)\): (.+)/;
 
 interface ServerEvent {
@@ -41,7 +42,11 @@ function eventOf(text: string): ServerEvent | null {
     return { kind: "alert", text: `${fired[1]} fired${detail ? `: ${detail}` : ""}`, time: Number.isFinite(ts) ? formatTime(ts) : undefined };
   }
   const followUp = FOLLOW_UP.exec(text);
-  if (followUp) return { kind: "followup", text: `Follow-up: ${followUp[2]}`, time: followUp[1] };
+  if (followUp) {
+    const note = /<timer_note>\n([\s\S]*?)\n<\/timer_note>/.exec(text)?.[1].trim().split("\n")[0];
+    const label = note ?? followUp[2];
+    return { kind: "followup", text: `Follow-up: ${label.length > FOLLOW_UP_MAX_CHARS ? `${label.slice(0, FOLLOW_UP_MAX_CHARS).trimEnd()}…` : label}`, time: followUp[1] };
+  }
   return null;
 }
 

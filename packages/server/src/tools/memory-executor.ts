@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import type { Db } from "../db/driver.js";
 import { runInTransaction } from "../db/driver.js";
 import { toolMemories, memoryOperations } from "../db/schema.js";
+import { escapeTag, oneLine } from "../lib/fence.js";
 
 export const MAX_NOTE_WORDS = 40;
 
@@ -16,14 +17,10 @@ export function enforceNoteLength(note: string): string {
   return end > 0 ? head.slice(0, end + 1) : head;
 }
 
-/** Notes reach the system prompt, so one is a single plain line: no fence tags, no heading or quote markers. Never cuts words. */
+/** Notes reach the system prompt inside a memory_notes block, so one is a single plain line that cannot open or close that block, with no heading or quote markers. Other "<" stay: query hints use them. Never cuts words. */
 export function sanitizeNote(note: string): string {
-  const flat = note
-    .replace(/<\s*\/?\s*memory_notes\s*>/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim()
+  return oneLine(escapeTag(note.replace(/<\s*\/?\s*memory_notes\s*>/gi, " "), "memory_notes"))
     .replace(/^(?:[#>]+\s*|[-*+]\s+)+/, "");
-  return flat;
 }
 
 /** Two notes that differ only in case, spacing or trailing punctuation count as one. */

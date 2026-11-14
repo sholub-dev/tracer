@@ -1,3 +1,4 @@
+import { TRPC_MAX_BATCH_SIZE } from "@tracer-sh/shared";
 import { Hono } from "hono";
 import { compress } from "hono/compress";
 import { bodyLimit } from "hono/body-limit";
@@ -29,6 +30,7 @@ export function createApp(context: Context) {
     trpcServer({
       endpoint: "/api/trpc",
       router: appRouter,
+      maxBatchSize: TRPC_MAX_BATCH_SIZE,
       createContext: () => context as unknown as Record<string, unknown>,
     }),
   );

@@ -11,6 +11,11 @@ export function selectedLabel(options: { value: string; label: string; displayLa
   return selected ? (selected.displayLabel ?? selected.label) : value || placeholder;
 }
 
+/** An attachment the app made itself holds its bytes inline; any other URL would load from elsewhere or run as a script. */
+export function isInlineFileUrl(url: unknown): url is string {
+  return typeof url === "string" && /^(data|blob):/i.test(url);
+}
+
 /** Wraps an async function so a call made while one is running joins it instead of starting another. */
 export function singleFlight<A extends unknown[]>(fn: (...args: A) => Promise<void>): (...args: A) => Promise<void> {
   let running: Promise<void> | null = null;

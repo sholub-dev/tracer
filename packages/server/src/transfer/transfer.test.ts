@@ -53,18 +53,26 @@ const keyOf = (link: string) => new URLSearchParams(link.slice(link.indexOf("?")
 
 test("seal and unseal round-trip; a wrong key fails", async () => {
   const key = randomSecret();
-  const sealed = await seal("hello", key);
-  assert.equal(await unseal(sealed, key), "hello");
-  await assert.rejects(unseal(sealed, randomSecret()));
+  const sealed = await seal("hello", key, "request");
+  assert.equal(await unseal(sealed, key, "request"), "hello");
+  await assert.rejects(unseal(sealed, randomSecret(), "request"));
+});
+
+test("a message sealed for one purpose does not open as another", async () => {
+  const key = randomSecret();
+  const sealed = await seal("{}", key, "merge-up");
+  await assert.rejects(unseal(sealed, key, "merge-down"));
+  await assert.rejects(unseal(sealed, key, "progress"));
+  assert.equal(await unseal(sealed, key, "merge-up"), "{}");
 });
 
 test("sealed data is compressed", async () => {
   const key = randomSecret();
   const text = JSON.stringify(Array.from({ length: 2000 }, (_, i) => ({ id: i, name: "checkout-service", status: "error" })));
-  const sealed = await seal(text, key);
+  const sealed = await seal(text, key, "snapshot");
   assert.ok(sealed.length < text.length / 5);
-  assert.equal(await unseal(sealed, key), text);
-  assert.equal(await unseal(await seal("zażółć 🙂", key), key), "zażółć 🙂");
+  assert.equal(await unseal(sealed, key, "snapshot"), text);
+  assert.equal(await unseal(await seal("zażółć 🙂", key, "snapshot"), key, "snapshot"), "zażółć 🙂");
 });
 
 test("the limits apply to compressed and to unpacked data", async (t) => {
@@ -76,16 +84,16 @@ test("the limits apply to compressed and to unpacked data", async (t) => {
 
   // Compresses to almost nothing, so only the unpacked limit can refuse it.
   limits.unpacked = 1000;
-  await assert.rejects(seal("x".repeat(1001), key), /before compression/);
+  await assert.rejects(seal("x".repeat(1001), key, "snapshot"), /before compression/);
   limits.unpacked = saved.unpacked;
-  const sealed = await seal("x".repeat(5000), key);
+  const sealed = await seal("x".repeat(5000), key, "snapshot");
   limits.unpacked = 1000;
-  await assert.rejects(unseal(sealed, key), (err: Error) => err instanceof TooLargeError && /when unpacked/.test(err.message));
+  await assert.rejects(unseal(sealed, key, "snapshot"), (err: Error) => err instanceof TooLargeError && /when unpacked/.test(err.message));
   limits.unpacked = saved.unpacked;
 
   limits.packed = 1000;
   const noise = Array.from(crypto.getRandomValues(new Uint8Array(3000)), (b) => b.toString(16)).join("");
-  await assert.rejects(seal(noise, key), (err: Error) => err instanceof TooLargeError && /after compression/.test(err.message));
+  await assert.rejects(seal(noise, key, "snapshot"), (err: Error) => err instanceof TooLargeError && /after compression/.test(err.message));
 });
 
 test("replace of too much data fails on the phone with the size; the computer shows why", async (t) => {
@@ -262,9 +270,11 @@ test("nothing is exchanged before approval; a second request gets 409", async (t
   const { link } = await startSend(computer, () => 0);
   const key = keyOf(link);
   const from = new URL(new URLSearchParams(link.slice(link.indexOf("?") + 1)).get("from")!);
-  const request = await seal(JSON.stringify({ deviceId: "p-1", name: "iPhone 0001", mode: "merge", format: FORMAT }), key);
+  const request = await seal(JSON.stringify({ deviceId: "p-1", name: "iPhone 0001", mode: "merge", format: FORMAT }), key, "request");
 
-  assert.equal((await post(link, "/request", await seal("{}", randomSecret()))).status, 403);
+  assert.equal((await post(link, "/request", await seal("{}", randomSecret(), "request"))).status, 403);
+  // A message of another kind does not pass as a request.
+  assert.equal((await post(link, "/request", await seal(JSON.stringify({ deviceId: "p-1", name: "iPhone 0001", mode: "merge", format: FORMAT }), key, "progress"))).status, 403);
   assert.equal(sendStatus()?.phase, "waiting");
   assert.equal((await fetch(from)).status, 403);
 
@@ -272,8 +282,8 @@ test("nothing is exchanged before approval; a second request gets 409", async (t
   assert.equal(sendStatus()?.phase, "approval");
   assert.equal((await post(link, "/request", request)).status, 409);
   assert.equal((await fetch(from)).status, 403);
-  assert.equal((await post(link, "/merge", await seal("{}", key))).status, 403);
-  assert.equal(((await (await fetch(new URL(from.pathname + "/status", from))).json()) as { phase: string }).phase, "approval");
+  assert.equal((await post(link, "/merge", await seal("{}", key, "merge-up"))).status, 403);
+  assert.equal((await statusOf(link))?.phase, "approval");
 });
 
 test("deny ends the session and the phone sees why", async (t) => {
@@ -433,15 +443,21 @@ test("an old phone gets a 409 with the update message", async (t) => {
   const response = await post(link, "/request", old);
   assert.equal(response.status, 409);
   assert.match(await response.text(), /Update Tracer on the phone/);
-  const noFormat = await post(link, "/request", await seal(JSON.stringify({ deviceId: "p-1", name: "iPhone", mode: "replace" }), key));
+  const noFormat = await post(link, "/request", await seal(JSON.stringify({ deviceId: "p-1", name: "iPhone", mode: "replace" }), key, "request"));
   assert.equal(noFormat.status, 409);
+  // The form before the labels: "z.iv.data".
+  const unlabelled = await post(link, "/request", `z.${old}`);
+  assert.equal(unlabelled.status, 409);
+  assert.match(await unlabelled.text(), /Update Tracer on the phone/);
   assert.equal(sendStatus()?.phase, "waiting");
 });
 
 test("a phone asks an old computer and is told to update it", async (t) => {
   const phone = await freshDb();
   const { createServer } = await import("node:http");
-  const server = createServer((_req, res) => res.end(JSON.stringify({ phase: "waiting" })));
+  // The oldest computers report no format; later ones report a lower one.
+  let reply: object = { phase: "waiting" };
+  const server = createServer((_req, res) => res.end(JSON.stringify(reply)));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   t.after(() => server.close());
   const { port } = server.address() as { port: number };
@@ -451,6 +467,22 @@ test("a phone asks an old computer and is told to update it", async (t) => {
   globalThis.fetch = ((url: URL, init?: RequestInit) => realFetch(new URL(url.pathname, `http://127.0.0.1:${port}`), init)) as typeof fetch;
   t.after(() => { globalThis.fetch = realFetch; });
   await assert.rejects(receiveCopy(phone, link), /Update Tracer on the computer/);
+  reply = { phase: "waiting", format: FORMAT - 1 };
+  await assert.rejects(receiveCopy(phone, link), /Update Tracer on the computer/);
+  reply = { format: FORMAT + 1, sealed: "x" };
+  await assert.rejects(receiveCopy(phone, link), /Update Tracer on the phone/);
+  // A status of this format that is not sealed with the key from the code is not trusted.
+  reply = { phase: "transfer", format: FORMAT };
+  await assert.rejects(receiveCopy(phone, link), /does not decrypt/);
+});
+
+test("a phone on the previous version reads the status of this computer as a newer format", async (t) => {
+  t.after(stopSend);
+  const { link } = await startSend(await seededDb(), () => 0);
+  const from = new URL(new URLSearchParams(link.slice(link.indexOf("?") + 1)).get("from")!);
+  const plain = (await (await fetch(new URL(from.pathname + "/status", from))).json()) as { format: number; phase?: string };
+  assert.equal(plain.format, FORMAT);
+  assert.equal(plain.phase, undefined);
 });
 
 test("an old-form reply to the phone gives the update message", async () => {
@@ -458,16 +490,19 @@ test("an old-form reply to the phone gives the update message", async () => {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const k = await crypto.subtle.importKey("raw", Buffer.from(key, "base64url"), "AES-GCM", false, ["encrypt"]);
   const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, k, new TextEncoder().encode("{}"));
-  await assert.rejects(unseal(`${Buffer.from(iv).toString("base64url")}.${Buffer.from(data).toString("base64url")}`, key), (err: Error) => err.constructor.name === "OldFormError");
-  assert.equal(FORMAT, 5);
+  const old = `${Buffer.from(iv).toString("base64url")}.${Buffer.from(data).toString("base64url")}`;
+  await assert.rejects(unseal(old, key, "snapshot"), (err: Error) => err.constructor.name === "OldFormError");
+  await assert.rejects(unseal(`z.${old}`, key, "snapshot"), (err: Error) => err.constructor.name === "OldFormError");
+  assert.equal(FORMAT, 6);
 });
 
 const ask = async (link: string, mode: "merge" | "replace") =>
-  post(link, "/request", await seal(JSON.stringify({ deviceId: "p-1", name: "iPhone 0001", mode, format: FORMAT }), keyOf(link)));
-const report = async (link: string, body: object) => post(link, "/progress", await seal(JSON.stringify(body), keyOf(link)));
+  post(link, "/request", await seal(JSON.stringify({ deviceId: "p-1", name: "iPhone 0001", mode, format: FORMAT }), keyOf(link), "request"));
+const report = async (link: string, body: object) => post(link, "/progress", await seal(JSON.stringify(body), keyOf(link), "progress"));
 const statusOf = async (link: string) => {
   const from = new URL(new URLSearchParams(link.slice(link.indexOf("?") + 1)).get("from")!);
-  return (await (await fetch(new URL(from.pathname + "/status", from))).json()) as ReturnType<typeof sendStatus> & { format: number };
+  const { format, sealed } = (await (await fetch(new URL(from.pathname + "/status", from))).json()) as { format: number; sealed: string };
+  return { ...(JSON.parse(await unseal(sealed, keyOf(link), "status")) as NonNullable<ReturnType<typeof sendStatus>>), format };
 };
 
 test("the shared status runs waiting, approval, transfer, apply; only the phone report ends it", async (t) => {
@@ -603,4 +638,57 @@ test("a cancel on the computer during the transfer stops the phone before it wri
   await assert.rejects(receiveWithApproval(phone, link), /computer cancelled/);
   assert.equal((await phone.select().from(chatSessions).all()).length, 0);
   assert.equal(receiveStatus()?.phase, "cancelled");
+});
+
+/** Replaces the computer's answer to the merge request with `answer(sent body)`. */
+function swapMergeReply(t: { after(fn: () => void): void }, answer: (sent: string) => string | Promise<string>) {
+  const realFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = realFetch; });
+  globalThis.fetch = (async (url: URL, init?: RequestInit) => {
+    const response = await realFetch(url, init);
+    if (!new URL(url).pathname.endsWith("/merge")) return response;
+    await response.text();
+    return new Response(await answer(String(init?.body)), { status: 200 });
+  }) as typeof fetch;
+}
+
+async function mergeReady(t: { after(fn: () => void): void }) {
+  t.after(stopSend);
+  const computer = await seededDb();
+  const phone = await freshDb();
+  await receiveWithApproval(phone, (await startSend(computer, () => 0)).link);
+  const peer = (await setting(computer, "device_id"))!;
+  await computer.insert(chatSessions).values({ id: "only-computer", title: "C", messages: "[]", status: "done" }).run();
+  const { link } = await startSend(computer, () => 0);
+  return { computer, phone, link, peer, before: await getMark(phone, peer) };
+}
+
+test("the phone rejects its own merge request sent back as the reply and keeps the sync mark", async (t) => {
+  const { phone, link, peer, before } = await mergeReady(t);
+  swapMergeReply(t, (sent) => sent);
+  await assert.rejects(receiveWithApproval(phone, link), /does not decrypt/);
+  assert.deepEqual(await getMark(phone, peer), before);
+  assert.equal((await phone.select().from(chatSessions).where(eq(chatSessions.id, "only-computer")).all()).length, 0);
+});
+
+test("the phone rejects a reply without a time before it writes anything", async (t) => {
+  const { computer, phone, link, peer, before } = await mergeReady(t);
+  swapMergeReply(t, async () => seal(JSON.stringify({ at: "soon", payload: await exportSyncPayload(computer) }), keyOf(link), "merge-down"));
+  await assert.rejects(receiveWithApproval(phone, link), /data from the computer is damaged/);
+  assert.deepEqual(await getMark(phone, peer), before);
+  assert.equal((await phone.select().from(chatSessions).where(eq(chatSessions.id, "only-computer")).all()).length, 0);
+});
+
+test("the computer refuses a merge whose data has the wrong shape and stays unchanged", async (t) => {
+  t.after(stopSend);
+  const computer = await seededDb();
+  const { link } = await startSend(computer, () => 0);
+  await ask(link, "merge");
+  approve();
+  const response = await post(link, "/merge", await seal(JSON.stringify({ payload: { format: FORMAT, tables: { chat_sessions: "x" }, rows: [] } }), keyOf(link), "merge-up"));
+  assert.equal(response.status, 400);
+  assert.match(await response.text(), /invalid row in chat_sessions/);
+  assert.deepEqual([sendStatus()?.phase, sendStatus()?.error?.side], ["failed", "computer"]);
+  assert.match(sendStatus()?.error?.message ?? "", /invalid row in chat_sessions/);
+  assert.equal((await computer.select().from(chatSessions).all()).length, 1);
 });

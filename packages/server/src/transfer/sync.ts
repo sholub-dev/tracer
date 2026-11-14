@@ -3,7 +3,7 @@ import { runInTransaction, type Db } from "../db/driver.js";
 import * as schema from "../db/schema.js";
 import { failedWindowEnds } from "../monitors/store.js";
 import { LOCAL_SETTING_KEYS, SYNC_KEYS } from "../db/setup.js";
-import { checkRows, FORMAT, isDesktopOnly, readSyncRows, readTable, SESSION_RUN_STATE, TABLES, type SyncRow } from "./snapshot.js";
+import { checkRows, checkShape, FORMAT, isDesktopOnly, readSyncRows, readTable, SESSION_RUN_STATE, TABLES, type SyncRow } from "./snapshot.js";
 
 type Row = Record<string, any>;
 
@@ -83,6 +83,7 @@ function omit(row: Row, keys: string[]): Row {
  * Returns how many rows were written and deleted per table.
  */
 export async function mergeSyncPayload(db: Db, remote: SyncPayload): Promise<{ applied: Record<string, number>; deleted: Record<string, number> }> {
+  checkShape(remote);
   if (remote.format !== FORMAT) throw new Error("The data comes from a different Tracer version. Update both apps to the same version.");
   const applied: Record<string, number> = {};
   const deleted: Record<string, number> = {};

@@ -5,7 +5,7 @@ import { isErrorText } from "./provider-tool-helpers.js";
 
 // Every tool call is a query unless it writes state or only reads another session or a cut result.
 export const NON_QUERY_TOOLS: ReadonlySet<string> = new Set([...WRITE_TOOLS, "read_past_session", "read_result"]);
-export const MAX_TITLES_LISTED = 8;
+const MAX_TITLES_LISTED = 8;
 
 export const key = (title: string) => title.trim().toLowerCase();
 

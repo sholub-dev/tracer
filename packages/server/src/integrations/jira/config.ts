@@ -2,7 +2,7 @@ import type { Db } from "../../db/driver.js";
 import { deleteAppSetting, readAppSetting, writeAppSetting } from "../../db/config-reader.js";
 import { isJiraDomain, type JiraClientConfig } from "./jira.client.js";
 
-export const JIRA_CONFIG_KEY = "integration:jira";
+const JIRA_CONFIG_KEY = "integration:jira";
 
 export async function readJiraConfig(db: Db): Promise<JiraClientConfig | null> {
   const config = await readAppSetting<JiraClientConfig>(db, JIRA_CONFIG_KEY);

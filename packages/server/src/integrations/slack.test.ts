@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { clip, dismissalPost, isSlackWebhook, known, monitorAlert, parseMentions, postSlack, messagePost, recheckUpdate, redact, routeOf, triageUpdate, verdictOf } from "./slack.js";
+import { clip, dismissalPost, isSlackWebhook, known, monitorAlert, parseMentions, postSlack, recheckUpdate, redact, routeOf, triageUpdate, verdictOf } from "./slack.js";
 import type { Finding } from "@tracer-sh/shared";
 import type { AlertSummary } from "../monitors/alert-summary.js";
 
@@ -253,10 +253,6 @@ test("a success status code is not shown as impact", () => {
 
 test("redact masks IP addresses and keeps times", () => {
   assert.equal(redact("1,241 requests from 191.124.248.75 and 2001:db8:85a3:8d3:1319:8a2e:370:7348 at 15:41:47"), "1,241 requests from [ip] and [ip] at 15:41:47");
-});
-
-test("a post from agent text shows a result block as a plain reference", () => {
-  assert.equal(messagePost("Latency rose.\n\n```result\nLatency by hour\n```")?.text, "Latency rose.\n\n[Chart: Latency by hour]");
 });
 
 test("redact stays fast on a long dotted string", () => {

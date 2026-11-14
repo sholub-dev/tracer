@@ -17,7 +17,7 @@ import { fetchText } from "../../lib/fetch-retry.js";
  * permissions are restricted to the project(s) Tracer should touch.
  */
 
-export interface JiraComment {
+interface JiraComment {
   id: string | null;
   author: string | null;
   body: string | null;

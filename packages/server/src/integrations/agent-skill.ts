@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SKILL_TARGETS, type SkillTarget } from "./skill-targets.js";
 
-export type SkillState = "installed" | "outdated" | "missing";
+type SkillState = "installed" | "outdated" | "missing";
 
 const TARGET_DIRS: Record<SkillTarget, string> = {
   claude: ".claude/skills/tracer",

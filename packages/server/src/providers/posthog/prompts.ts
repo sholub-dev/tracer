@@ -13,7 +13,7 @@ import {
   POSTHOG_INSIDE_OUT_DEBUGGING,
 } from "./domain-knowledge.js";
 
-export const POSTHOG_CONFIG: ProviderPromptConfig = {
+const POSTHOG_CONFIG: ProviderPromptConfig = {
   providerName: "PostHog",
   authStopRule: POSTHOG_AUTH_STOP_RULE,
   domainKnowledge: POSTHOG_DOMAIN_KNOWLEDGE,

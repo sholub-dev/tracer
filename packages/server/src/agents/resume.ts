@@ -14,7 +14,7 @@ import { CONFIG } from "../config.js";
 import { errorLine } from "../lib/error-line.js";
 import { endsWithAsk } from "../tools/ask-tool.js";
 
-export interface InterruptedRun {
+interface InterruptedRun {
   id: string;
   scope: string;
   kind: string | null;

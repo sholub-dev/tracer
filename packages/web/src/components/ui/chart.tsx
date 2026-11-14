@@ -310,5 +310,4 @@ export {
   ChartTooltip,
   ChartTooltipContent,
   ChartLegend,
-  ChartStyle,
 }

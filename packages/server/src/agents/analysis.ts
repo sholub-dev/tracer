@@ -1,5 +1,5 @@
 import type { UIMessage } from "ai";
-import { CLIENT_TOOL_NAMES, findingFromMessages, findingMarkdown, resultRefsToText, turnStart } from "@tracer-sh/shared";
+import { CLIENT_TOOL_NAMES, findingFromMessages, findingMarkdown, turnStart } from "@tracer-sh/shared";
 
 interface MessagePart {
   type: string;
@@ -8,7 +8,7 @@ interface MessagePart {
   output?: { parts?: Array<{ query?: string; results?: unknown; totalRows?: number }>; analysis?: string };
 }
 
-export interface QueryRecord {
+interface QueryRecord {
   tool: string;
   query: string;
   results: unknown;
@@ -131,5 +131,5 @@ export function extractAnalysis(messages: UIMessage[]): { analysis: string; quer
 
   const finding = findingFromMessages(turn);
   if (finding) segments.unshift(findingMarkdown(finding));
-  return { analysis: resultRefsToText(segments.join("\n\n")).trim(), queries };
+  return { analysis: segments.join("\n\n").trim(), queries };
 }

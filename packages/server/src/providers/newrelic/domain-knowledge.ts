@@ -82,7 +82,7 @@ export const NR_INSIDE_OUT_DEBUGGING = `## Inside-Out Debugging
 
 **Identifier extraction:** \`error.message\` often contains IDs — extract with \`capture()\` or \`LIKE\` and search across types. \`request.uri\` has entity IDs (e.g. \`/api/users/12345\`). Custom attributes: \`keyset() FROM Transaction\`.`;
 
-export const NR_SERVICE_HEALTH_RUNBOOK = `## Service Health Runbook
+const NR_SERVICE_HEALTH_RUNBOOK = `## Service Health Runbook
 
 Judge health per entity type from its signals against a normal window. Find which entity types exist for the service (APM application, Browser application, or both). If none exists, report that no monitorable entity was found.
 

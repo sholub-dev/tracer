@@ -15,7 +15,7 @@ import {
   GCP_CROSS_SIGNAL,
 } from "./domain-knowledge.js";
 
-export const GCP_CONFIG: ProviderPromptConfig = {
+const GCP_CONFIG: ProviderPromptConfig = {
   providerName: "Google Cloud",
   authStopRule: GCP_AUTH_STOP_RULE,
   extraRules: [GCP_PAGE_SIZE_RULE],

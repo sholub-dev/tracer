@@ -169,14 +169,14 @@ test("scoped extras override the general tool of the same name", () => {
 test("findingMarkdown renders the sections and skips empty ones", () => {
   assert.equal(
     findingMarkdown({ ...valid, action: "Closed the issue" }),
-    "**Problem (likely):** Pool exhausted by a retry storm\n\nThe pool ran out of connections.\n\n**Why:**\n1. Pool usage hit 50 of 50 connections.\n2. Retries rose to 56.3 per second.\n\n**Action taken:** Closed the issue\n\n**Unknown:** Who sent the retries.\n\n**Sources:**\n- Pool usage\n- Retry rate",
+    "**Problem (likely):** Pool exhausted by a retry storm\n\nThe pool ran out of connections.\n\n1. Pool usage hit 50 of 50 connections.\n2. Retries rose to 56.3 per second.\n\n**Action taken:** Closed the issue\n\n**Unknown:** Who sent the retries.\n\n**Sources:**\n- Pool usage\n- Retry rate",
   );
 });
 
 test("a summary parses, drops root-cause fields but keeps unknown, and renders as a summary", () => {
   const summary = { kind: "summary" as const, title: "", answer: "Checkout is healthy at 0.2% errors", explanation: [{ statement: "p95 is 210 ms", source: "Latency" }] };
   assert.deepEqual(findingFromMessages(msgs(call({ ...summary, confidence: "likely", verdict: "problem", unknown: "No release time" }))), { ...summary, unknown: "No release time" });
-  assert.equal(findingMarkdown(summary), "**Summary:** Checkout is healthy at 0.2% errors\n\n**Details:**\n1. p95 is 210 ms\n\n**Sources:**\n- Latency");
+  assert.equal(findingMarkdown(summary), "Checkout is healthy at 0.2% errors\n\n1. p95 is 210 ms\n\n**Sources:**\n- Latency");
 });
 
 test("a card saved in the old headline shape still parses", () => {
@@ -238,7 +238,7 @@ test("a query of the same step is a source", async () => {
 test("an old card with no chain or points still parses", () => {
   assert.equal(findingFromMessages(msgs(call({ kind: "summary", headline: "Healthy", details: "", points: [] })))?.answer, "Healthy");
   assert.equal(findingFromMessages(msgs(call({ kind: "root_cause", headline: "Pool", confidence: "likely" })))?.answer, "Pool");
-  assert.equal(findingMarkdown({ kind: "summary", title: "", answer: "Healthy", explanation: [] }), "**Summary:** Healthy");
+  assert.equal(findingMarkdown({ kind: "summary", title: "", answer: "Healthy", explanation: [] }), "Healthy");
 });
 
 test("a card sent back over a challenge and resent unchanged is sent back again, then marked unchecked", async () => {
@@ -270,4 +270,12 @@ test("a card after a review that did not run is recorded as unverified", async (
   const card = findingFromMessages(msgs({ ...call(valid), output: out }));
   assert.equal(card?.confidence, "unverified");
   assert.deepEqual(await ask(valid, [...turn(), ...analysis({ status: "x", unreviewed: true }), ...analysis({ status: "x" })]), { recorded: true }, "a later review that ran clears it");
+});
+
+test("an answer card with no evidence is recorded and read back without a label", async () => {
+  const card = { kind: "answer" as const, title: "No deploy today", answer: "No. No deploy ran today.", explanation: [] };
+  assert.deepEqual(findingFromMessages(msgs(call(card))), card);
+  assert.match(findingMarkdown(card), /^No deploy today\n\nNo\. No deploy ran today\.$/);
+  const out = await (reportFindingTool() as any).execute(card, { messages: [], toolCallId: "t" });
+  assert.deepEqual(out, { recorded: true });
 });

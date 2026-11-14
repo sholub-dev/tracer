@@ -96,7 +96,7 @@ test("contradictions get a challenge", () => {
 });
 
 test("output has only a status without challenges", async () => {
-  assert.deepEqual(await run(clean), { status: "Analysis mode active. Follow the analysis rules from your system prompt." });
+  assert.deepEqual(await run(clean), { status: "Ledger checked." });
 });
 
 test("output lists challenges and the next step", async () => {

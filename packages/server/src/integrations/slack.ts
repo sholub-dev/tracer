@@ -1,12 +1,12 @@
 import type { Db } from "../db/driver.js";
 import { fetchText } from "../lib/fetch-retry.js";
 import { formatLocalTime } from "../lib/current-context.js";
-import { resultRefsToText, type Finding } from "@tracer-sh/shared";
+import type { Finding } from "@tracer-sh/shared";
 import { oneLine } from "../lib/fence.js";
 import { type AlertSummary } from "../monitors/alert-summary.js";
 import { deleteAppSetting, readAppSetting, writeAppSetting } from "../db/config-reader.js";
 
-export const SLACK_CONFIG_KEY = "integration:slack";
+const SLACK_CONFIG_KEY = "integration:slack";
 
 export interface SlackConfig {
   webhookUrl: string;
@@ -133,7 +133,7 @@ export const clip = (s: string, max: number) => {
   return `${space > 0 ? cut.slice(0, space) : cut} …`;
 };
 // Redact before clipping: a cut value may no longer match the redact patterns.
-const tidy = (s: string, max = DETAIL_MAX_CHARS) => clip(redact(resultRefsToText(s).replace(/\*\*|`/g, "").replace(/^[ \t]*[-*][ \t]+/gm, "• ").trim()), max);
+const tidy = (s: string, max = DETAIL_MAX_CHARS) => clip(redact(s.replace(/\*\*|`/g, "").replace(/^[ \t]*[-*][ \t]+/gm, "• ").trim()), max);
 export const known = (s: string) => (/^(none|unknown|n\/a)(?![a-z0-9])/i.test(s) ? "" : s);
 
 export interface Verdict {
@@ -262,7 +262,7 @@ export function dismissalPost(u: { name: string; reason: string }): SlackPayload
 
 /** Post for free text from the agent: redacted and escaped, so it carries no link, id or mention. */
 export function messagePost(text: string): SlackPayload | null {
-  const body = clip(escape(redact(resultRefsToText(text))), SECTION_MAX_CHARS);
+  const body = clip(escape(redact(text)), SECTION_MAX_CHARS);
   return body ? post(body) : null;
 }
 

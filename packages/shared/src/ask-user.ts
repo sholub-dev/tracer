@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const MAX_ASK_OPTIONS = 5;
+const MAX_ASK_OPTIONS = 5;
 
 export const askUserSchema = z.object({
   question: z.string().describe("The question, one plain sentence."),

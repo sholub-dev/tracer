@@ -1,4 +1,4 @@
-import { memo, type ReactNode } from "react";
+import { memo, useRef, type ReactNode } from "react";
 import type { UIMessage } from "ai";
 import { Bell, FileText, Timer } from "lucide-react";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
@@ -115,6 +115,7 @@ interface MessageViewProps extends MessageViewOptions {
 
 export const MessageView = memo(function MessageView({ msg, isAnimating, compact = false, ask, onAsk, actions, showActions = true, body, dimmed, footer }: MessageViewProps) {
   const isUser = msg.role === "user";
+  const contentRef = useRef<HTMLDivElement>(null);
   const text = isUser ? textOf(msg) : "";
   const event = isUser ? eventOf(text) : null;
 
@@ -147,7 +148,7 @@ export const MessageView = memo(function MessageView({ msg, isAnimating, compact
       aria-busy={isAnimating || undefined}
       className={cn("group/turn relative space-y-2 transition-opacity", dimmed && "pointer-events-none opacity-40")}
     >
-      <div className={cn("bg-background", plain && !body && "flex justify-end")}>
+      <div ref={contentRef} className={cn("bg-background", plain && !body && "flex justify-end")}>
         {content}
       </div>
       {(showActions || footer) && !body && (
@@ -161,7 +162,7 @@ export const MessageView = memo(function MessageView({ msg, isAnimating, compact
           )}
         >
           {showActions && (
-            <MessageActions parts={msg.parts} hoverOnly={isUser} className={isAnimating ? "invisible" : undefined}>
+            <MessageActions parts={msg.parts} contentRef={isUser ? undefined : contentRef} hoverOnly={isUser} className={isAnimating ? "invisible" : undefined}>
               {actions}
             </MessageActions>
           )}

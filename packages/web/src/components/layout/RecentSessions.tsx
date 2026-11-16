@@ -1,11 +1,14 @@
+import { X } from "lucide-react";
 import { memo, startTransition, useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { SidebarGroup, SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar";
 import { formatClock, formatShortDate } from "../../lib/format";
 import { useDeleteSession, usePersistedState } from "../../lib/hooks";
+import { matchesQuery } from "../../lib/session-search";
 import { sessionKindKey, sessionKindLabel, type SessionKindKey } from "../../lib/session-kind";
 import { trpc } from "../../lib/trpc";
 import { ShrinkingBar } from "../chat/FollowUpTimerBar";
@@ -72,12 +75,19 @@ export const RecentSessions = memo(function RecentSessions({ currentSessionId, o
     if (sessionsQuery.data) setSeen(new Set(sessionsQuery.data.map((s) => s.id)));
   }, [sessionsQuery.data]);
 
+  const [query, setQuery] = useState("");
+  const searching = query.trim() !== "";
+
   const visible = useMemo(
-    () => (sessionsQuery.data ?? []).filter((s) => filter === "all" || sessionKindKey(s.kind) === filter),
-    [sessionsQuery.data, filter],
+    () => (sessionsQuery.data ?? []).filter((s) => (filter === "all" || sessionKindKey(s.kind) === filter) && matchesQuery(s.title, query)),
+    [sessionsQuery.data, filter, query],
   );
 
   const [rowLimit, setRowLimit] = useState(FIRST_ROWS);
+  const changeQuery = (next: string) => {
+    setRowLimit(FIRST_ROWS);
+    setQuery(next);
+  };
   const changeFilter = (next: Filter) => {
     setRowLimit(FIRST_ROWS);
     setFilter(next);
@@ -92,6 +102,27 @@ export const RecentSessions = memo(function RecentSessions({ currentSessionId, o
   return (
     <SidebarGroup className="px-3">
       <SidebarGroupLabel className="px-2 text-xs text-muted-foreground">Recent</SidebarGroupLabel>
+      <div className="relative mb-2">
+        <Input
+          type="search"
+          aria-label="Search investigations"
+          placeholder="Search investigations"
+          value={query}
+          onChange={(e) => changeQuery(e.target.value)}
+          className="h-8 pr-8 text-sm [&::-webkit-search-cancel-button]:hidden"
+        />
+        {query && (
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Clear search"
+            onClick={() => changeQuery("")}
+            className="absolute top-1 right-1 size-6"
+          >
+            <X className="size-3.5" />
+          </Button>
+        )}
+      </div>
       <SegmentedControl
         label="Filter recent investigations"
         value={filter}
@@ -134,7 +165,7 @@ export const RecentSessions = memo(function RecentSessions({ currentSessionId, o
         </div>
       )}
       {sessionsQuery.data && !visible.length && (
-        <p className="px-2 py-6 text-center text-[13px]/[18px] text-muted-foreground">Nothing here yet</p>
+        <p className="px-2 py-6 text-center text-[13px]/[18px] text-muted-foreground">{searching ? "No matches" : "Nothing here yet"}</p>
       )}
 
       <ConfirmDialog

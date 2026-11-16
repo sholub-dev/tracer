@@ -14,13 +14,13 @@ The Recent list grows without bound and could only be filtered by session kind, 
 
 ## How it was tested
 
-Commands run in this sandbox (`pnpm` is not installed here, so the package scripts were run through `npx`/`node_modules/.bin` with the same commands they wrap):
+Run in this sandbox after `. ~/.local/env.sh` (pnpm 10.10.0 is available there):
 
-- Web unit tests: `cd packages/web && npx --no-install tsx --test $(find src -name '*.test.ts' -o -name '*.test.tsx')`. Result: `# tests 100`, `# pass 100`, `# fail 0`. The new `session-search.test.ts` file alone was run with `npx --no-install tsx --test src/lib/session-search.test.ts`: 5 pass, 0 fail.
-- Web typecheck: `cd packages/web && npx --no-install tsc --noEmit`. No errors printed.
-- Lint: `node_modules/.bin/biome lint .` from the repo root. Result: "Checked 373 files", exit 0. The root `lint` script also runs `pnpm typecheck` for all packages; only the web typecheck was run here.
-- Server tests: `cd packages/server && npx --no-install tsx --test $(find src -name '*.test.ts')`. Result: `# tests 426`, `# pass 391`, `# fail 35`. The failing files are under `db/`, `http/`, `monitors/`, `agents/`, `integrations/` and `llm/`; several exit with SIGSEGV. No server file is changed in this branch. This run does not reproduce the 732 passing server tests expected for this change, so the server result is not established here and needs a check in a working environment.
-- Screenshots: the three images below were taken from the running web interface, as stated in the task. The manual check listed in `PLAN.md` is evidenced by those images.
+- `pnpm --filter @tracer-sh/shared build`: builds the shared package (`tsc`), exit 0.
+- `cd packages/server && pnpm test`: `# tests 732`, `# pass 732`, `# fail 0`, exit 0.
+- `cd packages/web && pnpm test`: `# tests 100`, `# pass 100`, `# fail 0`, exit 0. This includes the 5 `matchesQuery` tests in `session-search.test.ts`.
+- `pnpm typecheck` at the repo root (runs `typecheck` in shared, server and web): exit 0, all three packages report "Done" with no errors.
+- `pnpm lint` at the repo root (runs `biome lint .` then `pnpm typecheck`): `Checked 373 files in 81ms. No fixes applied.`, exit 0, followed by the same typecheck pass.
 
 ## Screenshots
 

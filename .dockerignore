@@ -1,0 +1,22 @@
+# Only what the image build reads.
+/*
+!/Dockerfile
+!/package.json
+!/pnpm-lock.yaml
+!/pnpm-workspace.yaml
+!/.npmrc
+!/tsconfig.base.json
+!/bin
+!/skills
+!/packages
+/packages/ios/*
+!/packages/ios/package.json
+**/node_modules
+**/dist
+**/dist-ios
+**/.env*
+**/*.db*
+**/*.pem
+**/*.p8
+**/*.key
+**/.DS_Store

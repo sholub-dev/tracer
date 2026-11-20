@@ -120,8 +120,8 @@ async function getProviderOptions(db: Db, provider: string, modelId: string): Pr
 /** The single model setting: chat, provider agents, and utility agents all resolve here. */
 export async function resolveModel(db: Db): Promise<ResolvedModel | { error: string }> {
   const config = await readAppSetting<ModelConfig>(db, SETTINGS_KEYS.chatModel) ?? CONFIG.defaultChatModel;
+  if (!Object.hasOwn(LLM_FACTORIES, config.provider)) return { error: `Unknown LLM provider: ${config.provider}` };
   const factory = LLM_FACTORIES[config.provider];
-  if (!factory) return { error: `Unknown LLM provider: ${config.provider}` };
   const builder = await factory(await readProviderConfig(db, config.provider));
   if (typeof builder !== "function") return builder;
   return { model: builder(config.modelId), provider: config.provider, modelId: config.modelId, providerOptions: await getProviderOptions(db, config.provider, config.modelId) };

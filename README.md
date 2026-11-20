@@ -85,6 +85,12 @@ Monitors that are new to a device arrive paused, so the same alert never posts t
 The data moves only on your Wi-Fi, encrypted with AES-256-GCM.
 The key travels only inside the QR code. Each code works once and expires after 2 minutes.
 
+## Google Cloud
+
+Tracer can run as one always-on container on a small Compute Engine VM, with its keys in Secret Manager.
+`scripts/gcp/deploy.sh` asks for your keys, stores them, builds the image and creates the VM.
+See [scripts/gcp/README.md](scripts/gcp/README.md).
+
 ## CLI
 
 Run an investigation from a script or a coding agent. The server must be running.

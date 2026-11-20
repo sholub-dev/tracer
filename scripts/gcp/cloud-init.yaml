@@ -1,0 +1,52 @@
+#cloud-config
+write_files:
+  - path: /etc/systemd/system/tracer.service
+    permissions: "0644"
+    owner: root
+    content: |
+      [Unit]
+      Description=Tracer
+      After=network-online.target docker.service
+      Wants=network-online.target docker.service
+
+      [Service]
+      Restart=always
+      RestartSec=10
+      ExecStart=/bin/bash /etc/tracer/start.sh
+      ExecStop=/usr/bin/docker stop -t 30 tracer
+
+      [Install]
+      WantedBy=multi-user.target
+  - path: /etc/tracer/start.sh
+    permissions: "0755"
+    owner: root
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      MD=http://metadata.google.internal/computeMetadata/v1/instance/attributes
+      IMAGE=$(curl -sf -H 'Metadata-Flavor: Google' "$MD/tracer-image")
+      SECRETS=$(curl -sf -H 'Metadata-Flavor: Google' "$MD/tracer-secrets")
+
+      export HOME=/home/cloudservice
+      mkdir -p "$HOME"
+      docker-credential-gcr configure-docker --registries="${IMAGE%%/*}"
+
+      # /tmp is on disk: SQLite temporary files can be as large as the database, too large for memory.
+      rm -rf /var/lib/tracer-tmp
+      mkdir -p /var/lib/tracer /var/lib/tracer-tmp
+      chown 1000:1000 /var/lib/tracer /var/lib/tracer-tmp
+      chmod 700 /var/lib/tracer-tmp
+
+      docker pull "$IMAGE"
+      docker rm -f tracer >/dev/null 2>&1 || true
+      # Host networking keeps the server on 127.0.0.1, the only address its web UI accepts.
+      # The UI is same-origin through the tunnel, so no other web origin gets CORS access.
+      exec docker run --rm --name tracer --network host \
+        --read-only -v /var/lib/tracer-tmp:/tmp --tmpfs /home/node:uid=1000,gid=1000,size=64m \
+        --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 \
+        -v /var/lib/tracer:/data -e TRACER_CORS_ORIGIN=http://tracer.invalid \
+        -e TRACER_SECRETS="$SECRETS" "$IMAGE"
+
+runcmd:
+  - systemctl daemon-reload
+  - systemctl start tracer.service

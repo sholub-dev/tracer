@@ -16,8 +16,9 @@ async function main() {
     console.error(`\nTRACER_HOST=${CONFIG.host} exposes the API. Set TRACER_TOKEN to a secret; clients send it as "Authorization: Bearer <token>".\n`);
     process.exit(1);
   }
-  startUpdateChecks();
   const { providers, context, app, scheduler } = await startRuntime(db, setupDriver, registerGcpProvider);
+  // After the runtime start: by then no key is left in the environment that the npm child process inherits.
+  startUpdateChecks();
   registerApiRoutes(app, context);
   // Last: it answers every remaining GET with the web app.
   mountStaticFiles(app);

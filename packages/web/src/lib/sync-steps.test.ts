@@ -41,8 +41,8 @@ test("the transfer text shows megabytes, or only the done part when the total is
 
 test("the message says what happens and who acts, for each device", () => {
   const approval = session({ phase: "approval", phoneName: "iPhone 1234" });
-  assert.equal(stepMessage(approval, "computer"), "iPhone 1234 asks to sync. Click Allow.");
-  assert.equal(stepMessage(approval, "phone"), "Now click Allow on your computer.");
+  assert.equal(stepMessage(approval, "computer"), "iPhone 1234 asks to sync. Click Allow only when the phone shows the same code. If the code differs or the phone shows none, click Deny.");
+  assert.equal(stepMessage(approval, "phone"), "Check that your computer shows the same code. Then click Allow there.");
   assert.equal(stepMessage(session({ phase: "apply" }), "phone"), "Saving on the phone. Keep Tracer open.");
   const result = { computer: { applied: 2, deleted: 1 }, phone: { applied: 4, deleted: 0 } };
   assert.equal(stepMessage(session({ phase: "done", mode: "merge", result }), "phone"), "Synced. Computer: 2 changed, 1 removed. Phone: 4 changed, 0 removed.");

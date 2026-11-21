@@ -141,5 +141,5 @@ export async function startIosRuntime(): Promise<TRPCLink<AppRouter>[]> {
   keepScreenOn();
   listenForCopyLinks();
   Keyboard.setAccessoryBarVisible({ isVisible: false }).catch((err: unknown) => console.warn("Keyboard:", err));
-  return [unstable_localLink({ router: server.router, createContext: server.createContext, transformer: superjson })];
+  return [unstable_localLink({ router: server.router, createContext: async () => ({ ...(await server.createContext()), isOwner: true }), transformer: superjson })];
 }

@@ -29,7 +29,8 @@ const total = (counts: Record<string, number>) => Object.values(counts).reduce((
 const logOf = async (db: Db, tbl: string, key: string) =>
   (await db.select().from(syncRows).all()).find((r) => r.tbl === tbl && r.rowKey === key);
 
-const T0 = Date.now() + 1_000_000;
+// Ahead of every real write in a test, but inside the clock difference a merge accepts.
+const T0 = Date.now() + 60_000;
 
 // Sets a log entry time, so tests need no sleeps.
 async function stamp(db: Db, tbl: string, key: string, changedAt: number) {
@@ -415,4 +416,47 @@ test("data with the wrong shape is rejected by the merge and by the import", asy
     await assert.rejects(importSnapshot(b.db, data as never), message);
   }
   assert.equal((await b.db.select().from(chatSessions).all()).length, 1);
+});
+
+test("a change time far ahead of the clock counts as now and is not stored", async () => {
+  const { a, b } = await pair();
+  const future = Date.now() + 365 * 86_400_000;
+  await a.db.update(chatSessions).set({ title: "From the future" }).where(eq(chatSessions.id, "s1")).run();
+  await stamp(a.db, "chat_sessions", "s1", future);
+  await a.db.delete(monitors).where(eq(monitors.id, "m1")).run();
+  await stamp(a.db, "monitors", "m1", future);
+
+  const before = Date.now();
+  const { applied, deleted } = await mergeSyncPayload(b.db, await wire(a.db));
+  assert.deepEqual([applied.chat_sessions, deleted.monitors], [1, 1]);
+  assert.equal((await b.db.select().from(chatSessions).get())!.title, "From the future");
+  for (const [tbl, key] of [["chat_sessions", "s1"], ["monitors", "m1"]]) {
+    const logged = (await logOf(b.db, tbl, key))!.changedAt;
+    assert.ok(logged >= before && logged <= Date.now(), `${tbl} is logged at ${logged}`);
+  }
+
+  // B does not keep the future time, so a change another device makes after this merge is newer and applies.
+  const clamped = (await logOf(b.db, "chat_sessions", "s1"))!.changedAt;
+  await new Promise((r) => setTimeout(r, 5));
+  const honest = await wire(a.db);
+  honest.tables.chat_sessions[0].title = "Honest peer";
+  honest.rows = honest.rows.filter((r) => r.row_key === "s1").map((r) => ({ ...r, changed_at: Date.now() }));
+  assert.equal((await mergeSyncPayload(b.db, honest)).applied.chat_sessions, 1);
+  assert.equal((await b.db.select().from(chatSessions).get())!.title, "Honest peer");
+  await new Promise((r) => setTimeout(r, 5));
+  const sentUpTo = Date.now();
+  await b.db.update(chatSessions).set({ title: "Later on B" }).where(eq(chatSessions.id, "s1")).run();
+  assert.ok((await logOf(b.db, "chat_sessions", "s1"))!.changedAt > clamped);
+  // The next exchange carries only what A changed since: nothing, so B keeps its change.
+  const again = await mergeSyncPayload(b.db, clone(await exportSyncPayload(a.db, sentUpTo)));
+  assert.equal(total(again.applied) + total(again.deleted), 0);
+  assert.equal((await b.db.select().from(chatSessions).get())!.title, "Later on B");
+  assert.equal((await b.db.select().from(monitors).all()).length, 0);
+
+  // A time a few minutes ahead is a normal clock difference and is kept.
+  const near = Date.now() + 4 * 60_000;
+  await a.db.update(chatSessions).set({ title: "Near" }).where(eq(chatSessions.id, "s1")).run();
+  await stamp(a.db, "chat_sessions", "s1", near);
+  await mergeSyncPayload(b.db, await wire(a.db));
+  assert.equal((await logOf(b.db, "chat_sessions", "s1"))!.changedAt, near);
 });

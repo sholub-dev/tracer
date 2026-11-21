@@ -1,7 +1,11 @@
 import { fetchText } from "../../lib/fetch-retry.js";
 import type { HogQLQueryResponse } from "./types.js";
 
-const DEFAULT_HOST = "https://us.posthog.com";
+export const DEFAULT_HOST = "https://us.posthog.com";
+
+export function normalizePosthogHost(host?: string): string {
+  return (host?.trim() || DEFAULT_HOST).replace(/\/+$/, "");
+}
 
 export function isPosthogHost(host: string): boolean {
   if (!host.startsWith("https://")) return false;
@@ -25,7 +29,7 @@ export class PosthogClient {
   constructor(apiKey: string, projectId: string, host?: string) {
     this.apiKey = apiKey;
     this.projectId = projectId;
-    this.host = (host?.trim() || DEFAULT_HOST).replace(/\/+$/, "");
+    this.host = normalizePosthogHost(host);
   }
 
   async query(hogql: string, options?: { retry?: boolean; signal?: AbortSignal }): Promise<HogQLQueryResponse> {

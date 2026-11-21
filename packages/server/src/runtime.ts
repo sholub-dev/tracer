@@ -1,6 +1,7 @@
 import type { Db, SetupDriver } from "./db/driver.js";
 import { runSetup } from "./db/setup.js";
 import { repairChats } from "./db/repair-chats.js";
+import { seedConfigFromEnv } from "./db/env-config.js";
 import { settleInterruptedRuns, resumeRuns } from "./agents/resume.js";
 import { ProviderRegistry } from "./providers/registry.js";
 import { registerDefaultProviders } from "./providers/register-defaults.js";
@@ -17,6 +18,7 @@ export async function startRuntime(
 ) {
   await runSetup(setupDriver);
   await repairChats(db, setupDriver);
+  await seedConfigFromEnv(db);
   void maintainMemories(db);
 
   const { interrupted, settled } = await settleInterruptedRuns(db);

@@ -5,17 +5,21 @@ Usage: scripts/bench-session.py "<question>" [session-id]
 A session id continues that session; without one a new session starts.
 """
 import json
+import os
 import sys
 import urllib.parse
 import urllib.request
 import uuid
 
-BASE = "http://localhost:3579"
+BASE = "http://127.0.0.1:3579"
+HOME = os.environ.get("TRACER_HOME") or os.path.expanduser("~/.tracer")
+with open(os.path.join(HOME, "session-token")) as f:
+    AUTH = {"authorization": f"Bearer {f.read().strip()}"}
 
 
 def post_turn(sid: str, text: str) -> None:
     body = {"id": sid, "message": {"id": str(uuid.uuid4()), "role": "user", "parts": [{"type": "text", "text": text}]}}
-    req = urllib.request.Request(f"{BASE}/api/chat", data=json.dumps(body).encode(), headers={"content-type": "application/json"})
+    req = urllib.request.Request(f"{BASE}/api/chat", data=json.dumps(body).encode(), headers={"content-type": "application/json", **AUTH})
     with urllib.request.urlopen(req, timeout=3600) as res:
         for _ in res:
             pass
@@ -23,7 +27,7 @@ def post_turn(sid: str, text: str) -> None:
 
 def messages(sid: str) -> list:
     q = urllib.parse.quote(json.dumps({"json": {"id": sid}}))
-    with urllib.request.urlopen(f"{BASE}/api/trpc/sessions.get?input={q}") as res:
+    with urllib.request.urlopen(urllib.request.Request(f"{BASE}/api/trpc/sessions.get?input={q}", headers=AUTH)) as res:
         return json.loads(json.load(res)["result"]["data"]["json"]["messagesJson"])
 
 

@@ -4,12 +4,13 @@ import Database from "better-sqlite3-multiple-ciphers";
 import { createNodeDb } from "../db/node-db.js";
 import { runSetup } from "../db/setup.js";
 import { appSettings, chatSessions, monitors, monitorTriggers, providerConfigs, syncRows } from "../db/schema.js";
-import { limits, MAX_SYNC_BYTES, MAX_UNPACKED_BYTES, randomSecret, seal, TooLargeError, unseal } from "./crypto.js";
+import { deriveSessionKey, limits, MAX_SYNC_BYTES, MAX_UNPACKED_BYTES, newExchangeKey, randomSecret, seal, TooLargeError, unseal, verificationCode } from "./crypto.js";
 import { exportSnapshot, FORMAT, importSnapshot } from "./snapshot.js";
 import { exportSyncPayload } from "./sync.js";
 import { cancelReceive, inspectCopy, parseCopyLink, receiveStatus, startReceive } from "./receive.js";
 import { approve, deny, sendStatus, startSend, stopSend } from "./send.js";
-import { getMark, getSetting } from "./peer.js";
+import { clearPairings, getMark, getPairing, getSetting, setPairing } from "./peer.js";
+import { transferRouter } from "../trpc/routers/transfer.router.js";
 import { eq } from "drizzle-orm";
 
 const receiveCopy = async (...args: Parameters<typeof startReceive>) => (await startReceive(...args)).done;
@@ -49,7 +50,39 @@ const post = (link: string, suffix: string, body: string) => {
   const from = new URL(new URLSearchParams(link.slice(link.indexOf("?") + 1)).get("from")!);
   return fetch(new URL(from.pathname + suffix, from), { method: "POST", body });
 };
-const keyOf = (link: string) => new URLSearchParams(link.slice(link.indexOf("?") + 1)).get("key")!;
+/** Asks for the full copy as a phone does. Without a key of its own it uses the session key of the request the test sent. */
+const pull = async (link: string, key = sessionKeys.get(link) ?? randomSecret()) => post(link, "", await seal("{}", key, "snapshot-request"));
+/** Sends merge data as a phone does: the proof of the session key goes ahead of the body. */
+const upload = async (link: string, body: string, key: string) => {
+  const from = new URL(param(link, "from"));
+  return fetch(new URL(from.pathname + "/merge", from), { method: "POST", body, headers: { "x-tracer-proof": await seal("{}", key, "merge-request") } });
+};
+const param = (link: string, name: string) => new URLSearchParams(link.slice(link.indexOf("?") + 1)).get(name)!;
+const keyOf = (link: string) => param(link, "key");
+type TestDb = Awaited<ReturnType<typeof freshDb>>;
+const deviceId = async (db: TestDb) => (await setting(db, "device_id"))!;
+
+/** Stores one pairing secret on both devices, as a first sync does. */
+async function pair(computer: TestDb, phone: TestDb) {
+  const secret = randomSecret();
+  await setPairing(computer, await deviceId(phone), secret);
+  await setPairing(phone, await deviceId(computer), secret, true);
+  return secret;
+}
+
+// Link -> the session key of the request the test sent as a phone.
+const sessionKeys = new Map<string, string>();
+
+/** Sends the request as a phone does. `pk` and `hello` replace the honest values. */
+async function ask(link: string, mode: "merge" | "replace", { phone = "p-1", pairing, hello, format = FORMAT }: { phone?: string; pairing?: string; hello?: string; format?: number } = {}) {
+  const exchange = await newExchangeKey();
+  const key = await deriveSessionKey(exchange.privateKey, param(link, "pk"), { key: keyOf(link), pairing, mode, computer: param(link, "device"), phone });
+  const body = await seal(JSON.stringify({ deviceId: phone, name: "iPhone 0001", mode, format, pk: exchange.publicKey, hello: hello ?? await seal("{}", key, "hello") }), keyOf(link), "request");
+  const response = await post(link, "/request", body);
+  const text = await response.text();
+  if (response.status === 200) sessionKeys.set(link, key);
+  return { status: response.status, text, key, body };
+}
 
 test("seal and unseal round-trip; a wrong key fails", async () => {
   const key = randomSecret();
@@ -181,6 +214,19 @@ test("link carries the computer device id; parseCopyLink accepts only a plain on
   assert.equal(parseCopyLink(`tracer://copy?from=${from}&key=k`).device, undefined);
 });
 
+test("the link carries the computer's exchange key; a code without one comes from an older computer", async (t) => {
+  t.after(stopSend);
+  const computer = await seededDb();
+  const phone = await freshDb();
+  const { link } = await startSend(computer, () => 0);
+  assert.match(parseCopyLink(link).pk ?? "", /^[A-Za-z0-9_-]{87}$/);
+  const old = link.replace(/&pk=[^&]*/, "");
+  assert.equal(parseCopyLink(old).pk, undefined);
+  await assert.rejects(inspectCopy(phone, old), /Update Tracer on the computer/);
+  await assert.rejects(startReceive(phone, old), /Update Tracer on the computer/);
+  assert.equal(sendStatus()?.phase, "waiting");
+});
+
 test("replace waits for approval, then copies and records the peer", async (t) => {
   t.after(stopSend);
   const computer = await seededDb();
@@ -199,6 +245,9 @@ test("replace waits for approval, then copies and records the peer", async (t) =
   assert.equal(await setting(phone, "sync_peer_id"), await setting(computer, "device_id"));
   assert.ok(Number(await setting(phone, "sync_last_at")) > 0);
   assert.match((await setting(computer, "sync_peer_name")) ?? "", /^iPhone /);
+  const secret = await getPairing(phone, await deviceId(computer));
+  assert.match(secret ?? "", /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(await getPairing(computer, await deviceId(phone)), secret);
 });
 
 test("a change logged after a sync mark is never older than the mark", async () => {
@@ -253,15 +302,18 @@ test("replace refuses while an investigation runs on the computer", async (t) =>
   assert.equal(receiveStatus()?.error?.side, "computer");
 });
 
-test("inspect returns merge only for the computer the phone synced with", async (t) => {
+test("inspect returns merge only when the phone holds the pairing secret of the computer", async (t) => {
   t.after(stopSend);
   const computer = await seededDb();
   const phone = await freshDb();
-  await phone.insert(appSettings).values({ key: "sync_peer_id", value: "someone-else" }).run();
+  await setPairing(phone, "someone-else", randomSecret(), true);
   const { link } = await startSend(computer, () => 0);
-  assert.equal((await inspectCopy(phone, link)).mode, "replace");
-  await phone.update(appSettings).set({ value: (await setting(computer, "device_id"))! }).where(eq(appSettings.key, "sync_peer_id")).run();
-  assert.equal((await inspectCopy(phone, link)).mode, "merge");
+  assert.deepEqual([(await inspectCopy(phone, link)).mode, (await inspectCopy(phone, link)).pairedBefore], ["replace", false]);
+  // The phone synced with this computer under an older version: the id is stored, but no secret.
+  await phone.insert(appSettings).values({ key: "sync_peer_id", value: await deviceId(computer) }).run();
+  assert.deepEqual([(await inspectCopy(phone, link)).mode, (await inspectCopy(phone, link)).pairedBefore], ["replace", true]);
+  await pair(computer, phone);
+  assert.deepEqual([(await inspectCopy(phone, link)).mode, (await inspectCopy(phone, link)).pairedBefore], ["merge", false]);
 });
 
 test("nothing is exchanged before approval; a second request gets 409", async (t) => {
@@ -269,21 +321,29 @@ test("nothing is exchanged before approval; a second request gets 409", async (t
   const computer = await seededDb();
   const { link } = await startSend(computer, () => 0);
   const key = keyOf(link);
-  const from = new URL(new URLSearchParams(link.slice(link.indexOf("?") + 1)).get("from")!);
-  const request = await seal(JSON.stringify({ deviceId: "p-1", name: "iPhone 0001", mode: "merge", format: FORMAT }), key, "request");
+  const from = new URL(param(link, "from"));
+  const secret = randomSecret();
+  await setPairing(computer, "p-1", secret);
 
   assert.equal((await post(link, "/request", await seal("{}", randomSecret(), "request"))).status, 403);
   // A message of another kind does not pass as a request.
-  assert.equal((await post(link, "/request", await seal(JSON.stringify({ deviceId: "p-1", name: "iPhone 0001", mode: "merge", format: FORMAT }), key, "progress"))).status, 403);
+  assert.equal((await post(link, "/request", await seal(JSON.stringify({ deviceId: "p-1", name: "iPhone 0001", mode: "replace", format: FORMAT, pk: "x", hello: "x" }), key, "progress"))).status, 403);
+  // A request without a working exchange key or proof does not pass.
+  assert.equal((await post(link, "/request", await seal(JSON.stringify({ deviceId: "p-1", name: "iPhone 0001", mode: "replace", format: FORMAT, pk: "x", hello: "x" }), key, "request"))).status, 403);
+  assert.equal((await post(link, "/request", await seal(JSON.stringify({ deviceId: "p-1", name: "iPhone 0001", mode: "replace", format: FORMAT }), key, "request"))).status, 400);
   assert.equal(sendStatus()?.phase, "waiting");
-  assert.equal((await fetch(from)).status, 403);
+  assert.equal((await pull(link)).status, 403);
 
-  assert.equal((await post(link, "/request", request)).status, 200);
+  const asked = await ask(link, "merge", { pairing: secret });
+  assert.equal(asked.status, 200);
   assert.equal(sendStatus()?.phase, "approval");
-  assert.equal((await post(link, "/request", request)).status, 409);
-  assert.equal((await fetch(from)).status, 403);
-  assert.equal((await post(link, "/merge", await seal("{}", key, "merge-up"))).status, 403);
+  assert.equal((await post(link, "/request", asked.body)).status, 409);
+  assert.equal((await pull(link)).status, 403);
+  assert.equal((await post(link, "/merge", await seal("{}", asked.key, "merge-up"))).status, 403);
   assert.equal((await statusOf(link))?.phase, "approval");
+  // The key from the QR code alone opens nothing after the request.
+  const sealed = ((await (await fetch(new URL(from.pathname + "/status", from))).json()) as { sealed: string }).sealed;
+  await assert.rejects(unseal(sealed, key, "status"));
 });
 
 test("deny ends the session and the phone sees why", async (t) => {
@@ -304,7 +364,7 @@ test("merge refuses while an investigation runs", async (t) => {
   t.after(stopSend);
   const computer = await seededDb();
   const phone = await freshDb();
-  await phone.insert(appSettings).values({ key: "sync_peer_id", value: (await setting(computer, "device_id"))! }).run();
+  await pair(computer, phone);
   const { link } = await startSend(computer, () => 1);
   const done = receiveCopy(phone, link);
   const outcome = assert.rejects(done, /investigation is running/);
@@ -445,6 +505,13 @@ test("an old phone gets a 409 with the update message", async (t) => {
   assert.match(await response.text(), /Update Tracer on the phone/);
   const noFormat = await post(link, "/request", await seal(JSON.stringify({ deviceId: "p-1", name: "iPhone", mode: "replace" }), key, "request"));
   assert.equal(noFormat.status, 409);
+  // The previous version: the same seal, a lower format, no exchange key.
+  const previous = await post(link, "/request", await seal(JSON.stringify({ deviceId: "p-1", name: "iPhone", mode: "merge", format: FORMAT - 1 }), key, "request"));
+  assert.equal(previous.status, 409);
+  assert.match(await previous.text(), /Update Tracer on the phone/);
+  const newer = await ask(link, "replace", { format: FORMAT + 1 });
+  assert.equal(newer.status, 409);
+  assert.match(newer.text, /Update Tracer on this computer/);
   // The form before the labels: "z.iv.data".
   const unlabelled = await post(link, "/request", `z.${old}`);
   assert.equal(unlabelled.status, 409);
@@ -462,7 +529,7 @@ test("a phone asks an old computer and is told to update it", async (t) => {
   t.after(() => server.close());
   const { port } = server.address() as { port: number };
   // 127.0.0.1 is not a private LAN address for the phone: use the check through a local alias.
-  const link = `tracer://copy?from=${encodeURIComponent(`http://192.168.1.5:${port}/t`)}&key=k`;
+  const link = `tracer://copy?from=${encodeURIComponent(`http://192.168.1.5:${port}/t`)}&key=${randomSecret()}&device=c-1&pk=${(await newExchangeKey()).publicKey}`;
   const realFetch = globalThis.fetch;
   globalThis.fetch = ((url: URL, init?: RequestInit) => realFetch(new URL(url.pathname, `http://127.0.0.1:${port}`), init)) as typeof fetch;
   t.after(() => { globalThis.fetch = realFetch; });
@@ -471,7 +538,7 @@ test("a phone asks an old computer and is told to update it", async (t) => {
   await assert.rejects(receiveCopy(phone, link), /Update Tracer on the computer/);
   reply = { format: FORMAT + 1, sealed: "x" };
   await assert.rejects(receiveCopy(phone, link), /Update Tracer on the phone/);
-  // A status of this format that is not sealed with the key from the code is not trusted.
+  // A computer of this format that cannot seal its answer with the session key is not trusted.
   reply = { phase: "transfer", format: FORMAT };
   await assert.rejects(receiveCopy(phone, link), /does not decrypt/);
 });
@@ -493,17 +560,15 @@ test("an old-form reply to the phone gives the update message", async () => {
   const old = `${Buffer.from(iv).toString("base64url")}.${Buffer.from(data).toString("base64url")}`;
   await assert.rejects(unseal(old, key, "snapshot"), (err: Error) => err.constructor.name === "OldFormError");
   await assert.rejects(unseal(`z.${old}`, key, "snapshot"), (err: Error) => err.constructor.name === "OldFormError");
-  assert.equal(FORMAT, 6);
+  assert.equal(FORMAT, 7);
 });
 
-const ask = async (link: string, mode: "merge" | "replace") =>
-  post(link, "/request", await seal(JSON.stringify({ deviceId: "p-1", name: "iPhone 0001", mode, format: FORMAT }), keyOf(link), "request"));
-const report = async (link: string, body: object) => post(link, "/progress", await seal(JSON.stringify(body), keyOf(link), "progress"));
-const statusOf = async (link: string) => {
-  const from = new URL(new URLSearchParams(link.slice(link.indexOf("?") + 1)).get("from")!);
+const report = async (link: string, body: object) => post(link, "/progress", await seal(JSON.stringify(body), sessionKeys.get(link)!, "progress"));
+async function statusOf(link: string) {
+  const from = new URL(param(link, "from"));
   const { format, sealed } = (await (await fetch(new URL(from.pathname + "/status", from))).json()) as { format: number; sealed: string };
-  return { ...(JSON.parse(await unseal(sealed, keyOf(link), "status")) as NonNullable<ReturnType<typeof sendStatus>>), format };
-};
+  return { ...(JSON.parse(await unseal(sealed, sessionKeys.get(link) ?? keyOf(link), "status")) as NonNullable<ReturnType<typeof sendStatus>>), format };
+}
 
 test("the shared status runs waiting, approval, transfer, apply; only the phone report ends it", async (t) => {
   t.after(stopSend);
@@ -520,8 +585,7 @@ test("the shared status runs waiting, approval, transfer, apply; only the phone 
 
   approve();
   assert.equal((await statusOf(link))?.phase, "transfer");
-  const from = new URL(new URLSearchParams(link.slice(link.indexOf("?") + 1)).get("from")!);
-  const data = await fetch(from);
+  const data = await pull(link);
   assert.equal(data.status, 200);
   assert.equal(Number(data.headers.get("content-length")), (await data.text()).length);
   await until(() => sendStatus()?.phase === "apply");
@@ -598,6 +662,51 @@ test("a cancel on the phone ends the sync on the computer", async (t) => {
   assert.equal((await phone.select().from(chatSessions).all()).length, 0);
 });
 
+test("a cancel on the phone before the computer's answer arrives ends the approval prompt", async (t) => {
+  t.after(stopSend);
+  const { link } = await startSend(await seededDb(), () => 0);
+  const realFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = realFetch; });
+  globalThis.fetch = (async (url: URL, init?: RequestInit) => {
+    if (!url.pathname.endsWith("/request")) return realFetch(url, init);
+    await realFetch(url, { ...init, signal: undefined });
+    // The answer never reaches the phone.
+    return new Promise<Response>((_, reject) => init!.signal!.addEventListener("abort", () => reject(new Error("aborted"))));
+  }) as typeof fetch;
+  const { done } = await startReceive(await freshDb(), link);
+  const outcome = assert.rejects(done, /cancelled/);
+  await until(() => sendStatus()?.phase === "approval");
+  await cancelReceive();
+  await outcome;
+  assert.equal(sendStatus()?.phase, "cancelled");
+  assert.equal(sendStatus()?.reached, "approval");
+  assert.deepEqual(sendStatus()?.error, { message: "Cancelled on the phone.", side: "phone" });
+  assert.equal(receiveStatus()?.phase, "cancelled");
+});
+
+test("a cancel sealed with the key from the code ends the prompt for that phone only, and nothing after Allow", async (t) => {
+  t.after(stopSend);
+  const computer = await seededDb();
+  const cancel = async (link: string, phone: string) => (await post(link, "/cancel", await seal(JSON.stringify({ deviceId: phone }), keyOf(link), "cancel-request"))).status;
+
+  const first = await startSend(computer, () => 0);
+  assert.equal(await cancel(first.link, "p-1"), 403);
+  assert.equal(sendStatus()?.phase, "waiting");
+  await ask(first.link, "replace");
+  assert.equal(await cancel(first.link, "p-2"), 403);
+  assert.equal(sendStatus()?.phase, "approval");
+  approve();
+  assert.equal(await cancel(first.link, "p-1"), 403);
+  assert.equal(sendStatus()?.phase, "transfer");
+  assert.equal((await pull(first.link)).status, 200);
+
+  const second = await startSend(computer, () => 0);
+  await ask(second.link, "replace");
+  assert.equal(await cancel(second.link, "p-1"), 200);
+  assert.equal(sendStatus()?.phase, "cancelled");
+  assert.deepEqual(sendStatus()?.error, { message: "Cancelled on the phone.", side: "phone" });
+});
+
 test("a cancel on the computer shows as cancelled on the phone, not as expired", async (t) => {
   t.after(stopSend);
   const { link } = await startSend(await seededDb(), () => 0);
@@ -608,8 +717,9 @@ test("a cancel on the computer shows as cancelled on the phone, not as expired",
   await outcome;
   assert.equal(receiveStatus()?.phase, "cancelled");
   assert.deepEqual(receiveStatus()?.error, { message: "Cancelled on the computer.", side: "computer" });
-  // The status stays readable for a moment after the end.
-  assert.equal((await statusOf(link))?.phase, "cancelled");
+  // The listener still answers for a moment after the end.
+  const from = new URL(param(link, "from"));
+  assert.equal((await fetch(new URL(from.pathname + "/status", from))).status, 200);
 });
 
 test("only one sync runs on the phone at a time", async (t) => {
@@ -671,24 +781,429 @@ test("the phone rejects its own merge request sent back as the reply and keeps t
   assert.equal((await phone.select().from(chatSessions).where(eq(chatSessions.id, "only-computer")).all()).length, 0);
 });
 
+type Seen = { route: string; body: string };
+const nativeFetch = globalThis.fetch;
+
+/**
+ * A host at the address of a code that is not Tracer on the paired computer. It holds every part of the link.
+ * With `pairing` it also holds the secret and allows the request at once.
+ */
+async function fakeComputer(t: { after(fn: () => void): void }, options: {
+  pairing?: string;
+  welcome?: (hello: string) => string;
+  merge?: (sessionKey: string) => Promise<string>;
+} = {}) {
+  const { createServer } = await import("node:http");
+  const exchange = await newExchangeKey();
+  const key = randomSecret();
+  const seen: Seen[] = [];
+  let sessionKey = "";
+  const server = createServer((req, res) => {
+    void (async () => {
+      let body = "";
+      for await (const chunk of req) body += chunk;
+      const route = `${req.method} ${req.url}`;
+      seen.push({ route, body });
+      if (route === "GET /t/status") {
+        const view = { phase: "transfer", computerName: "Mac", expiresAt: Date.now() + 60_000 };
+        return res.end(JSON.stringify({ format: FORMAT, sealed: sessionKey ? await seal(JSON.stringify(view), sessionKey, "status") : "x" }));
+      }
+      if (route === "POST /t/request") {
+        const request = JSON.parse(await unseal(body, key, "request")) as { deviceId: string; mode: "merge" | "replace"; pk: string; hello: string };
+        // Without the secret the host can only guess one.
+        const pairing = request.mode === "merge" ? options.pairing ?? randomSecret() : undefined;
+        sessionKey = await deriveSessionKey(exchange.privateKey, request.pk, { key, pairing, mode: request.mode, computer: "c-1", phone: request.deviceId });
+        return res.end(options.welcome ? options.welcome(request.hello) : await seal("{}", sessionKey, "welcome"));
+      }
+      if (route === "POST /t/merge" && options.merge) return res.end(await options.merge(sessionKey));
+      res.statusCode = 404;
+      res.end();
+    })().catch(() => { res.statusCode = 500; res.end(); });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address() as { port: number };
+  globalThis.fetch = ((url: URL, init?: RequestInit) => nativeFetch(new URL(url.pathname, `http://127.0.0.1:${port}`), init)) as typeof fetch;
+  t.after(() => { globalThis.fetch = nativeFetch; server.close(); });
+  const link = `tracer://copy?from=${encodeURIComponent(`http://192.168.1.5:${port}/t`)}&key=${key}&name=Mac&device=c-1&pk=${exchange.publicKey}`;
+  return { link, key, seen };
+}
+
+/** A phone with rows of its own that is paired with the computer "c-1". */
+async function phonePairedWithC1() {
+  const phone = await seededDb();
+  const secret = randomSecret();
+  await setPairing(phone, "c-1", secret, true);
+  await phone.insert(appSettings).values({ key: "sync_peer_id", value: "c-1" }).run();
+  return { phone, secret };
+}
+
 test("the phone rejects a reply without a time before it writes anything", async (t) => {
-  const { computer, phone, link, peer, before } = await mergeReady(t);
-  swapMergeReply(t, async () => seal(JSON.stringify({ at: "soon", payload: await exportSyncPayload(computer) }), keyOf(link), "merge-down"));
-  await assert.rejects(receiveWithApproval(phone, link), /data from the computer is damaged/);
-  assert.deepEqual(await getMark(phone, peer), before);
+  const { phone, secret } = await phonePairedWithC1();
+  const other = await freshDb();
+  await other.insert(chatSessions).values({ id: "only-computer", title: "C", messages: "[]", status: "done" }).run();
+  const { link } = await fakeComputer(t, { pairing: secret, merge: async (key) => seal(JSON.stringify({ at: "soon", payload: await exportSyncPayload(other) }), key, "merge-down") });
+  await assert.rejects(receiveCopy(phone, link), /data from the computer is damaged/);
+  assert.equal(await getMark(phone, "c-1"), undefined);
   assert.equal((await phone.select().from(chatSessions).where(eq(chatSessions.id, "only-computer")).all()).length, 0);
+});
+
+test("a merge with a host that lacks the pairing secret ends before the phone sends a row", async (t) => {
+  const answers: Record<string, ((hello: string) => string) | undefined> = {
+    "a guessed secret": undefined,
+    "the phone's own proof sent back": (hello) => hello,
+    "an empty answer": () => "",
+  };
+  for (const [name, welcome] of Object.entries(answers)) {
+    const { phone, secret } = await phonePairedWithC1();
+    const { link, key, seen } = await fakeComputer(t, { welcome, merge: async () => "x" });
+    assert.equal((await inspectCopy(phone, link)).mode, "merge", name);
+    await assert.rejects(receiveCopy(phone, link), /did not prove that it is the computer this phone is paired with/, name);
+
+    // Only the version check and the request left the phone: no rows, no report, no cancel.
+    assert.deepEqual(seen.map((r) => r.route), ["GET /t/status", "POST /t/request"], name);
+    const request = JSON.parse(await unseal(seen[1].body, key, "request")) as Record<string, unknown>;
+    assert.deepEqual(Object.keys(request).sort(), ["deviceId", "format", "hello", "mode", "name", "pk"], name);
+    assert.ok(!JSON.stringify(request).includes(secret), name);
+    assert.equal(receiveStatus()?.phase, "failed", name);
+    assert.equal(receiveStatus()?.code, undefined, name);
+    // What the host says never clears the pairing or changes the mode.
+    assert.equal(await getPairing(phone, "c-1"), secret, name);
+    assert.equal((await inspectCopy(phone, link)).mode, "merge", name);
+    assert.equal((await phone.select().from(chatSessions).all()).length, 1, name);
+  }
+});
+
+test("a host that holds the QR parts but not the pairing secret cannot answer a paired phone, whatever status it returns", async (t) => {
+  const { phone } = await phonePairedWithC1();
+  const { link, seen } = await fakeComputer(t, { welcome: () => "a.x.y" });
+  await assert.rejects(receiveCopy(phone, link), /did not prove/);
+  assert.ok(seen.every((r) => r.route !== "POST /t/merge"));
 });
 
 test("the computer refuses a merge whose data has the wrong shape and stays unchanged", async (t) => {
   t.after(stopSend);
   const computer = await seededDb();
   const { link } = await startSend(computer, () => 0);
-  await ask(link, "merge");
+  const secret = randomSecret();
+  await setPairing(computer, "p-1", secret);
+  const { key } = await ask(link, "merge", { pairing: secret });
   approve();
-  const response = await post(link, "/merge", await seal(JSON.stringify({ payload: { format: FORMAT, tables: { chat_sessions: "x" }, rows: [] } }), keyOf(link), "merge-up"));
+  const response = await upload(link, await seal(JSON.stringify({ payload: { format: FORMAT, tables: { chat_sessions: "x" }, rows: [] } }), key, "merge-up"), key);
   assert.equal(response.status, 400);
   assert.match(await response.text(), /invalid row in chat_sessions/);
   assert.deepEqual([sendStatus()?.phase, sendStatus()?.error?.side], ["failed", "computer"]);
   assert.match(sendStatus()?.error?.message ?? "", /invalid row in chat_sessions/);
   assert.equal((await computer.select().from(chatSessions).all()).length, 1);
+});
+
+test("a merge request from an unknown phone, or from the right phone without the secret, is refused and changes nothing", async (t) => {
+  t.after(stopSend);
+  const computer = await seededDb();
+  const phone = await freshDb();
+  const hook = JSON.stringify({ webhookUrl: "https://hooks.slack.com/services/T0/B0/real" });
+  await computer.insert(appSettings).values({ key: "integration:slack", value: hook }).run();
+  await receiveWithApproval(phone, (await startSend(computer, () => 0)).link);
+  const pairings = await setting(computer, "sync_pairings");
+  const rows = JSON.stringify(await exportSnapshot(computer));
+
+  const { link } = await startSend(computer, () => 0);
+  const stranger = await ask(link, "merge", { phone: "stranger", pairing: randomSecret() });
+  const wrongSecret = await ask(link, "merge", { phone: await deviceId(phone), pairing: randomSecret() });
+  // A proof made for a replace does not pass as the proof of a merge.
+  const replaceKey = await ask(link, "merge", { phone: await deviceId(phone), pairing: randomSecret(), hello: await seal("{}", randomSecret(), "hello") });
+  for (const refused of [stranger, wrongSecret, replaceKey]) {
+    assert.equal(refused.status, 409);
+    assert.match(refused.text, /does not hold a pairing with this phone/);
+    assert.equal(refused.text, stranger.text);
+  }
+  // No Allow prompt, no code, and the code on the screen still works for the real phone.
+  assert.deepEqual([sendStatus()?.phase, sendStatus()?.phoneName, sendStatus()?.code], ["waiting", undefined, undefined]);
+  assert.equal((await post(link, "/merge", await seal(JSON.stringify({ payload: await exportSyncPayload(phone) }), stranger.key, "merge-up"))).status, 403);
+  assert.equal(await setting(computer, "sync_pairings"), pairings);
+  assert.equal(JSON.stringify(await exportSnapshot(computer)), rows);
+  assert.equal(await setting(computer, "integration:slack"), hook);
+  assert.equal((await receiveWithApproval(phone, link)).mode, "merge");
+});
+
+test("devices paired by an older version replace once, then merge", async (t) => {
+  t.after(stopSend);
+  const computer = await seededDb();
+  const phone = await freshDb();
+  // What the older version stored: the id of the other device, no secret.
+  await phone.insert(appSettings).values({ key: "sync_peer_id", value: await deviceId(computer) }).run();
+  await phone.insert(chatSessions).values({ id: "only-phone", title: "P", messages: "[]", status: "done" }).run();
+
+  const first = await startSend(computer, () => 0);
+  // The phone's id alone gets no merge from the computer.
+  assert.equal((await ask(first.link, "merge", { phone: await deviceId(phone), pairing: randomSecret() })).status, 409);
+  assert.deepEqual(await inspectCopy(phone, first.link), { mode: "replace", name: (await inspectCopy(phone, first.link)).name, address: (await inspectCopy(phone, first.link)).address, pairedBefore: true });
+  assert.equal((await receiveWithApproval(phone, first.link)).mode, "replace");
+  assert.equal(sendStatus()?.mode, "replace");
+  assert.equal((await phone.select().from(chatSessions).where(eq(chatSessions.id, "only-phone")).all()).length, 0);
+  assert.ok(await getPairing(phone, await deviceId(computer)));
+
+  const second = await startSend(computer, () => 0);
+  assert.deepEqual([(await inspectCopy(phone, second.link)).mode, (await inspectCopy(phone, second.link)).pairedBefore], ["merge", false]);
+  assert.equal((await receiveWithApproval(phone, second.link)).mode, "merge");
+});
+
+test("the pairing secret stays on the two devices: no snapshot, payload, change log, status or route carries it", async (t) => {
+  t.after(stopSend);
+  const computer = await seededDb();
+  const phone = await freshDb();
+  await receiveWithApproval(phone, (await startSend(computer, () => 0)).link);
+  const secret = (await getPairing(phone, await deviceId(computer)))!;
+  assert.equal(await getPairing(computer, await deviceId(phone)), secret);
+
+  // A second phone gets a full copy and its own secret, never the first one.
+  const second = await freshDb();
+  const { link } = await startSend(computer, () => 0);
+  const done = receiveCopy(second, link);
+  await until(() => sendStatus()?.phase === "approval");
+  const views = [JSON.stringify(sendStatus()), JSON.stringify(receiveStatus()), JSON.stringify(await inspectCopy(second, link)), link];
+  approve();
+  await done;
+  const secondSecret = (await getPairing(second, await deviceId(computer)))!;
+  assert.notEqual(secondSecret, secret);
+  assert.equal(await getPairing(computer, await deviceId(phone)), secret);
+  assert.equal(await getPairing(computer, await deviceId(second)), secondSecret);
+  assert.equal((await second.select().from(appSettings).all()).filter((r) => r.value.includes(secret)).length, 0);
+
+  // A merge of the first phone after both pairings exist.
+  await phone.insert(chatSessions).values({ id: "p2", title: "P", messages: "[]", status: "done" }).run();
+  assert.equal((await receiveWithApproval(phone, (await startSend(computer, () => 0)).link)).mode, "merge");
+  views.push(JSON.stringify(sendStatus()), JSON.stringify(receiveStatus()));
+
+  for (const db of [computer, phone, second]) {
+    const api = transferRouter.createCaller({ db, receivesCopy: true, isOwner: true } as never);
+    views.push(
+      JSON.stringify(await exportSnapshot(db)),
+      JSON.stringify(await exportSyncPayload(db)),
+      JSON.stringify(await exportSyncPayload(db, 0)),
+      JSON.stringify(await db.select().from(syncRows).all()),
+      JSON.stringify(await api.lastSync()),
+      JSON.stringify(await api.receiveStatus()),
+    );
+  }
+  views.push(JSON.stringify(await transferRouter.createCaller({ db: computer, isOwner: true } as never).sendStatus()));
+  for (const view of views) {
+    assert.ok(!view.includes(secret) && !view.includes(secondSecret) && !view.includes("sync_pairings"), view.slice(0, 200));
+  }
+  assert.equal((await transferRouter.createCaller({ db: phone, receivesCopy: true, isOwner: true } as never).lastSync())?.paired, true);
+});
+
+test("a snapshot cannot plant a pairing or another device setting", async () => {
+  const source = await seededDb();
+  const target = await freshDb();
+  const snapshot = JSON.parse(JSON.stringify(await exportSnapshot(source))) as Awaited<ReturnType<typeof exportSnapshot>>;
+  snapshot.tables.app_settings.push({ key: "sync_pairings", value: JSON.stringify({ "other-device": randomSecret() }), updatedAt: 1 });
+  await importSnapshot(target, snapshot);
+  assert.equal(await setting(target, "sync_pairings"), undefined);
+});
+
+test("both devices show the same code; another request gives another code", async (t) => {
+  t.after(stopSend);
+  const computer = await seededDb();
+  const phone = await freshDb();
+  const { link } = await startSend(computer, () => 0);
+  assert.equal(sendStatus()?.code, undefined);
+  const { done } = await startReceive(phone, link);
+  await until(() => sendStatus()?.phase === "approval" && !!receiveStatus()?.code);
+  const code = sendStatus()!.code!;
+  assert.match(code, /^\d{6}$/);
+  assert.equal(receiveStatus()?.code, code);
+  approve();
+  await done;
+
+  // Someone who saw the QR code asks first: the computer shows the code of that request.
+  const next = await startSend(computer, () => 0);
+  const stranger = await ask(next.link, "replace");
+  assert.equal(stranger.status, 200);
+  assert.equal(sendStatus()?.code, await verificationCode(stranger.key, stranger.body));
+  // The session key enters the code, so the request alone does not give it.
+  assert.notEqual(await verificationCode(randomSecret(), stranger.body), sendStatus()?.code);
+  // The real phone is refused and shows no code, so the two screens never agree.
+  await assert.rejects(receiveCopy(phone, next.link), /Another device already used this code.*click Deny/);
+  assert.equal(receiveStatus()?.code, undefined);
+
+  const third = await startSend(computer, () => 0);
+  const again = await ask(third.link, "replace");
+  assert.notEqual(await verificationCode(again.key, again.body), await verificationCode(stranger.key, stranger.body));
+});
+
+test("the key from the QR code alone does not open an allowed sync", async (t) => {
+  t.after(stopSend);
+  const computer = await seededDb();
+  const { link } = await startSend(computer, () => 0);
+  const { key } = await ask(link, "replace");
+  approve();
+  const sealed = await (await pull(link, key)).text();
+  await assert.rejects(unseal(sealed, keyOf(link), "snapshot"));
+  const opened = JSON.parse(await unseal(sealed, key, "snapshot")) as { pairing: string; snapshot: { tables: Record<string, unknown[]> } };
+  assert.equal(opened.pairing, await getPairing(computer, "p-1"));
+  assert.equal(opened.snapshot.tables.chat_sessions.length, 1);
+  // Reports sealed with the QR key are refused too.
+  assert.equal((await post(link, "/progress", await seal(JSON.stringify({ phase: "done" }), keyOf(link), "progress"))).status, 403);
+  assert.equal((await post(link, "/cancel", await seal("{}", keyOf(link), "cancel"))).status, 403);
+});
+
+test("a phone that forgets the computer replaces at the next sync", async (t) => {
+  t.after(stopSend);
+  const computer = await seededDb();
+  const phone = await freshDb();
+  await receiveWithApproval(phone, (await startSend(computer, () => 0)).link);
+  const api = transferRouter.createCaller({ db: phone, receivesCopy: true, isOwner: true } as never);
+  assert.equal((await api.lastSync())?.paired, true);
+  await api.forgetPairings();
+  assert.equal((await api.lastSync())?.paired, false);
+  const { link } = await startSend(computer, () => 0);
+  assert.equal((await api.inspect({ link })).mode, "replace");
+  assert.equal((await receiveWithApproval(phone, link)).mode, "replace");
+  assert.equal((await api.lastSync())?.paired, true);
+  await clearPairings(computer);
+  // The computer lost the pairing: the phone is told how to pair again, and nothing changes.
+  await assert.rejects(receiveCopy(phone, (await startSend(computer, () => 0)).link), /does not hold a pairing with this phone.*Forget computer/);
+});
+
+test("a caller without the session key cannot take or stop an allowed full copy", async (t) => {
+  t.after(stopSend);
+  const computer = await seededDb();
+  const { link } = await startSend(computer, () => 0);
+  const { key } = await ask(link, "replace");
+  approve();
+
+  assert.equal((await fetch(new URL(param(link, "from")))).status, 404);
+  assert.equal((await post(link, "", "x")).status, 403);
+  assert.equal((await pull(link, randomSecret())).status, 403);
+  assert.equal((await pull(link, keyOf(link))).status, 403);
+  // A message of another kind does not pass as the request for the copy.
+  assert.equal((await post(link, "", await seal("{}", key, "cancel"))).status, 403);
+  assert.equal(sendStatus()?.phase, "transfer");
+  assert.equal(await getPairing(computer, "p-1"), undefined);
+
+  const data = await pull(link, key);
+  assert.equal(data.status, 200);
+  const opened = JSON.parse(await unseal(await data.text(), key, "snapshot")) as { pairing: string };
+  assert.equal(opened.pairing, await getPairing(computer, "p-1"));
+  await until(() => sendStatus()?.phase === "apply");
+});
+
+/** Starts a merge upload on a raw connection: the headers and the first byte of a body that never ends. Resolves with what the computer answers. */
+async function partialUpload(t: { after(fn: () => void): void }, link: string, proof?: string) {
+  const { connect } = await import("node:net");
+  const from = new URL(param(link, "from"));
+  const socket = connect(Number(from.port), from.hostname);
+  t.after(() => socket.destroy());
+  socket.on("error", () => {});
+  let answer = "";
+  socket.on("data", (chunk) => { answer += chunk; });
+  const closed = new Promise<string>((resolve) => {
+    socket.once("close", () => resolve(answer));
+    setTimeout(() => resolve(answer), 5000).unref();
+  });
+  socket.write(`POST ${from.pathname}/merge HTTP/1.1\r\nHost: ${from.host}\r\n${proof ? `x-tracer-proof: ${proof}\r\n` : ""}Content-Length: 100000000\r\n\r\nx`);
+  return { socket, closed };
+}
+
+test("a merge upload without the session key does not take or end the exchange", async (t) => {
+  t.after(stopSend);
+  const computer = await seededDb();
+  const { link } = await startSend(computer, () => 0);
+  const secret = randomSecret();
+  await setPairing(computer, "p-1", secret);
+  const { key } = await ask(link, "merge", { pairing: secret });
+  approve();
+
+  // The proof travels as a header value: plain characters and short.
+  assert.match(await seal("{}", key, "merge-request"), /^[A-Za-z0-9_.-]{1,100}$/);
+  // Refused before the body arrives: the answer comes and the connection closes while the upload has sent one byte.
+  for (const proof of [undefined, await seal("{}", keyOf(link), "merge-request"), await seal("{}", key, "merge-up")]) {
+    assert.match(await (await partialUpload(t, link, proof)).closed, /^HTTP\/1\.1 403 /);
+  }
+  assert.equal((await upload(link, await seal("{}", key, "merge-up"), randomSecret())).status, 403);
+  assert.equal(sendStatus()?.phase, "transfer");
+
+  const answer = await upload(link, await seal(JSON.stringify({ payload: await exportSyncPayload(await freshDb()) }), key, "merge-up"), key);
+  assert.equal(answer.status, 200);
+  await unseal(await answer.text(), key, "merge-down");
+  await until(() => sendStatus()?.phase === "apply");
+  assert.equal((await report(link, { phase: "done", result: { applied: 0, deleted: 0 } })).status, 200);
+  assert.equal(sendStatus()?.phase, "done");
+});
+
+test("an upload of the phone that breaks off ends the sync as failed", async (t) => {
+  t.after(stopSend);
+  const computer = await seededDb();
+  const { link } = await startSend(computer, () => 0);
+  const secret = randomSecret();
+  await setPairing(computer, "p-1", secret);
+  const { key } = await ask(link, "merge", { pairing: secret });
+  approve();
+
+  const { socket } = await partialUpload(t, link, await seal("{}", key, "merge-request"));
+  await new Promise((r) => setTimeout(r, 100));
+  // One upload at a time.
+  assert.equal((await upload(link, "x", key)).status, 409);
+  socket.destroy();
+  await until(() => sendStatus()?.phase === "failed");
+  assert.equal(sendStatus()?.error?.side, "computer");
+});
+
+test("a short message over the size limit is refused and does not end an allowed sync", async (t) => {
+  t.after(stopSend);
+  const { link } = await startSend(await seededDb(), () => 0);
+  const large = "x".repeat(8 * 1024 + 1);
+  assert.equal((await post(link, "/request", large)).status, 413);
+  assert.equal(sendStatus()?.phase, "waiting");
+  assert.equal((await ask(link, "replace")).status, 200);
+  approve();
+
+  for (const route of ["/progress", "/cancel", ""]) assert.equal((await post(link, route, large)).status, 413, route);
+  assert.equal(sendStatus()?.phase, "transfer");
+
+  assert.equal((await pull(link)).status, 200);
+  await until(() => sendStatus()?.phase === "apply");
+  // The largest report the phone sends: 500 characters that do not compress.
+  const error = Array.from({ length: 500 }, () => String.fromCharCode(0x4e00 + Math.floor(Math.random() * 0x5000))).join("");
+  assert.equal((await report(link, { phase: "failed", bytes: { done: 1e9, total: 1e9 }, error })).status, 200);
+  assert.equal(sendStatus()?.error?.message, error);
+});
+
+test("importSnapshot counts a change time far ahead of this clock as now", async () => {
+  const snapshot = await exportSnapshot(await seededDb());
+  const [ahead, near] = snapshot.rows;
+  ahead.changed_at = Date.now() + 3_600_000;
+  near.changed_at = Date.now() + 60_000;
+  const target = await freshDb();
+  await importSnapshot(target, snapshot);
+  const stored = await target.select().from(syncRows).all();
+  const timeOf = (row: typeof ahead) => stored.find((r) => r.tbl === row.tbl && r.rowKey === row.row_key)!.changedAt;
+  assert.ok(timeOf(ahead) <= Date.now());
+  assert.equal(timeOf(near), near.changed_at);
+});
+
+test("TRACER_SYNC accepts off, false and 0 in any case", async (t) => {
+  t.after(() => { delete process.env.TRACER_SYNC; stopSend(); });
+  const computer = await seededDb();
+  const api = transferRouter.createCaller({ db: computer, activeStreams: new Set(), isOwner: true } as never);
+  for (const value of ["OFF", "False", "0", " off "]) {
+    process.env.TRACER_SYNC = value;
+    assert.equal(await api.sendEnabled(), false, value);
+    await assert.rejects(startSend(computer, () => 0), /TRACER_SYNC=off/, value);
+  }
+  process.env.TRACER_SYNC = "on";
+  assert.equal(await api.sendEnabled(), true);
+  assert.equal((await startSend(computer, () => 0)).session.phase, "waiting");
+});
+
+test("TRACER_SYNC=off refuses to show a code and opens no listener", async (t) => {
+  t.after(() => { delete process.env.TRACER_SYNC; stopSend(); });
+  const computer = await seededDb();
+  const api = transferRouter.createCaller({ db: computer, activeStreams: new Set(), isOwner: true } as never);
+  assert.equal(await api.sendEnabled(), true);
+  process.env.TRACER_SYNC = "off";
+  assert.equal(await api.sendEnabled(), false);
+  await assert.rejects(startSend(computer, () => 0), /TRACER_SYNC=off/);
+  await assert.rejects(api.send(), /TRACER_SYNC=off/);
+  assert.equal(sendStatus(), null);
 });

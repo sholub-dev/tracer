@@ -1,0 +1,61 @@
+#cloud-config
+write_files:
+  - path: /etc/systemd/system/tracer.service
+    permissions: "0644"
+    owner: root
+    content: |
+      [Unit]
+      Description=Tracer
+      After=network-online.target docker.service
+      Wants=network-online.target docker.service
+
+      [Service]
+      Restart=always
+      RestartSec=10
+      ExecStart=/bin/bash /etc/tracer/start.sh
+      ExecStop=/usr/bin/docker stop -t 30 tracer
+
+      [Install]
+      WantedBy=multi-user.target
+  - path: /etc/tracer/start.sh
+    permissions: "0755"
+    owner: root
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      MD=http://metadata.google.internal/computeMetadata/v1/instance/attributes
+      IMAGE=$(curl -sf -H 'Metadata-Flavor: Google' "$MD/tracer-image")
+      SECRETS=$(curl -sf -H 'Metadata-Flavor: Google' "$MD/tracer-secrets")
+      [[ -n $SECRETS ]] || { echo "The tracer-secrets metadata value is empty." >&2; exit 1; }
+
+      export HOME=/home/cloudservice
+      mkdir -p "$HOME"
+      docker-credential-gcr configure-docker --registries="${IMAGE%%/*}"
+
+      # The server user gets no service account token, so no code in its container can read Secret Manager.
+      # Port 53 stays open: the same address is also the DNS resolver.
+      RULE=(OUTPUT -d 169.254.169.254 -p tcp ! --dport 53 -m owner --uid-owner 10001 -j REJECT)
+      iptables -C "${RULE[@]}" 2>/dev/null || iptables -I "${RULE[@]}"
+      # The metadata server also has an IPv6 address on dual-stack subnets. A VM with no IPv6 has no such table.
+      RULE6=(OUTPUT -d fd20:ce::254 -m owner --uid-owner 10001 -j REJECT)
+      ip6tables -C "${RULE6[@]}" 2>/dev/null || ip6tables -I "${RULE6[@]}" || echo "No IPv6 rule: ip6tables is not available"
+
+      mkdir -p /var/lib/tracer
+      chown -R 10001:10001 /var/lib/tracer
+
+      docker pull "$IMAGE"
+      docker rm -f tracer >/dev/null 2>&1 || true
+      # Host networking keeps the server on 127.0.0.1, the only address its web UI accepts.
+      HARDEN=(--network host --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 512)
+      # A second user fetches the secrets. The server gets them on stdin, so they are not in its container config.
+      VALUES=$(docker run --rm "${HARDEN[@]}" --user 10002:10002 -e TRACER_SECRETS="$SECRETS" \
+        "$IMAGE" node packages/server/dist/gcp-secrets-fetch.js)
+      # The UI is same-origin through the tunnel, so no other web origin gets CORS access.
+      exec docker run --rm -i --name tracer "${HARDEN[@]}" --user 10001:10001 \
+        --tmpfs /tmp:size=64m --tmpfs /home/node:uid=10001,gid=10001,size=64m -e HOME=/home/node \
+        -v /var/lib/tracer:/data -e TRACER_CORS_ORIGIN= -e TRACER_SYNC=off -e TRACER_HEADLESS=1 -e TRACER_SECRETS_STDIN=1 \
+        "$IMAGE" < <(printf '%s' "$VALUES")
+
+runcmd:
+  - systemctl daemon-reload
+  - systemctl start tracer.service

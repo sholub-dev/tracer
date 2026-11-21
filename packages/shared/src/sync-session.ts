@@ -16,6 +16,8 @@ export interface SyncSession {
   computerName: string;
   /** Unknown until the phone asks. */
   phoneName?: string;
+  /** Six digits from the phone's request. The person allows the sync only when both devices show the same code. */
+  code?: string;
   /** When the current wait for the other device ends. */
   expiresAt: number;
   /** Bytes of the data moving to the phone. `total` is 0 when unknown. */

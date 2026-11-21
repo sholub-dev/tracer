@@ -2,8 +2,10 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { request } from "node:http";
+import { isIPv4 } from "node:net";
 import { existsSync, readdirSync, statSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -65,7 +67,11 @@ analyze options:
 Environment:
   TRACER_PORT            Server port (default 3579)
   TRACER_HOST            Bind/target host (default 127.0.0.1)
-  TRACER_TOKEN           API token of the server; analyze sends it as a bearer token
+  TRACER_TOKEN           API token of a remote server; analyze sends it as a bearer token.
+                         Without it, analyze sends the secret of the local server from
+                         <TRACER_HOME>/session-token, and only to a 127.x.x.x address
+                         or ::1. "localhost" means 127.0.0.1
+  TRACER_HOME            Data folder of the server (default ~/.tracer)
   TRACER_SKIP_BUILD      Skip the source-checkout rebuild-on-launch check
 
 Examples:
@@ -76,11 +82,24 @@ Examples:
 `);
 }
 
+/** TRACER_TOKEN when set, else the secret that the local server keeps in its data folder. */
+function apiCredential(host) {
+  if (process.env.TRACER_TOKEN) return process.env.TRACER_TOKEN;
+  // The local secret opens the copy routes, so it goes to this computer only. Names do not count: they can resolve anywhere.
+  if (!(isIPv4(host) && host.startsWith("127.")) && host !== "::1") return "";
+  try {
+    return readFileSync(join(process.env.TRACER_HOME || join(homedir(), ".tracer"), "session-token"), "utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
 // node:http has no header or body timeout, unlike fetch (undici stops waiting after 300 s); an analysis can run longer.
-function postJson(url, payload) {
+function postJson(url, host, payload) {
   return new Promise((resolveResponse, reject) => {
     const headers = { "content-type": "application/json" };
-    if (process.env.TRACER_TOKEN) headers.authorization = `Bearer ${process.env.TRACER_TOKEN}`;
+    const credential = apiCredential(host);
+    if (credential) headers.authorization = `Bearer ${credential}`;
     const req = request(url, { method: "POST", headers }, (res) => {
       const chunks = [];
       res.on("data", (chunk) => chunks.push(chunk));
@@ -116,13 +135,14 @@ async function runAnalyze(args) {
     process.exit(2);
   }
 
-  const host = process.env.TRACER_HOST || "127.0.0.1";
+  // "localhost" can resolve to ::1, where another program can listen on the same port.
+  const host = (process.env.TRACER_HOST || "127.0.0.1").replace(/^localhost$/i, "127.0.0.1").replace(/^\[|\]$/g, "");
   const port = process.env.TRACER_PORT || "3579";
-  const url = `http://${host}:${port}/api/v1/analyze`;
+  const url = `http://${host.includes(":") ? `[${host}]` : host}:${port}/api/v1/analyze`;
 
   let res;
   try {
-    res = await postJson(url, { message, sessionId, provider });
+    res = await postJson(url, host, { message, sessionId, provider });
   } catch (err) {
     const code = err?.code ?? err?.cause?.code;
     if (code === "ECONNREFUSED") {

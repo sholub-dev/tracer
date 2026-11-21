@@ -3,7 +3,7 @@ import { runInTransaction, type Db } from "../db/driver.js";
 import * as schema from "../db/schema.js";
 import { failedWindowEnds } from "../monitors/store.js";
 import { LOCAL_SETTING_KEYS, SYNC_KEYS } from "../db/setup.js";
-import { checkRows, checkShape, FORMAT, isDesktopOnly, readSyncRows, readTable, SESSION_RUN_STATE, TABLES, type SyncRow } from "./snapshot.js";
+import { checkRows, checkShape, clampAhead, FORMAT, isDesktopOnly, readSyncRows, readTable, SESSION_RUN_STATE, TABLES, type SyncRow } from "./snapshot.js";
 
 type Row = Record<string, any>;
 
@@ -98,7 +98,9 @@ export async function mergeSyncPayload(db: Db, remote: SyncPayload): Promise<{ a
   const merged = await runInTransaction(db, async (tx) => {
     const logged = new Map((await readSyncRows(tx)).map((r) => [`${r.tbl}\0${r.row_key}`, r.changed_at]));
     const newer = new Map<string, SyncRow[]>();
-    for (const entry of remote.rows) {
+    const now = Date.now();
+    for (const given of remote.rows) {
+      const entry = clampAhead(given, now);
       if (!(entry.tbl in SYNC_KEYS)) continue;
       if (entry.tbl === "app_settings" && LOCAL_SETTING_KEYS.includes(entry.row_key)) continue;
       if (entry.changed_at > (logged.get(`${entry.tbl}\0${entry.row_key}`) ?? -1)) {

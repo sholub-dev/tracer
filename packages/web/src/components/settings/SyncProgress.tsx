@@ -71,6 +71,11 @@ export function SyncProgress({ session, device, children }: { session: SyncSessi
                     <p role={failed ? "alert" : "status"} className={failed ? "text-destructive" : "text-ink-2"}>
                       {stepMessage(session, device)}
                     </p>
+                    {phase === "approval" && session.code && (
+                      <p className="text-foreground">
+                        Code: <span className="font-mono text-base font-semibold tracking-widest">{session.code}</span>
+                      </p>
+                    )}
                     {phase === "approval" && session.mode && <p className="text-muted-foreground">{modeText(session.mode, device)}</p>}
                     {phase === "transfer" && showBar && (
                       <div className="space-y-1">

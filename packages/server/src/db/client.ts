@@ -17,6 +17,8 @@ const dbPath = join(dataDir, "tracer.db");
 const plaintext = isPlaintext(dbPath);
 const hasEncryptedDb = !plaintext && existsSync(dbPath) && statSync(dbPath).size > 0;
 const { key: keyHex, finishMigration } = resolveDbKey(TRACER_HOME, { hasEncryptedDb });
+// Child processes must not inherit the key.
+delete process.env.TRACER_DB_KEY;
 
 // Detection-driven, one-time migration: a plaintext DB left by a pre-encryption
 // version is converted in place on the first boot of the encrypted build. Fresh

@@ -27,16 +27,36 @@ function LastSyncRow() {
 
 const HOW_TO = [
   "On your computer, open Settings > Phone and click Show QR code. Then scan it with the iPhone Camera app.",
-  "Go back to your computer and click Allow.",
+  "Go back to your computer. Check that it shows the same code as this phone, then click Allow.",
   "The data moves to this phone. Keep Tracer open.",
   "This phone saves the data. Then tap Done.",
 ];
+
+function ForgetPairingRow() {
+  const utils = trpc.useUtils();
+  const { data } = trpc.transfer.lastSync.useQuery();
+  const forget = trpc.transfer.forgetPairings.useMutation({
+    onSuccess: () => utils.transfer.lastSync.invalidate(),
+    onError: (e) => toast.error(e.message),
+  });
+  if (!data?.paired) return null;
+  return (
+    <Row
+      label="Pairing"
+      description={IS_IOS
+        ? `This phone is paired with ${data.name || "your computer"}. Forget the computer only when a sync fails because the pairing is lost. The next sync then replaces the data on this phone.`
+        : "A paired phone can merge its changes into this computer. Forget the phones when you lose a phone or no longer use it. The next sync of each phone then replaces the data on that phone."}
+      control={<Button variant="outline" onClick={() => forget.mutate()} disabled={forget.isPending}>{IS_IOS ? "Forget computer" : "Forget phones"}</Button>}
+    />
+  );
+}
 
 function IosPhoneSettings() {
   return (
     <Section title="Phone" description="Sync Tracer on this phone with Tracer on your computer. Both must use the same Wi-Fi. The first sync replaces the data on this phone with a copy of the computer's data. Later syncs keep the newest version of each item. Monitors from the computer arrive paused.">
       <Group>
         <LastSyncRow />
+        <ForgetPairingRow />
         <Row
           label="How to sync"
           description={
@@ -56,6 +76,7 @@ function IosPhoneSettings() {
 
 function DesktopPhoneSettings() {
   const utils = trpc.useUtils();
+  const { data: enabled, isError: unavailable } = trpc.transfer.sendEnabled.useQuery(undefined, { retry: false });
   const send = trpc.transfer.send.useMutation({
     // The last poll may still show the previous code.
     onSuccess: ({ session }) => utils.transfer.sendStatus.setData(undefined, session),
@@ -95,10 +116,15 @@ function DesktopPhoneSettings() {
     <Section title="Phone" description="Sync your monitors, settings, keys, memory and sessions with the Tracer app on your iPhone. The phone and this computer must use the same Wi-Fi. The first sync copies everything to the phone. Every later sync uses the same steps and keeps the newest version of each item.">
       <Group>
         <LastSyncRow />
-        {!code || !session ? (
+        <ForgetPairingRow />
+        {unavailable ? (
+          <Row label="Sync with iPhone" description="Phone sync is not available from this connection. Open Tracer on the computer that runs it." />
+        ) : enabled === false ? (
+          <Row label="Sync with iPhone" description="Sync is off on this server (TRACER_SYNC=off). A phone syncs with Tracer on a computer on the same Wi-Fi." />
+        ) : !code || !session ? (
           <Row
             label="Sync with iPhone"
-            description="Show a code, scan it with the iPhone Camera app, then click Allow here. The code works once, for 2 minutes."
+            description="Show a QR code, scan it with the iPhone Camera app, compare the 6 digits on both devices, then click Allow here. The QR code works once, for 2 minutes."
             control={
               <Button onClick={showNew} disabled={send.isPending}>
                 {send.isPending && <Loader2 className="animate-spin" />}

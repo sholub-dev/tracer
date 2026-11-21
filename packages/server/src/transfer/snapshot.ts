@@ -5,7 +5,7 @@ import { runInTransaction, type Db } from "../db/driver.js";
 import * as schema from "../db/schema.js";
 import { LOCAL_SETTING_KEYS } from "../db/setup.js";
 import { isSlackWebhook } from "../integrations/slack.js";
-import { isPosthogHost, isPosthogProjectId } from "../providers/posthog/posthog.client.js";
+import { isPosthogHost, isPosthogProjectId, normalizePosthogHost } from "../providers/posthog/posthog.client.js";
 import { isJiraDomain } from "../integrations/jira/jira.client.js";
 
 // Parents before children, so inserts satisfy the foreign keys and deletes run in reverse.
@@ -22,7 +22,7 @@ export const TABLES: [string, SQLiteTable][] = [
   ["agent_runs", schema.agentRuns],
 ];
 
-export const FORMAT = 6;
+export const FORMAT = 7;
 
 export interface Snapshot {
   format: number;
@@ -36,6 +36,12 @@ export interface SyncRow {
   changed_at: number;
   deleted: number;
 }
+
+// Clocks of two devices differ a little; a time further ahead than this is not a real change time.
+const MAX_CLOCK_AHEAD_MS = 5 * 60_000;
+
+/** A time ahead of this clock would win every later merge. It counts as now: the row still arrives, and any later change is newer. */
+export const clampAhead = (entry: SyncRow, now: number): SyncRow => (entry.changed_at > now + MAX_CLOCK_AHEAD_MS ? { ...entry, changed_at: now } : entry);
 
 /** Throws unless the data from the other device has the shape of a snapshot or a sync payload. */
 export function checkShape(data: unknown): asserts data is Snapshot {
@@ -118,7 +124,7 @@ function checkProviderConfig(type: unknown, value: unknown): void {
   let config: { host?: unknown; projectId?: unknown } | null = null;
   try { config = JSON.parse(String(value)); } catch { /* rejected below */ }
   const host = config?.host;
-  const valid = (host === undefined || host === "" || (typeof host === "string" && isPosthogHost(host.trim().replace(/\/+$/, ""))))
+  const valid = (host === undefined || (typeof host === "string" && isPosthogHost(normalizePosthogHost(host))))
     && (config?.projectId === undefined || (typeof config.projectId === "string" && isPosthogProjectId(config.projectId)));
   if (!valid) throw new Error(`The data has an invalid provider config "${type}".`);
 }
@@ -177,14 +183,14 @@ export async function importSnapshot(db: Db, snapshot: Snapshot): Promise<Record
       await (name === "app_settings" ? tx.delete(table).where(notInArray(schema.appSettings.key, keep)) : tx.delete(table)).run();
     }
     for (const [name, table] of TABLES) {
-      const rows = name === "session_timers" ? [] : (snapshot.tables[name] ?? []).filter((r) => !isDesktopOnly(name, r));
+      const rows = name === "session_timers" ? [] : (snapshot.tables[name] ?? []).filter((r) => !isDesktopOnly(name, r) && !(name === "app_settings" && LOCAL_SETTING_KEYS.includes(String(r.key))));
       for (const batch of batches(rows)) await tx.insert(table).values(batch as never).run();
       counts[name] = rows.length;
     }
     // The triggers logged the import itself; the receiver takes the sender's log, so the next merge finds no difference.
     await tx.delete(schema.syncRows).run();
     for (const batch of batches(snapshot.rows)) {
-      await tx.insert(schema.syncRows).values(batch.map((r) => ({ tbl: r.tbl, rowKey: r.row_key, changedAt: r.changed_at, localAt, deleted: r.deleted }))).run();
+      await tx.insert(schema.syncRows).values(batch.map((r) => ({ tbl: r.tbl, rowKey: r.row_key, changedAt: clampAhead(r, localAt).changed_at, localAt, deleted: r.deleted }))).run();
     }
   });
   return counts;

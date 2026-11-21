@@ -48,7 +48,9 @@ export function stepMessage(session: SyncSession, device: Device): string {
     case "waiting":
       return device === "computer" ? "Scan the code with the iPhone Camera app." : "Contacting the computer.";
     case "approval":
-      return device === "computer" ? `${other} asks to sync. Click Allow.` : "Now click Allow on your computer.";
+      return device === "computer"
+        ? `${other} asks to sync. Click Allow only when the phone shows the same code. If the code differs or the phone shows none, click Deny.`
+        : "Check that your computer shows the same code. Then click Allow there.";
     case "transfer":
       return device === "computer" ? "Sending data to the phone." : "Receiving data from the computer. Keep Tracer open.";
     case "apply":

@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { createMCPClient } from "@ai-sdk/mcp";
 import { Experimental_StdioMCPTransport } from "@ai-sdk/mcp/mcp-stdio";
 import { BaseProvider } from "../providers/base.provider.js";
@@ -130,6 +131,8 @@ export class McpProvider extends BaseProvider {
       command: "npx",
       args: ["-y", `${server.package}@${server.version}`],
       env,
+      // Not the launch directory: an .npmrc or a node_modules folder in a project must not take part.
+      cwd: homedir(),
     });
 
     const clientPromise = createMCPClient({ transport });

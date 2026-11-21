@@ -1,7 +1,7 @@
 import type { SetupDriver } from "./driver.js";
 
 /** Settings that belong to one device: they never leave it and a copy or merge never touches them. */
-export const LOCAL_SETTING_KEYS = ["device_id", "sync_peer_id", "sync_peer_name", "sync_last_at", "sync_marks"];
+export const LOCAL_SETTING_KEYS = ["device_id", "sync_peer_id", "sync_peer_name", "sync_last_at", "sync_marks", "sync_pairings"];
 
 // Synced table -> key column that identifies a row on every device, and the column that dates existing rows.
 export const SYNC_KEYS: Record<string, { key: string; time?: string }> = {

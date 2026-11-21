@@ -2,11 +2,12 @@ import "./node-version.js";
 import { serve } from "@hono/node-server";
 import { CONFIG } from "./config.js";
 import { startUpdateChecks, setRestartHandler } from "./updater.js";
-import { db, setupDriver } from "./db/client.js";
+import { db, setupDriver, TRACER_HOME } from "./db/client.js";
 import { registerGcpProvider } from "./providers/gcp/register.js";
 import { registerApiRoutes } from "./http/routes/api.js";
 import { mountStaticFiles } from "./http/static.js";
 import { guardLocalRequests, isLoopbackBind } from "./http/local-guard.js";
+import { loadSessionToken } from "./http/session-token.js";
 import { startRuntime } from "./runtime.js";
 
 export type { AppRouter } from "./trpc/router.js";
@@ -18,17 +19,25 @@ async function main() {
   }
   const { providers, context, app, scheduler } = await startRuntime(db, setupDriver, registerGcpProvider);
   // After the runtime start: by then no key is left in the environment that the npm child process inherits.
-  startUpdateChecks();
+  // A headless server runs from an image: it cannot update in place, so it never asks the registry.
+  if (process.env.TRACER_HEADLESS !== "1") startUpdateChecks();
   registerApiRoutes(app, context);
   // Last: it answers every remaining GET with the web app.
   mountStaticFiles(app);
 
   // The Vite dev proxy keeps the browser's Origin; the built app serves the web app from this server (same origin).
-  const allowedOrigins = [CONFIG.corsOrigin, ...(import.meta.url.endsWith(".ts") ? ["http://localhost:5173", "http://127.0.0.1:5173"] : [])]
+  const isDev = import.meta.url.endsWith(".ts");
+  const allowedOrigins = [CONFIG.corsOrigin, ...(isDev ? ["http://localhost:5173", "http://127.0.0.1:5173"] : [])]
     .filter((o): o is string => !!o);
-  const fetch = guardLocalRequests(app.fetch, CONFIG.host, allowedOrigins, CONFIG.token);
+  const sessionToken = loadSessionToken(TRACER_HOME);
+  const fetch = guardLocalRequests(app.fetch, CONFIG.host, allowedOrigins, sessionToken, CONFIG.token);
   const server = serve({ fetch, port: CONFIG.port, hostname: CONFIG.host }, (info) => {
-    console.log(`Tracer server running on http://localhost:${info.port}`);
+    // An address, not "localhost": that name can resolve to ::1, where another program can listen on the same port.
+    const origin = `http://${info.address === "::1" ? "[::1]" : "127.0.0.1"}:${info.port}`;
+    console.log(`Tracer server running on ${origin}`);
+    // In development the web app runs on the Vite port and stores the secret for that origin.
+    // A headless server keeps the secret out of its log; the operator reads the token file.
+    if (process.env.TRACER_HEADLESS !== "1") console.log(`Open ${isDev ? "http://127.0.0.1:5173" : origin}/#t=${sessionToken}`);
   });
   server.on("error", (err: NodeJS.ErrnoException) => {
     if (err.code === "EADDRINUSE") {

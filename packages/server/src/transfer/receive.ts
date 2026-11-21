@@ -1,8 +1,8 @@
 import type { SyncCounts, SyncMode, SyncSession } from "@tracer-sh/shared";
 import type { Db } from "../db/driver.js";
 import { localDeviceId } from "../db/config-reader.js";
-import { MAX_BODY_BYTES, OldFormError, seal, TooLargeError, unseal, type SealLabel } from "./crypto.js";
-import { getMark, getSetting, recordSync, setMark } from "./peer.js";
+import { deriveSessionKey, isSecret, MAX_BODY_BYTES, newExchangeKey, OldFormError, seal, TooLargeError, unseal, verificationCode, type SealLabel } from "./crypto.js";
+import { getMark, getPairing, getSetting, recordSync, setMark, setPairing } from "./peer.js";
 import { FORMAT, importSnapshot, type Snapshot } from "./snapshot.js";
 import { exportSyncPayload, mergeSyncPayload, type SyncPayload } from "./sync.js";
 
@@ -11,6 +11,8 @@ export const COPY_LINK_PREFIX = "tracer://copy";
 export const MAX_NAME_LENGTH = 64;
 export const DEVICE_ID = /^[A-Za-z0-9-]{1,64}$/;
 export const APPROVAL_WINDOW_MS = 120_000;
+/** Carries the proof of the session key ahead of a merge upload, so the computer reads the upload of this phone only. */
+export const PROOF_HEADER = "x-tracer-proof";
 // A large copy on a slow Wi-Fi needs minutes, and the computer compresses before it answers.
 const FETCH_TIMEOUT_MS = 300_000;
 const POLL_INTERVAL_MS = 1000;
@@ -25,7 +27,8 @@ export const cleanText = (text: string, max: number) => text.replace(/[\p{Cc}\p{
 
 export const total = (counts: Record<string, number>) => Object.values(counts).reduce((a, b) => a + b, 0);
 
-type CopyLink = { from: URL; key: string; name?: string; device?: string };
+type CopyLink = { from: URL; key: string; name?: string; device?: string; pk?: string };
+const EXCHANGE_KEY = /^[A-Za-z0-9_-]{87}$/;
 
 /** Reads a copy link from a QR code. Throws when it is not one. */
 export function parseCopyLink(link: string): CopyLink {
@@ -40,18 +43,32 @@ export function parseCopyLink(link: string): CopyLink {
   }
   const name = cleanText(params.get("name") ?? "", MAX_NAME_LENGTH);
   const device = params.get("device") ?? "";
-  return { from, key, ...(name && { name }), ...(DEVICE_ID.test(device) && { device }) };
+  const pk = params.get("pk") ?? "";
+  return { from, key, ...(name && { name }), ...(DEVICE_ID.test(device) && { device }), ...(EXCHANGE_KEY.test(pk) && { pk }) };
 }
 
-/** Sync with the computer this phone synced with before, otherwise replace. */
-async function modeFor(db: Db, device: string | undefined): Promise<SyncMode> {
-  return device && device === (await getSetting(db, "sync_peer_id")) ? "merge" : "replace";
+const UPDATE_COMPUTER = "Update Tracer on the computer to the same version as the phone, then show a new code.";
+const UPDATE_PHONE = "Update Tracer on the phone to the same version as the computer, then scan the code again.";
+
+type PairLink = CopyLink & { device: string; pk: string };
+
+/** A code from an older computer has no exchange key. */
+function parsePairLink(link: string): PairLink {
+  const copy = parseCopyLink(link);
+  if (!copy.device || !copy.pk) throw new Error(UPDATE_COMPUTER);
+  return copy as PairLink;
 }
 
-/** Decides what a scan does. */
-export async function inspectCopy(db: Db, link: string): Promise<{ mode: SyncMode; name: string; address: string }> {
-  const { from, name, device } = parseCopyLink(link);
-  return { mode: await modeFor(db, device), name: name ?? "", address: from.hostname };
+const modeFor = (pairing: string | undefined): SyncMode => (pairing ? "merge" : "replace");
+
+/**
+ * Decides what a scan does. The phone merges only with a computer whose pairing secret it holds; otherwise it replaces.
+ * `pairedBefore`: the phone synced with this computer, but holds no pairing secret for it now.
+ */
+export async function inspectCopy(db: Db, link: string): Promise<{ mode: SyncMode; name: string; address: string; pairedBefore: boolean }> {
+  const { from, name, device } = parsePairLink(link);
+  const mode = modeFor(await getPairing(db, device));
+  return { mode, name: name ?? "", address: from.hostname, pairedBefore: mode === "replace" && device === (await getSetting(db, "sync_peer_id")) };
 }
 
 const UNREACHABLE = "The computer does not answer. Make sure the phone and the computer use the same Wi-Fi. If iOS asks for Local Network access, allow it. Then scan the code again.";
@@ -112,8 +129,10 @@ async function call(url: URL, init: RequestInit, { timeoutMs = 15_000, transfer 
 
 function check({ status, text }: { status: number; text: string }): string {
   if (status === 404) throw new Error(EXPIRED);
-  if (status === 409) throw new Error(text || "The computer is busy. Show a new code and try again.");
-  if (status === 413 && text) throw new Error(text);
+  // The text comes from the other device and is shown as it is.
+  const said = cleanText(text, 500);
+  if (status === 409) throw new Error(said || "The computer is busy. Show a new code and try again.");
+  if (status === 413 && said) throw new Error(said);
   if (status === 408) throw new Error("The computer stopped waiting for the data from this phone. Move closer to the Wi-Fi router, then show a new code and try again.");
   if (status === 403) throw new Error("The computer refused the request. Show a new code on the computer and scan it again.");
   if (status === 500) throw new Error("The computer failed while it prepared the data. Show a new code and try again. If it fails again, restart Tracer on the computer.");
@@ -121,8 +140,9 @@ function check({ status, text }: { status: number; text: string }): string {
   return text;
 }
 
-const UPDATE_COMPUTER = "Update Tracer on the computer to the same version as the phone, then show a new code.";
-const UPDATE_PHONE = "Update Tracer on the phone to the same version as the computer, then scan the code again.";
+const NO_DECRYPT = "The data does not decrypt. Show a new code on the computer and scan it again.";
+const NOT_THE_PAIRED_COMPUTER = "The computer did not prove that it is the computer this phone is paired with, so the phone sent no data. Sync only with your own computer. If this is your computer, open Settings > Phone on the phone, tap Forget computer, then scan a new code.";
+const DAMAGED = "The data from the computer is damaged. Show a new code and try again.";
 
 async function open<T>(text: string, key: string, label: SealLabel): Promise<T> {
   try {
@@ -130,21 +150,27 @@ async function open<T>(text: string, key: string, label: SealLabel): Promise<T> 
   } catch (err) {
     if (err instanceof OldFormError) throw new Error(UPDATE_COMPUTER);
     if (err instanceof TooLargeError) throw err;
-    throw new Error("The data does not decrypt. Show a new code on the computer and scan it again.");
+    throw new Error(NO_DECRYPT);
   }
 }
 
 /** The time on the computer's clock becomes the sync mark, so it must be a real number before anything is written. */
 function checkTime(at: unknown): asserts at is number {
-  if (typeof at !== "number" || !Number.isFinite(at)) throw new Error("The data from the computer is damaged. Show a new code and try again.");
+  if (typeof at !== "number" || !Number.isFinite(at)) throw new Error(DAMAGED);
 }
 
 type OwnPhase = "approval" | "transfer" | "apply" | "done" | "failed" | "cancelled";
 
 /** What this phone knows about the running sync; the computer's last answer fills in the rest. */
 interface Job {
-  copy: CopyLink;
+  copy: PairLink;
   deviceId: string;
+  /** The secret from the first sync with this computer. With it the sync is a merge. */
+  pairing?: string;
+  /** Seals everything after the request. Set once the computer proved that it holds the same key. */
+  key?: string;
+  /** Computed on this phone, never taken from the computer. */
+  code?: string;
   abort: AbortController;
   mode: SyncMode;
   computerName: string;
@@ -167,8 +193,8 @@ const finished = (j: Job) => j.own.phase === "done" || j.own.phase === "failed" 
 /** The phone's view of the sync: the last answer of the computer, overlaid with what the phone itself did. */
 export function receiveStatus(): SyncSession | null {
   if (!job) return null;
-  const { remote, own, mode, computerName, phoneName, expiresAt } = job;
-  const base = { mode, computerName, phoneName, expiresAt: remote?.expiresAt ?? expiresAt };
+  const { remote, own, mode, computerName, phoneName, expiresAt, code } = job;
+  const base = { mode, computerName, phoneName, code, expiresAt: remote?.expiresAt ?? expiresAt };
   const computer = remote?.result?.computer;
   if (own.phase === "failed" || own.phase === "cancelled") {
     const phase = own.reached ?? "approval";
@@ -196,12 +222,17 @@ function checkVersion(format: unknown): void {
 }
 
 /** The format is plain text and only selects the update message. The session itself comes sealed. */
-async function readStatus(current: Job, url: URL, options: CallOptions): Promise<SyncSession> {
+async function fetchStatus(url: URL, options: CallOptions): Promise<string> {
   let reply: { format?: unknown; sealed?: unknown } = {};
   try { reply = (JSON.parse(check(await call(url, {}, options))) ?? {}) as typeof reply; } catch (err) { if (!(err instanceof SyntaxError)) throw err; }
   checkVersion(reply.format);
-  const session = await open<SyncSession>(String(reply.sealed), current.copy.key, "status");
-  if (typeof session?.phase !== "string") throw new Error("The data does not decrypt. Show a new code on the computer and scan it again.");
+  return String(reply.sealed);
+}
+
+async function readStatus(current: Job, url: URL, options: CallOptions): Promise<SyncSession> {
+  if (!current.key) throw new Error(NO_DECRYPT);
+  const session = await open<SyncSession>(await fetchStatus(url, options), current.key, "status");
+  if (typeof session?.phase !== "string") throw new Error(NO_DECRYPT);
   current.remote = session;
   return session;
 }
@@ -226,7 +257,8 @@ async function awaitApproval(current: Job, url: URL, options: CallOptions): Prom
 }
 
 async function run(db: Db, current: Job, beforeImport?: () => void): Promise<{ mode: SyncMode; counts: Record<string, number> }> {
-  const { copy: { from, key, name, device }, deviceId, mode, abort: { signal }, own } = current;
+  const { copy, deviceId, pairing, mode, abort: { signal }, own } = current;
+  const { from, name, device, pk } = copy;
   const at = (suffix: string) => new URL(from.pathname + suffix, from);
   const stopped = () => { if (signal.aborted) throw new Error(CANCELLED); };
   // A cancel on the computer does not cut a transfer under way, so the phone asks before it writes anything.
@@ -237,6 +269,9 @@ async function run(db: Db, current: Job, beforeImport?: () => void): Promise<{ m
   };
   const report = (body: Record<string, unknown>) => {
     current.reports = current.reports.then(async () => {
+      // Without a session key the computer is not proven, so nothing more goes to it.
+      const key = current.key;
+      if (!key) return;
       try {
         // Not tied to the cancel signal: the report that follows a cancel still has to leave.
         check(await call(at("/progress"), { method: "POST", body: await seal(JSON.stringify(body), key, "progress") }, { timeoutMs: 5000 }));
@@ -245,10 +280,29 @@ async function run(db: Db, current: Job, beforeImport?: () => void): Promise<{ m
     return current.reports;
   };
 
+  // The request left, and no answer came: the computer may show a prompt for a phone that is gone.
+  let unanswered = false;
+
   try {
-    await readStatus(current, at("/status"), { signal });
-    const request = await seal(JSON.stringify({ deviceId, name: current.phoneName, mode, format: FORMAT }), key, "request");
-    check(await call(at("/request"), { method: "POST", body: request }, { signal }));
+    await fetchStatus(at("/status"), { signal });
+    const exchange = await newExchangeKey();
+    let key: string;
+    try {
+      key = await deriveSessionKey(exchange.privateKey, pk, { key: copy.key, pairing, mode, computer: device, phone: deviceId });
+    } catch {
+      throw new Error("This is not a Tracer copy code.");
+    }
+    const hello = await seal("{}", key, "hello");
+    const request = await seal(JSON.stringify({ deviceId, name: current.phoneName, mode, format: FORMAT, pk: exchange.publicKey, hello }), copy.key, "request");
+    unanswered = true;
+    const answer = await call(at("/request"), { method: "POST", body: request }, { signal });
+    unanswered = false;
+    const welcome = check(answer);
+    // Only the computer that holds the exchange key from the code and, for a merge, the pairing secret can seal this answer.
+    // The phone sends its rows only after the answer opens.
+    try { await unseal(welcome, key, "welcome"); } catch { throw new Error(mode === "merge" ? NOT_THE_PAIRED_COMPUTER : NO_DECRYPT); }
+    current.key = key;
+    current.code = await verificationCode(key, request);
     await awaitApproval(current, at("/status"), { signal });
 
     own.phase = "transfer";
@@ -264,23 +318,25 @@ async function run(db: Db, current: Job, beforeImport?: () => void): Promise<{ m
     let counts: Record<string, number>;
     let result: SyncCounts;
     if (mode === "replace") {
-      const text = check(await call(at(""), {}, transfer));
+      const text = check(await call(at(""), { method: "POST", body: await seal("{}", key, "snapshot-request") }, transfer));
       await beforeWrite();
       own.phase = "apply";
       void report({ phase: "apply", bytes: own.bytes });
-      const { at: theirs, snapshot } = await open<{ at: unknown; snapshot: Snapshot }>(text, key, "snapshot");
+      const { at: theirs, snapshot, pairing: secret } = await open<{ at: unknown; snapshot: Snapshot; pairing: unknown }>(text, key, "snapshot");
       checkTime(theirs);
+      if (!isSecret(secret)) throw new Error(DAMAGED);
       beforeImport?.();
       counts = await importSnapshot(db, snapshot);
       result = { applied: total(counts), deleted: 0 };
       // The import wrote the whole change log just now; the next merge needs to send none of it back.
-      if (device) await setMark(db, device, { mine: Date.now(), theirs });
+      await setMark(db, device, { mine: Date.now(), theirs });
+      await setPairing(db, device, secret, true);
     } else {
-      const mark = device ? await getMark(db, device) : undefined;
+      const mark = await getMark(db, device);
       // Taken before the export: a change made while the exchange runs is sent next time.
       const startedAt = Date.now();
       const sent = await seal(JSON.stringify({ since: mark?.theirs, payload: await exportSyncPayload(db, mark?.mine) }), key, "merge-up");
-      const text = check(await call(at("/merge"), { method: "POST", body: sent }, transfer));
+      const text = check(await call(at("/merge"), { method: "POST", body: sent, headers: { [PROOF_HEADER]: await seal("{}", key, "merge-request") } }, transfer));
       await beforeWrite();
       own.phase = "apply";
       void report({ phase: "apply", bytes: own.bytes });
@@ -290,7 +346,7 @@ async function run(db: Db, current: Job, beforeImport?: () => void): Promise<{ m
       const merged = await mergeSyncPayload(db, payload);
       counts = merged.applied;
       result = { applied: total(merged.applied), deleted: total(merged.deleted) };
-      if (device) await setMark(db, device, { mine: startedAt, theirs });
+      await setMark(db, device, { mine: startedAt, theirs });
     }
     await recordSync(db, { id: device, name: name ?? "" });
     // The computer counted its part before it answered.
@@ -304,15 +360,22 @@ async function run(db: Db, current: Job, beforeImport?: () => void): Promise<{ m
     if (own.phase !== "done" && own.phase !== "failed" && own.phase !== "cancelled") own.reached = own.phase;
     if (signal.aborted) {
       own.phase = "cancelled";
-      try { await call(at("/cancel"), { method: "POST", body: await seal("{}", key, "cancel") }, { timeoutMs: 5000 }); } catch { /* best effort: the wait on the computer ends by itself */ }
+      if (current.key) {
+        try { await call(at("/cancel"), { method: "POST", body: await seal("{}", current.key, "cancel") }, { timeoutMs: 5000 }); } catch { /* best effort: the wait on the computer ends by itself */ }
+      }
     } else {
       // The computer may have ended the sync and may say why.
-      if (!endedByComputer(current)) await readStatus(current, at("/status"), { timeoutMs: 3000 }).catch(() => undefined);
+      if (current.key && !endedByComputer(current)) await readStatus(current, at("/status"), { timeoutMs: 3000 }).catch(() => undefined);
       if (!endedByComputer(current)) {
         own.phase = "failed";
         own.error = message;
-        await report({ phase: "failed", error: message });
+        // The computer reads only a short report.
+        await report({ phase: "failed", error: cleanText(message, 500) });
       }
+    }
+    if (unanswered) {
+      // No session key is proven yet, so the key from the code seals this. The computer accepts it only while it asks to allow this phone.
+      try { await call(at("/cancel"), { method: "POST", body: await seal(JSON.stringify({ deviceId }), copy.key, "cancel-request") }, { timeoutMs: 5000 }); } catch { /* best effort: the wait on the computer ends by itself */ }
     }
     await current.reports;
     throw err;
@@ -325,8 +388,9 @@ async function run(db: Db, current: Job, beforeImport?: () => void): Promise<{ m
  * so it can refuse when work started in the meantime.
  */
 export async function startReceive(db: Db, link: string, beforeImport?: () => void): Promise<{ done: Promise<{ mode: SyncMode; counts: Record<string, number> }>; session: SyncSession }> {
-  const copy = parseCopyLink(link);
-  const mode = await modeFor(db, copy.device);
+  const copy = parsePairLink(link);
+  const pairing = await getPairing(db, copy.device);
+  const mode = modeFor(pairing);
   const deviceId = await localDeviceId(db);
   // Checked after the reads: no await may sit between the check and the claim of `job`.
   if (job && !finished(job)) {
@@ -335,6 +399,7 @@ export async function startReceive(db: Db, link: string, beforeImport?: () => vo
   const current: Job = {
     copy,
     deviceId,
+    pairing,
     abort: new AbortController(),
     mode,
     computerName: copy.name ?? "",

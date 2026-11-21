@@ -33,7 +33,7 @@ export function CopyFromComputerDialog() {
     enabled: started,
     refetchInterval: (q) => (q.state.data && isSyncOver(q.state.data.phase) ? false : 700),
   });
-  const { mode, name, address } = inspect.data ?? { mode: null, name: "", address: "" };
+  const { mode, name, address, pairedBefore } = inspect.data ?? { mode: null, name: "", address: "", pairedBefore: false };
   const computer = name || address || "your computer";
 
   const session = started ? status : null;
@@ -64,6 +64,7 @@ export function CopyFromComputerDialog() {
             ) : (
               <div className="space-y-2">
                 <p>{mode ? modeText(mode, "phone") : "Checking the code."}</p>
+                {pairedBefore && <p>This phone synced with this computer before, but the two must pair again. Changes made only on this phone are lost.</p>}
                 {mode === "replace" && <p>This replaces all data on this phone: sessions, monitors, data sources and keys. Monitors arrive paused. Sync only with your own computer.</p>}
                 <p>Keep Tracer open until the sync ends.</p>
               </div>

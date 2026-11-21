@@ -25,9 +25,10 @@ export const CONFIG = {
   port: Number(ENV.TRACER_PORT) || 3579,
 
   /** HTTP server bind address. Loopback by default; set TRACER_HOST=0.0.0.0 to expose externally. */
-  host: ENV.TRACER_HOST || "127.0.0.1",
+  // "localhost" can resolve to ::1 only, where another program can listen on the same port.
+  host: (ENV.TRACER_HOST || "127.0.0.1").replace(/^localhost$/i, "127.0.0.1"),
 
-  /** Bearer token every /api request must carry. Required when the server binds to a non-loopback address. */
+  /** Bearer token for remote clients; opens every /api route but the copy routes. Required when the server binds to a non-loopback address. */
   token: ENV.TRACER_TOKEN || null as string | null,
 
   /** Cap on one /api request body; fits several inline image attachments. */

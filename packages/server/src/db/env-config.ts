@@ -1,7 +1,7 @@
 import { ENV, SETTINGS_KEYS } from "../config.js";
 import type { Db } from "./driver.js";
 import { readAppSetting, readProviderConfig, writeAppSetting, writeProviderConfig } from "./config-reader.js";
-import { isPosthogHost, isPosthogProjectId } from "../providers/posthog/posthog.client.js";
+import { isPosthogHost, isPosthogProjectId, normalizePosthogHost } from "../providers/posthog/posthog.client.js";
 import { isJiraDomain } from "../integrations/jira/jira.client.js";
 import { isSlackWebhook } from "../integrations/slack.js";
 
@@ -17,7 +17,7 @@ interface Target {
 
 /** The same checks the settings routes apply. */
 const VALID: Record<string, (value: string) => boolean> = {
-  TRACER_POSTHOG_HOST: isPosthogHost,
+  TRACER_POSTHOG_HOST: (host) => isPosthogHost(normalizePosthogHost(host)),
   TRACER_POSTHOG_PROJECT_ID: isPosthogProjectId,
   TRACER_JIRA_DOMAIN: isJiraDomain,
   TRACER_SLACK_WEBHOOK_URL: isSlackWebhook,

@@ -60,6 +60,28 @@ test("saveConfig keeps a stored secret when the client sends its masked form", a
   assert.equal((await stored("posthog")).apiKey, "phx_new_key");
 });
 
+test("saveConfig needs the PostHog key again when the host changes", async () => {
+  const { api, stored } = await posthogCaller();
+  await api.saveConfig({ type: "posthog", config: { apiKey: "phx_secret_1234", projectId: "1", host: "https://eu.posthog.com" } });
+  const shown = (await api.getConfigs()).find((c) => c.type === "posthog")!.config;
+  await assert.rejects(api.saveConfig({ type: "posthog", config: { ...shown, host: "https://other.example" } }), /key again/);
+  assert.equal((await stored("posthog")).host, "https://eu.posthog.com");
+  await api.saveConfig({ type: "posthog", config: { ...shown, host: "https://eu.posthog.com/" } });
+  await api.saveConfig({ type: "posthog", config: { ...shown, apiKey: "phx_secret_1234", host: "https://us.posthog.com" } });
+  assert.equal((await stored("posthog")).host, "https://us.posthog.com");
+});
+
+test("saveConfig reads an unset PostHog host and the default host as the same host", async () => {
+  const { api, stored } = await posthogCaller();
+  await api.saveConfig({ type: "posthog", config: { apiKey: "phx_secret_1234", projectId: "1" } });
+  const shown = (await api.getConfigs()).find((c) => c.type === "posthog")!.config;
+  await api.saveConfig({ type: "posthog", config: { ...shown, host: "https://us.posthog.com/" } });
+  assert.equal((await stored("posthog")).host, "https://us.posthog.com/");
+  await api.saveConfig({ type: "posthog", config: { ...shown, host: "" } });
+  await assert.rejects(api.saveConfig({ type: "posthog", config: { ...shown, host: "https://eu.posthog.com" } }), /key again/);
+  assert.equal((await stored("posthog")).apiKey, "phx_secret_1234");
+});
+
 test("a provider with no declared fields masks and keeps token and password values", async () => {
   const { api, stored } = await posthogCaller();
   const config = { accessToken: "token-value-1", password: "password-value-1", region: "eu" };

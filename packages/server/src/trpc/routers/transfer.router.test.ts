@@ -5,11 +5,13 @@ import { createNodeDb } from "../../db/node-db.js";
 import { runSetup } from "../../db/setup.js";
 import { appSettings } from "../../db/schema.js";
 import { transferRouter } from "./transfer.router.js";
+import { setPairing } from "../../transfer/peer.js";
+import { randomSecret } from "../../transfer/crypto.js";
 
 async function caller() {
   const { db, setupDriver } = createNodeDb(new Database(":memory:"));
   await runSetup(setupDriver);
-  return { db, api: transferRouter.createCaller({ db, activeStreams: new Map(), receivesCopy: true } as never) };
+  return { db, api: transferRouter.createCaller({ db, activeStreams: new Map(), receivesCopy: true, isOwner: true } as never) };
 }
 
 test("both statuses are null when no sync runs", async () => {
@@ -36,21 +38,43 @@ test("lastSync is null on an empty database and reports the stored peer", async 
   const { db, api } = await caller();
   assert.equal(await api.lastSync(), null);
   await db.insert(appSettings).values([{ key: "sync_last_at", value: "1700000000000" }, { key: "sync_peer_name", value: "Phone" }]).run();
-  assert.deepEqual(await api.lastSync(), { name: "Phone", at: 1700000000000 });
+  assert.deepEqual(await api.lastSync(), { name: "Phone", at: 1700000000000, paired: false });
 });
 
 test("receive refuses while an investigation runs", async () => {
   const { db } = await caller();
-  const api = transferRouter.createCaller({ db, activeStreams: new Map([["s", {}]]), receivesCopy: true } as never);
+  const api = transferRouter.createCaller({ db, activeStreams: new Map([["s", {}]]), receivesCopy: true, isOwner: true } as never);
   await assert.rejects(api.receive({ link: "tracer://copy" }), /investigation is running/);
 });
 
 test("a server that does not receive copies refuses the receiving procedures", async () => {
   const { db } = await caller();
-  const api = transferRouter.createCaller({ db, activeStreams: new Map() } as never);
+  const api = transferRouter.createCaller({ db, activeStreams: new Map(), isOwner: true } as never);
   await assert.rejects(api.inspect({ link: "tracer://copy" }), /does not receive/);
   await assert.rejects(api.receive({ link: "tracer://copy" }), /does not receive/);
   await assert.rejects(api.receiveStatus(), /does not receive/);
   await assert.rejects(api.cancelReceive(), /does not receive/);
   assert.equal(await api.sendStatus(), null);
+});
+
+test("a caller that is not the owner gets FORBIDDEN on every procedure, before the input check", async () => {
+  const { db } = await caller();
+  for (const flag of [{}, { isOwner: false }]) {
+    const ctx = { db, activeStreams: new Map(), receivesCopy: true, ...flag };
+    const api = transferRouter.createCaller(ctx as never) as unknown as Record<string, () => Promise<unknown>>;
+    for (const name of Object.keys(transferRouter._def.procedures)) {
+      await assert.rejects(api[name](), { code: "FORBIDDEN", message: /does not open the copy routes/ }, name);
+    }
+  }
+});
+
+test("the computer reports a paired phone and forgets every pairing", async () => {
+  const { db } = await caller();
+  const api = transferRouter.createCaller({ db, activeStreams: new Map(), isOwner: true } as never);
+  await db.insert(appSettings).values([{ key: "sync_last_at", value: "1700000000000" }, { key: "sync_peer_name", value: "Phone" }]).run();
+  assert.equal((await api.lastSync())?.paired, false);
+  await setPairing(db, "p-1", randomSecret());
+  assert.equal((await api.lastSync())?.paired, true);
+  await api.forgetPairings();
+  assert.equal((await api.lastSync())?.paired, false);
 });

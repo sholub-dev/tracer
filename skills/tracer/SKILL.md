@@ -17,6 +17,10 @@ the final analysis, plus a session id you can pass back to continue it.
 - The Tracer server running locally (default `http://127.0.0.1:3579`; override
   with `TRACER_HOST` / `TRACER_PORT`). Health check:
   `curl -s 127.0.0.1:3579/health` returns `{"status":"ok"}`.
+- The CLI authenticates on its own: it reads the server's secret from
+  `~/.tracer/session-token` (or `$TRACER_HOME/session-token`), or sends
+  `TRACER_TOKEN` when that is set. Run it as the same OS user as the server.
+  It sends the file secret only to a `127.x.x.x` address or `::1`.
 - An LLM key configured in Tracer's Settings, and data providers connected for
   real queries.
 - The CLI: `tracer-sh` if installed globally (`npm i -g tracer-sh`), otherwise

@@ -130,8 +130,10 @@ ensure_db_key() {
       gcloud secrets create tracer-db-key --data-file=- --replication-policy=automatic --project "$PROJECT" >/dev/null
     unset key
   fi
-  [[ -n $(gcloud secrets versions list tracer-db-key --project "$PROJECT" --filter=state=ENABLED --limit 1 --format='value(name)') ]] ||
-    die "Secret tracer-db-key has no enabled version. If no database uses it, delete the secret and run again."
+}
+
+has_version() {
+  [[ -n $(gcloud secrets versions list "$1" --project "$PROJECT" --filter=state=ENABLED --limit 1 --format='value(name)') ]]
 }
 
 ensure_chat_model() {
@@ -152,6 +154,7 @@ build_secrets() {
   for entry in "${KEYS[@]}"; do
     IFS='|' read -r env id _ <<<"$entry"
     secret_exists "$id" || continue
+    has_version "$id" || die "Secret $id has no enabled version. Delete the secret, then set the key again."
     gcloud secrets add-iam-policy-binding "$id" --project "$PROJECT" \
       --member "serviceAccount:$SA" --role roles/secretmanager.secretAccessor >/dev/null
     out+=("$env=$id")
@@ -178,16 +181,17 @@ ensure_repo() {
 }
 
 build_image() {
-  local version sha tag digest
+  local version tag digest bucket="gs://$PROJECT-tracer-build"
   version=$(node -p "require('./package.json').version")
-  sha=$(git rev-parse --short HEAD)
-  [[ -z $(git status --porcelain) ]] || sha="$sha-dirty"
-  tag="$version-$sha"
+  tag="$version-$(git rev-parse --short HEAD)"
   IMAGE="$REGION-docker.pkg.dev/$PROJECT/$REPO/tracer"
-  # A build account with no other rights: the build steps can reach the token of the account they run as.
-  local bucket="gs://${PROJECT}_cloudbuild"
+  # Only committed files go into the build, so a stray local file cannot reach the image.
+  [[ -z $(git status --porcelain) ]] || echo "Note: uncommitted changes are not deployed."
+  mkdir "$TMP/src"
+  git archive HEAD | tar -x -C "$TMP/src"
+  # The build account has no other rights: the build steps can reach the token of the account they run as.
   gcloud storage buckets describe "$bucket" --project "$PROJECT" >/dev/null 2>&1 ||
-    gcloud storage buckets create "$bucket" --project "$PROJECT"
+    gcloud storage buckets create "$bucket" --location "$REGION" --project "$PROJECT"
   gcloud storage buckets add-iam-policy-binding "$bucket" \
     --member "serviceAccount:$BUILD_SA" --role roles/storage.objectViewer >/dev/null
   cat >"$TMP/cloudbuild.yaml" <<'YAML'
@@ -198,41 +202,46 @@ images: [$_IMAGE]
 options:
   logging: CLOUD_LOGGING_ONLY
 YAML
-  gcloud builds submit --region "$REGION" --project "$PROJECT" --config "$TMP/cloudbuild.yaml" \
-    --substitutions "_IMAGE=$IMAGE:$tag" \
-    --service-account "projects/$PROJECT/serviceAccounts/$BUILD_SA" .
-  # The VM runs the digest, so a later push to the tag cannot change what it runs.
-  digest=$(gcloud artifacts docker images describe "$IMAGE:$tag" --project "$PROJECT" \
-    --format='value(image_summary.digest)')
+  # The VM runs the digest of this build, so a later push to the tag cannot change what it runs.
+  digest=$(gcloud builds submit "$TMP/src" --region "$REGION" --project "$PROJECT" \
+    --config "$TMP/cloudbuild.yaml" --substitutions "_IMAGE=$IMAGE:$tag" \
+    --gcs-source-staging-dir "$bucket/source" \
+    --service-account "projects/$PROJECT/serviceAccounts/$BUILD_SA" \
+    --format='value(results.images[0].digest)')
   [[ $digest == sha256:* ]] || die "Cannot read the image digest."
   IMAGE="$IMAGE@$digest"
+}
+
+ensure_rule() { # name, then the flags of the rule
+  gcloud compute firewall-rules describe "$1" --project "$PROJECT" >/dev/null 2>&1 ||
+    gcloud compute firewall-rules create "$1" --project "$PROJECT" \
+      --network "$NETWORK" --direction INGRESS --target-tags tracer "${@:2}"
 }
 
 ensure_firewall() {
   gcloud compute networks describe "$NETWORK" --project "$PROJECT" >/dev/null 2>&1 ||
     die "Network '$NETWORK' does not exist. Pass --network with an existing network."
-  # SSH only from IAP. The deny rule beats wider rules on the network, such as default-allow-ssh.
-  if gcloud compute firewall-rules describe tracer-allow-iap-ssh --project "$PROJECT" >/dev/null 2>&1; then
-    gcloud compute firewall-rules update tracer-allow-iap-ssh --project "$PROJECT" --priority 900
-  else
-    gcloud compute firewall-rules create tracer-allow-iap-ssh --project "$PROJECT" \
-      --network "$NETWORK" --direction INGRESS --allow tcp:22 --priority 900 \
-      --source-ranges 35.235.240.0/20 --target-tags tracer
-  fi
-  gcloud compute firewall-rules describe tracer-deny-ssh --project "$PROJECT" >/dev/null 2>&1 ||
-    gcloud compute firewall-rules create tracer-deny-ssh --project "$PROJECT" \
-      --network "$NETWORK" --direction INGRESS --action DENY --rules tcp:22 --priority 950 \
-      --source-ranges 0.0.0.0/0 --target-tags tracer
+  # SSH only from IAP. The two highest priorities beat every other rule on the network, such as default-allow-ssh.
+  ensure_rule "tracer-$NETWORK-allow-iap-ssh" --allow tcp:22 --priority 0 --source-ranges 35.235.240.0/20
+  ensure_rule "tracer-$NETWORK-deny-ssh" --action DENY --rules tcp:22 --priority 1 --source-ranges 0.0.0.0/0
 }
 
 deploy_vm() {
   # OS Login ties SSH to IAM roles; keys in the project metadata do not work on this VM.
   local meta=(--metadata "tracer-image=$IMAGE,google-logging-enabled=true,enable-oslogin=TRUE,block-project-ssh-keys=TRUE"
-    --metadata-from-file "user-data=scripts/gcp/cloud-init.yaml,tracer-secrets=$TMP/secrets")
-  if gcloud compute instances describe "$NAME" --zone "$ZONE" --project "$PROJECT" >/dev/null 2>&1; then
+    --metadata-from-file "user-data=$TMP/src/scripts/gcp/cloud-init.yaml,tracer-secrets=$TMP/secrets")
+  local network
+  if network=$(gcloud compute instances describe "$NAME" --zone "$ZONE" --project "$PROJECT" \
+    --format='value(networkInterfaces[0].network)' 2>/dev/null); then
+    [[ $network == */networks/"$NETWORK" ]] ||
+      die "VM '$NAME' is not on network '$NETWORK'. Pass its network with --network."
     gcloud compute instances add-metadata "$NAME" --zone "$ZONE" --project "$PROJECT" "${meta[@]}"
+    # The firewall rules apply through the tag.
+    gcloud compute instances add-tags "$NAME" --zone "$ZONE" --project "$PROJECT" --tags tracer
     # A stop is a graceful shutdown. The next boot re-applies cloud-init and pulls the new image.
     gcloud compute instances stop "$NAME" --zone "$ZONE" --project "$PROJECT"
+    gcloud compute instances set-service-account "$NAME" --zone "$ZONE" --project "$PROJECT" \
+      --service-account "$SA" --scopes cloud-platform
     gcloud compute instances start "$NAME" --zone "$ZONE" --project "$PROJECT"
   else
     gcloud compute instances create "$NAME" --zone "$ZONE" --project "$PROJECT" \
@@ -276,8 +285,13 @@ cmd_keys() {
 
 cmd_open() {
   check_gcloud
-  echo "Open http://localhost:$PORT (press Ctrl+C to close the tunnel)"
-  ssh_vm -- -N -L "$PORT:127.0.0.1:3579"
+  local token
+  token=$(ssh_vm --command 'sudo cat /var/lib/tracer/session-token') ||
+    die "Cannot read the session token. Check that the server runs: scripts/gcp/deploy.sh logs"
+  echo "Open http://127.0.0.1:$PORT/#t=$token"
+  echo "CLI:  TRACER_PORT=$PORT TRACER_TOKEN=$token tracer-sh analyze \"...\""
+  echo "Press Ctrl+C to close the tunnel."
+  ssh_vm -- -N -L "127.0.0.1:$PORT:127.0.0.1:3579"
 }
 
 cmd_logs() {

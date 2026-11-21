@@ -5,7 +5,7 @@ import { publicProcedure, router } from "../trpc.js";
 import { providerConfigs } from "../../db/schema.js";
 import { readProviderConfig, writeProviderConfig, deleteProviderConfig } from "../../db/config-reader.js";
 import { toChartRows } from "../../providers/posthog/posthog-formatter.js";
-import { isPosthogHost, isPosthogProjectId } from "../../providers/posthog/posthog.client.js";
+import { isPosthogHost, isPosthogProjectId, normalizePosthogHost } from "../../providers/posthog/posthog.client.js";
 import { isValidVertexConfig } from "../../llm/resolve.js";
 import { maskSecret } from "../../lib/mask-secret.js";
 import { timeoutSignal } from "../../lib/timeout-signal.js";
@@ -101,7 +101,11 @@ export const providerRouter = router({
       }));
 
       if (input.type === "posthog") {
-        if (config.host && !isPosthogHost(config.host.replace(/\/+$/, ""))) {
+        // A new host with the stored key would send that key to the new host.
+        if (stored?.apiKey && config.apiKey === stored.apiKey && input.config.apiKey?.trim() !== stored.apiKey && normalizePosthogHost(config.host) !== normalizePosthogHost(stored.host)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Enter the API key again to change the host" });
+        }
+        if (config.host && !isPosthogHost(normalizePosthogHost(config.host))) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "PostHog host must be an https URL" });
         }
         if (config.projectId !== undefined && !isPosthogProjectId(config.projectId)) {
